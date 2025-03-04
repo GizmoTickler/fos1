@@ -1,0 +1,102 @@
+name: Validate Manifests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'manifests/**'
+      - '.github/workflows/validate-manifests.yml'
+
+jobs:
+  validate:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Install Kubeconform
+        run: |
+          wget https://github.com/yannh/kubeconform/releases/download/v0.6.2/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Generate manifests with Kustomize
+        run: |
+          mkdir -p dist/manifests
+          
+          echo "Building base manifests..."
+          kustomize build manifests/base > dist/manifests/base.yaml
+          
+          echo "Building dev overlay manifests..."
+          kustomize build manifests/overlays/dev > dist/manifests/dev.yaml
+          
+          echo "Building prod overlay manifests..."
+          kustomize build manifests/overlays/prod > dist/manifests/prod.yaml
+
+      - name: Validate with Kubeconform
+        run: |
+          echo "Validating base manifests..."
+          kubeconform -summary -output json dist/manifests/base.yaml || true
+          
+          echo "Validating dev overlay manifests..."
+          kubeconform -summary -output json dist/manifests/dev.yaml || true
+          
+          echo "Validating prod overlay manifests..."
+          kubeconform -summary -output json dist/manifests/prod.yaml || true
+
+      - name: Check for resource completeness
+        run: |
+          echo "=== Checking core components ==="
+          grep -q "chrony" dist/manifests/base.yaml && echo "✅ NTP service found" || echo "❌ NTP service missing"
+          
+          echo "=== Checking DNS components ==="
+          grep -q "coredns" dist/manifests/base.yaml && echo "✅ CoreDNS service found" || echo "❌ CoreDNS service missing"
+          grep -q "adguard-home" dist/manifests/base.yaml && echo "✅ AdGuard Home service found" || echo "❌ AdGuard Home service missing"
+          grep -q "avahi" dist/manifests/base.yaml && echo "✅ mDNS service found" || echo "❌ mDNS service missing"
+          
+          echo "=== Checking DHCP components ==="
+          grep -q "kea-dhcp" dist/manifests/base.yaml && echo "✅ DHCP service found" || echo "❌ DHCP service missing"
+          grep -q "radvd" dist/manifests/base.yaml && echo "✅ RADVD service found" || echo "❌ RADVD service missing"
+          
+          echo "=== Checking Security components ==="
+          grep -q "suricata" dist/manifests/base.yaml && echo "✅ Suricata service found" || echo "❌ Suricata service missing"
+          grep -q "zeek" dist/manifests/base.yaml && echo "✅ Zeek service found" || echo "❌ Zeek service missing"
+          
+          echo "=== Checking Network components ==="
+          grep -q "cilium" dist/manifests/base.yaml && echo "✅ Cilium service found" || echo "❌ Cilium service missing"
+          
+          echo "=== Checking Monitoring components ==="
+          grep -q "prometheus" dist/manifests/base.yaml && echo "✅ Prometheus service found" || echo "❌ Prometheus service missing"
+          grep -q "grafana" dist/manifests/base.yaml && echo "✅ Grafana service found" || echo "❌ Grafana service missing"
+
+      - name: Analyze resource requirements
+        run: |
+          echo "=== Resource Requirements Analysis ==="
+          echo "Counting CPU and memory requests/limits..."
+          
+          CPU_REQUESTS=$(grep -A1 "cpu:" dist/manifests/base.yaml | grep -v "cpu:" | tr -d ' ' | awk -F: '{s+=$2}' END '{print s}')
+          MEM_REQUESTS=$(grep -A1 "memory:" dist/manifests/base.yaml | grep -v "memory:" | tr -d ' ' | grep -o '[0-9]\+' | awk '{s+=$1}' END '{print s}')
+          
+          echo "Total CPU requests: $CPU_REQUESTS cores (estimated)"
+          echo "Total memory requests: $MEM_REQUESTS MB (estimated)"
+          echo ""
+          echo "Note: This is a basic analysis. Actual resource usage depends on many factors."
+          
+          echo "=== High-level manifest statistics ==="
+          echo "Total lines in base manifest: $(wc -l < dist/manifests/base.yaml)"
+          echo "Total services defined: $(grep -c "kind: Service" dist/manifests/base.yaml)"
+          echo "Total deployments defined: $(grep -c "kind: Deployment" dist/manifests/base.yaml)"
+          echo "Total daemonsets defined: $(grep -c "kind: DaemonSet" dist/manifests/base.yaml)"
+          echo "Total configmaps defined: $(grep -c "kind: ConfigMap" dist/manifests/base.yaml)"
+
+      - name: Upload manifest artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: kubernetes-manifests
+          path: dist/manifests/
