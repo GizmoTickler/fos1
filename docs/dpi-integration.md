@@ -213,9 +213,40 @@ spec:
 ## Performance Considerations
 
 ### Fast Path vs. Slow Path
-- Use eBPF/XDP for high-performance, basic classification
-- Selectively forward traffic for detailed inspection
-- Maintain state between fast and slow paths
+
+#### Decision Criteria
+The following factors determine whether traffic takes the fast path (XDP/eBPF) or is redirected to the slow path (detailed inspection):
+
+1. **Traffic Type Classification**:
+   - Known trusted protocols with standard patterns can stay on fast path
+   - Unknown or suspicious protocols are redirected to slow path
+   - Applications requiring deep inspection are always sent to slow path
+
+2. **Flow State**:
+   - First few packets of a new flow go to slow path for classification
+   - Once classified, subsequent packets may take fast path if deemed safe
+   - Flows change path if behavior becomes suspicious
+
+3. **Policy Configuration**:
+   - Admin-defined policies specify which traffic requires deep inspection
+   - Critical security zones always use slow path
+   - Low-risk internal traffic can use fast path exclusively
+
+4. **System Load**:
+   - During high load, adaptive algorithms adjust slow path usage
+   - Critical traffic maintains deep inspection regardless of load
+   - Non-critical traffic may be sampled rather than fully inspected
+
+5. **Traffic Characteristics**:
+   - Encrypted traffic requiring SSL inspection goes to slow path
+   - Traffic matching suspicious patterns from threat intelligence
+   - Traffic to/from watchlisted IP addresses or domains
+
+#### Implementation Mechanism
+- eBPF maps store flow classification and path decisions
+- XDP programs make initial fast/slow decisions at packet arrival
+- Dynamic adjustment based on system metrics and threat landscape
+- State synchronization ensures consistent handling across paths
 
 ### Scaling Strategy
 - Horizontally scale DPI components for higher throughput
