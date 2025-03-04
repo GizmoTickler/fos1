@@ -160,15 +160,15 @@ The system will support comprehensive VLAN capabilities:
   - Support for .local domain resolution
 
 #### Routing and Firewall
-- **Cilium** for eBPF-based networking
+- **Cilium** for eBPF-based unified networking
   - Network policies for traffic filtering
   - Layer 7 visibility for application protocols
   - Integration with Kubernetes service mesh
-
-- **NFTables** for stateful firewall rules
-  - Managed through Kubernetes CRDs
-  - Rule synchronization with etcd
-  - Hierarchical policy structure
+  - NAT/NAT66 for IPv4/IPv6 connectivity
+  - Inter-VLAN routing and traffic control
+  - Stateful firewall rules with eBPF
+  - VLAN-to-Internet routing
+  - Application-aware traffic management
 
 - **FRRouting** for dynamic routing protocols
   - BGP, OSPF, IS-IS support

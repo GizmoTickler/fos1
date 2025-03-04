@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dpi-manager
+  namespace: security
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dpi-manager
+rules:
+- apiGroups:
+  - cilium.io
+  resources:
+  - ciliumnetworkpolicies
+  - ciliumnetworkpolicies/status
+  - ciliumclusterwidenetworkpolicies
+  - ciliumclusterwidenetworkpolicies/status
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dpi-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dpi-manager
+subjects:
+- kind: ServiceAccount
+  name: dpi-manager
+  namespace: security
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dpi-manager
+  namespace: security
+  labels:
+    app: dpi-manager
+    component: security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dpi-manager
+  template:
+    metadata:
+      labels:
+        app: dpi-manager
+        component: security
+    spec:
+      serviceAccountName: dpi-manager
+      containers:
+      - name: dpi-manager
+        image: alpine:latest  # Normally would use specific image for the dpi-manager
+        command: ["/bin/dpi-manager"]
+        args:
+        - "--cilium-api=http://cilium-hubble-relay.network:4245"
+        - "--suricata-eve=/var/log/suricata/eve.json"
+        - "--suricata-mode=ids"  # Default to IDS mode, can be changed to IPS
+        - "--zeek-logs=/usr/local/zeek/logs/current"
+        - "--enable-ips=$(ENABLE_IPS)"
+        env:
+        - name: ENABLE_IPS
+          value: "false"  # Set to "true" to enable IPS mode
+        volumeMounts:
+        - name: suricata-logs
+          mountPath: /var/log/suricata
+        - name: zeek-logs
+          mountPath: /usr/local/zeek/logs
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+      volumes:
+      - name: suricata-logs
+        hostPath:
+          path: /var/log/suricata
+          type: DirectoryOrCreate
+      - name: zeek-logs
+        hostPath:
+          path: /usr/local/zeek/logs
+          type: DirectoryOrCreate

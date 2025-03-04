@@ -1,8 +1,5 @@
 package firewall
 
-// DEPRECATED: Use Cilium's eBPF-based firewall through the pkg/cilium package instead.
-// This file is kept for reference but should not be used in new code.
-
 import (
 	"fmt"
 	"os/exec"

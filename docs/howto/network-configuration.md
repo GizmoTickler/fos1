@@ -139,7 +139,7 @@ spec:
 
 ## NAT and NAT66 Configuration
 
-NAT for IPv4 and NAT66 for IPv6 can be enabled in the subnet configuration:
+NAT for IPv4 and NAT66 for IPv6 can be enabled in the subnet configuration. These are implemented using Cilium's eBPF-based NAT capabilities:
 
 ```yaml
 apiVersion: network.fos1.io/v1alpha1
@@ -151,7 +151,7 @@ spec:
   network: 192.168.20.0/24
   interface: vlan20
   routing:
-    nat: true  # Enable NAT for IPv4
+    nat: true  # Enable Cilium NAT for IPv4
 ```
 
 For IPv6 NAT66:
@@ -166,8 +166,10 @@ spec:
   network: 2001:db8:20::/64
   interface: vlan20
   routing:
-    nat66: true  # Enable NAT66 for IPv6
+    nat66: true  # Enable Cilium NAT66 for IPv6
 ```
+
+This creates Cilium network policies with masquerading rules, providing high-performance NAT through eBPF.
 
 ## DHCP and DHCPv6 Configuration
 

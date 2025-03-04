@@ -13,146 +13,143 @@ This guide explains how to configure the security features of the Kubernetes-bas
 
 ## Firewall Configuration
 
-The firewall in this system is managed through Kubernetes Custom Resources (CRs) that define zones, rules, IP sets, and application groups.
+The firewall in this system is managed through Cilium Network Policies, which are Kubernetes Custom Resources (CRs) that provide Layer 3-7 filtering with eBPF.
 
-### Firewall Zones
+### Zone-Based Policies
 
-Zones group interfaces together for firewall purposes:
+In Cilium, we implement zone-based firewall using endpoint labels:
 
 ```yaml
-apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+# Define a policy for traffic from LAN to WAN zone
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
 metadata:
-  name: wan-zone
+  name: zone-lan-to-wan
 spec:
-  name: WAN
-  description: "External network zone"
-  interfaces:
-    - eth0
-  defaultAction: drop
----
-apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
-metadata:
-  name: lan-zone
-spec:
-  name: LAN
-  description: "Internal network zone"
-  interfaces:
-    - eth1
-    - vlan10
-  defaultAction: accept
+  description: "Allow web traffic from LAN to WAN"
+  endpointSelector:
+    matchLabels:
+      zone: wan
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        zone: lan
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
 ```
 
-### IP Sets
+### IP-Based Policies
 
-IP sets allow you to group IP addresses or networks:
+To create IP-based filtering with Cilium:
 
 ```yaml
-apiVersion: security.fos1.io/v1alpha1
-kind: FirewallIPSet
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: trusted-servers
 spec:
-  name: TrustedServers
-  description: "Trusted server IPs"
-  ipVersion: ipv4
-  entries:
-    - 192.168.1.10
-    - 192.168.1.20
+  description: "Allow traffic to trusted servers"
+  endpointSelector:
+    matchLabels:
+      app: webserver
+  ingress:
+  - fromCIDR:
+    - 192.168.1.10/32
+    - 192.168.1.20/32
     - 192.168.2.0/24
 ```
 
-### Application Groups
+### L7 Application Filtering
 
-Application groups collect related applications:
+Cilium provides application-layer filtering:
 
 ```yaml
-apiVersion: security.fos1.io/v1alpha1
-kind: ApplicationGroup
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: collaboration-apps
 spec:
-  name: CollaborationApps
-  description: "Collaboration applications"
-  applications:
-    - zoom
-    - teams
-    - webex
-  categories:
-    - video_conferencing
+  description: "Controls for collaboration applications"
+  endpointSelector:
+    matchLabels:
+      app: workstation
+  egress:
+  - toFQDNs:
+    - matchPattern: "*.zoom.us"
+    - matchPattern: "*.teams.microsoft.com"
+    - matchPattern: "*.webex.com"
+  - toEndpoints:
+    - matchLabels:
+        app: dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
 ```
 
-### Firewall Rules
+### Inter-VLAN Traffic Control
 
-Firewall rules define the filtering criteria and actions:
-
-```yaml
-apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
-metadata:
-  name: allow-web-traffic
-spec:
-  name: AllowWebTraffic
-  description: "Allow web traffic from LAN to WAN"
-  enabled: true
-  action: accept
-  protocol: tcp
-  sourceType: zone
-  source: LAN
-  destinationType: zone
-  destination: WAN
-  destinationPort: "80,443"
-  ipVersion: both
-  state:
-    new: true
-    established: true
-    related: true
-  logging: true
-  priority: 10
-```
-
-#### Inter-VLAN Traffic
-
-To control traffic between VLANs:
+To control traffic between VLANs with Cilium:
 
 ```yaml
-apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
-  name: allow-vlan10-to-vlan20
+  name: vlan10-to-vlan20
 spec:
-  name: VLAN10toVLAN20
   description: "Allow selected traffic from VLAN10 to VLAN20"
-  action: accept
-  sourceType: interface
-  source: vlan10
-  destinationType: interface
-  destination: vlan20
-  destinationPort: "80,443,53"
-  protocol: tcp
-  priority: 5
+  endpointSelector:
+    matchLabels:
+      vlan: "20"
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        vlan: "10"
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
 ```
 
-#### Application-Based Rules
+### DPI-Based Application Rules
 
-To create rules based on applications detected by DPI:
+To create rules based on applications detected by DPI using Cilium:
 
 ```yaml
-apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: block-p2p
 spec:
-  name: BlockP2P
-  description: "Block P2P traffic"
-  action: drop
-  sourceType: zone
-  source: LAN
-  destinationType: any
-  applicationCategory: p2p
-  logging: true
-  priority: 15
+  description: "Block P2P traffic with DPI integration"
+  endpointSelector:
+    matchLabels:
+      zone: lan
+  egress:
+  - toEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: "1024-65535"
+        protocol: TCP
+      rules:
+        l7proto: "bittorrent"
+    denied: true
+  - toEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: "6881-6889"
+        protocol: TCP
+    denied: true
 ```
 
 ## Deep Packet Inspection

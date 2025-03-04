@@ -56,30 +56,31 @@ DPI provides visibility into application-layer traffic, enabling the system to m
            │                   │                  │
            ▼                   ▼                  ▼
 ┌──────────────────┐  ┌────────────────┐  ┌────────────────┐
-│ Security Systems │  │ Traffic Mgmt.  │  │ Policy Engine  │
-│  - Firewall      │  │  - QoS         │  │  - Routing     │
-│  - IDS/IPS       │  │  - Shaping     │  │  - NAT         │
+│ Security Systems │  │ Traffic Mgmt.  │  │ Cilium Policy  │
+│  - IDS/IPS       │  │  - QoS         │  │  - Routing     │
+│  - Threat Intel  │  │  - Shaping     │  │  - NAT/NAT66   │
+│                  │  │                │  │  - Firewall    │
 └──────────────────┘  └────────────────┘  └────────────────┘
 ```
 
 ## Integration with System Components
 
-### 1. Firewall Integration
+### 1. Cilium Network Policy Integration
 
 #### Data Flow
 - DPI engines analyze traffic and generate events
 - Events are processed by the integration layer
-- Firewall rules are dynamically updated based on traffic analysis
+- Cilium network policies are dynamically updated based on traffic analysis
 
 #### Implementation Details
-- **Rule Generation**: DPI results trigger dynamic firewall rule creation
+- **Policy Generation**: DPI results trigger dynamic Cilium policy creation
 - **Connection Tracking**: Stateful inspection combined with application awareness
 - **Threat Response**: Automatic blocking of malicious traffic identified by signatures
 - **Application Control**: Allow/deny rules based on recognized applications
 
 #### Technical Approach
 ```go
-// Example Go code for firewall integration
+// Example Go code for Cilium policy integration
 type DPIEvent struct {
     Protocol    string
     Application string
@@ -90,9 +91,9 @@ type DPIEvent struct {
 
 func ProcessDPIEvent(event DPIEvent) {
     if event.Risk > THRESHOLD {
-        // Create firewall rule to block traffic
-        rule := CreateFirewallRule(event)
-        ApplyFirewallRule(rule)
+        // Create Cilium network policy to block traffic
+        policy := CreateCiliumNetworkPolicy(event)
+        ApplyCiliumPolicy(policy)
     }
 }
 ```
@@ -143,23 +144,25 @@ spec:
         max: 20%
 ```
 
-### 3. Policy-Based Routing Integration
+### 3. Cilium-Based Policy Routing Integration
 
 #### Data Flow
 - DPI identifies application or protocol
-- Policy engine evaluates routing rules
-- Packets are marked for specific routing decisions
+- Cilium policy engine evaluates routing rules
+- eBPF programs implement routing decisions directly
 
 #### Implementation Details
 - **Application-Aware Routing**: Direct specific applications through preferred paths
 - **Multi-WAN Management**: Use specific uplinks for certain applications
 - **VPN Selection**: Route sensitive applications through secure tunnels
 - **Traffic Steering**: Direct traffic to inspection devices based on content
+- **VLAN Routing**: Route traffic between VLANs based on application policies
 
 #### Technical Approach
 - Cilium's Layer 7 visibility provides application identification
-- Custom CRDs define application-based routing policies
+- CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy resources define routing
 - eBPF maps store routing decisions for high-performance lookups
+- Unified networking stack without additional firewall or NAT components
 
 ```yaml
 # Example PBR configuration with DPI integration

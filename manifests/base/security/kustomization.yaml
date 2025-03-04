@@ -4,3 +4,4 @@ kind: Kustomization
 resources:
   - suricata.yaml
   - zeek.yaml
+  - dpi-manager.yaml

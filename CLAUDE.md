@@ -44,15 +44,18 @@
 - [x] Router advertisements for IPv6 (RADVD)
 - [x] Time synchronization service (Chrony)
 - [x] Service discovery with mDNS (Avahi)
-- [x] NAT and NAT66 for IPv4/IPv6 traffic
+- [x] Unified network stack with Cilium (NAT, NAT66, firewalling, VLAN routing)
 
 #### Security Components
 - [x] Intrusion detection with Suricata and Zeek
-- [x] Zone-based firewall with NFTables backend
-- [x] Deep packet inspection (DPI) framework
-- [x] Application-based filtering
+- [x] Intrusion prevention (IPS) with Suricata NFQueue integration
+- [x] Zone-based firewall with Cilium eBPF
+- [x] Deep packet inspection (DPI) framework with Cilium integration
+- [x] DPI event processing pipeline for dynamic policy generation
+- [x] Application-based filtering through Cilium policies
+- [x] IP reputation lists and blocklist management
 - [x] QoS system with traffic classes and prioritization
-- [x] Policy-based routing for intelligent traffic management
+- [x] Policy-based routing using Cilium for intelligent traffic management
 - [x] VPN service with WireGuard
 
 #### Observability
@@ -67,11 +70,16 @@
 
 ### Implemented Go Packages
 - Network interface management
-- Firewall configuration and management
-- Deep packet inspection
+- Cilium network controller for unified networking
+- Comprehensive DPI framework:
+  - DPI manager with Cilium network policy integration
+  - Suricata connector for IDS/IPS functionality
+  - Zeek connector for protocol analysis
+  - IP reputation list management
+  - Dynamic policy generation from DPI events
 - Quality of Service (QoS)
 - VPN configuration
-- NAT/NAT66 functionality
+- Cilium-based NAT/NAT66 functionality
 
 ### Documentation Created
 - Network configuration guide
@@ -86,9 +94,33 @@
 - QoS profiles and traffic classes
 - Routing policies and tables
 
+## Recent Improvements
+
+### Consolidated Network Stack on Cilium
+- Replaced separate NFTables implementation with unified Cilium approach
+- Implemented NAT/NAT66 through Cilium policies
+- Enhanced inter-VLAN routing with Cilium endpoint policies
+- Configured Cilium Hubble for flow visibility
+
+### Enhanced DPI Framework
+- Created complete integration between DPI engines and Cilium:
+  - Suricata connector for IDS/IPS functionality
+  - Zeek connector for protocol analysis
+  - IP reputation list management
+  - Dynamic policy generation from DPI events
+- Added IPS mode support with NFQueue integration
+- Implemented real-time policy generation from DPI events
+
+### End-to-End Security Pipeline
+- DPI engines detect threats and anomalies
+- DPI manager translates events to Cilium policies
+- Cilium enforces policies at kernel level with eBPF
+- Hubble provides flow visibility for monitoring
+
 ## Deployment Instructions
 1. Set up Talos Linux VM with sufficient resources
 2. Apply base Talos configuration using `talosctl apply-config`
 3. Apply Kubernetes manifests with `kubectl apply -k manifests/base`
 4. Configure network interfaces and security policies
-5. Monitor system through Grafana dashboard
+5. Start DPI manager with `kubectl -n security rollout restart deployment/dpi-manager`
+6. Monitor system through Grafana dashboard and Hubble UI

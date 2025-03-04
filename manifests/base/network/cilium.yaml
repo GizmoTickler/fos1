@@ -21,16 +21,36 @@ rules:
   - get
   - list
   - watch
+  - create
+  - update
+  - patch
+  - delete
 - apiGroups:
   - ""
   resources:
   - pods
   - namespaces
   - nodes
+  - services
+  - endpoints
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - cilium.io
+  resources:
+  - ciliumnetworkpolicies
+  - ciliumnetworkpolicies/status
+  - ciliumclusterwidenetworkpolicies
+  - ciliumclusterwidenetworkpolicies/status
+  - ciliumendpoints
+  - ciliumendpoints/status
+  - ciliumnodes
+  - ciliumnodes/status
+  - ciliumidentities
+  verbs:
+  - '*'
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -44,6 +64,54 @@ subjects:
 - kind: ServiceAccount
   name: cilium
   namespace: network
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ciliumnetworkpolicies.cilium.io
+spec:
+  group: cilium.io
+  names:
+    kind: CiliumNetworkPolicy
+    plural: ciliumnetworkpolicies
+    shortNames:
+    - cnp
+    singular: ciliumnetworkpolicy
+  scope: Namespaced
+  versions:
+  - name: v2
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ciliumclusterwidenetworkpolicies.cilium.io
+spec:
+  group: cilium.io
+  names:
+    kind: CiliumClusterwideNetworkPolicy
+    plural: ciliumclusterwidenetworkpolicies
+    shortNames:
+    - ccnp
+    singular: ciliumclusterwidenetworkpolicy
+  scope: Cluster
+  versions:
+  - name: v2
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -67,7 +135,7 @@ spec:
       hostNetwork: true
       containers:
       - name: cilium-agent
-        image: cilium/cilium:v1.13.0
+        image: cilium/cilium:v1.13.4
         command: ["cilium-agent"]
         args:
         - "--debug=$(CILIUM_DEBUG)"
@@ -77,6 +145,20 @@ spec:
         - "--enable-ipv6=true"
         - "--bpf-root=/sys/fs/bpf"
         - "--tunnel=vxlan"
+        # Enable NAT46/NAT66 capabilities
+        - "--enable-ipv4-masquerade=true"
+        - "--enable-ipv6-masquerade=true"
+        # Enable L7 proxy for application visibility
+        - "--enable-l7-proxy=true"
+        # Enable host firewall
+        - "--enable-host-firewall=true"
+        # Enable bandwidth manager for QoS
+        - "--enable-bandwidth-manager=true"
+        # Enable NodePort
+        - "--enable-node-port=true"
+        # Enable Hubble for flow visibility
+        - "--enable-hubble=true"
+        - "--hubble-socket-path=/var/run/cilium/hubble.sock"
         env:
         - name: CILIUM_DEBUG
           value: "false"
@@ -124,3 +206,60 @@ spec:
         hostPath:
           path: /etc/cni/net.d
           type: DirectoryOrCreate
+---
+# Hubble monitoring component for Cilium
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hubble-relay
+  namespace: network
+  labels:
+    app: hubble-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hubble-relay
+  template:
+    metadata:
+      labels:
+        app: hubble-relay
+    spec:
+      serviceAccountName: cilium
+      containers:
+      - name: hubble-relay
+        image: cilium/hubble-relay:v1.13.4
+        command:
+        - hubble-relay
+        args:
+        - serve
+        - --listen-address=:4245
+        - --node-name=$(NODE_NAME)
+        - --peer-service=unix:///var/run/cilium/hubble.sock
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - mountPath: /var/run/cilium
+          name: hubble-sock-dir
+          readOnly: true
+      volumes:
+      - name: hubble-sock-dir
+        hostPath:
+          path: /var/run/cilium
+          type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hubble-relay
+  namespace: network
+spec:
+  selector:
+    app: hubble-relay
+  ports:
+  - name: grpc
+    port: 4245
+    targetPort: 4245

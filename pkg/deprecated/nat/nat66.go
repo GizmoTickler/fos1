@@ -1,8 +1,5 @@
 package nat
 
-// DEPRECATED: Use Cilium's eBPF-based NAT/NAT66 implementation through the pkg/cilium package instead.
-// This file is kept for reference but should not be used in new code.
-
 import (
 	"fmt"
 	"os/exec"

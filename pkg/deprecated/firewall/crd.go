@@ -1,8 +1,5 @@
 package firewall
 
-// DEPRECATED: Use Cilium's network policy CRDs instead.
-// This file is kept for reference but should not be used in new code.
-//
 // This file contains the CRD definitions for firewall rules and objects
 // These would be converted to actual Go API types using controller-gen
 // For now, they are provided as a reference for the planned CRD structure

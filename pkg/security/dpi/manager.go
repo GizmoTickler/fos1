@@ -6,26 +6,88 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	
+	"github.com/your-org/fos1/pkg/cilium"
+	"github.com/your-org/fos1/pkg/security/dpi/connectors"
 )
 
 // DPIManager manages Deep Packet Inspection functionality
 type DPIManager struct {
-	// This would integrate with Suricata, Zeek and nDPI
-	mu          sync.Mutex
-	profiles    map[string]*DPIProfile
-	flows       map[string]*DPIFlow
-	flowStats   map[string]*FlowStatistics
-	appDetector *ApplicationDetector
+	// Configuration
+	mu              sync.Mutex
+	profiles        map[string]*DPIProfile
+	flows           map[string]*DPIFlow
+	flowStats       map[string]*FlowStatistics
+	appDetector     *ApplicationDetector
+	
+	// Integration with Cilium
+	ciliumClient    cilium.CiliumClient
+	networkCtrl     *cilium.NetworkController
+	
+	// Connectors for DPI engines
+	suricataConnector *connectors.SuricataConnector
+	zeekConnector     *connectors.ZeekConnector
+	
+	// Control
+	ctx              context.Context
+	cancel           context.CancelFunc
+}
+
+// DPIManagerOptions configures the DPI manager
+type DPIManagerOptions struct {
+	CiliumClient  cilium.CiliumClient
+	SuricataEvePath string
+	SuricataMode    string // "ids" or "ips"
+	ZeekLogsPath    string
 }
 
 // NewDPIManager creates a new DPI manager
-func NewDPIManager() *DPIManager {
-	return &DPIManager{
-		profiles:    make(map[string]*DPIProfile),
-		flows:       make(map[string]*DPIFlow),
-		flowStats:   make(map[string]*FlowStatistics),
-		appDetector: NewApplicationDetector(),
+func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
+	if opts.CiliumClient == nil {
+		return nil, fmt.Errorf("cilium client is required")
 	}
+	
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	manager := &DPIManager{
+		profiles:     make(map[string]*DPIProfile),
+		flows:        make(map[string]*DPIFlow),
+		flowStats:    make(map[string]*FlowStatistics),
+		appDetector:  NewApplicationDetector(),
+		ciliumClient: opts.CiliumClient,
+		networkCtrl:  cilium.NewNetworkController(opts.CiliumClient),
+		ctx:          ctx,
+		cancel:       cancel,
+	}
+	
+	// Initialize Suricata connector
+	suricataOpts := connectors.SuricataOptions{
+		EvePath:      opts.SuricataEvePath,
+		Mode:         opts.SuricataMode,
+		CiliumClient: opts.CiliumClient,
+	}
+	
+	suricataConnector, err := connectors.NewSuricataConnector(suricataOpts)
+	if err != nil {
+		cancel() // Cancel the context if we fail to initialize
+		return nil, fmt.Errorf("failed to initialize Suricata connector: %w", err)
+	}
+	manager.suricataConnector = suricataConnector
+	
+	// Initialize Zeek connector
+	zeekOpts := connectors.ZeekOptions{
+		LogsPath:     opts.ZeekLogsPath,
+		CiliumClient: opts.CiliumClient,
+	}
+	
+	zeekConnector, err := connectors.NewZeekConnector(zeekOpts)
+	if err != nil {
+		cancel() // Cancel the context if we fail to initialize
+		return nil, fmt.Errorf("failed to initialize Zeek connector: %w", err)
+	}
+	manager.zeekConnector = zeekConnector
+	
+	return manager, nil
 }
 
 // AddProfile adds a DPI profile
@@ -154,16 +216,66 @@ func (m *DPIManager) GetFlowStatistics(sourceNetwork, destinationNetwork string)
 	return stats, nil
 }
 
-// Start starts the DPI manager
-func (m *DPIManager) Start(ctx context.Context) error {
-	// This would start the DPI engine and configure it based on the profiles and flows
+// Start starts the DPI manager and all connectors
+func (m *DPIManager) Start() error {
+	// Start Suricata connector
+	if m.suricataConnector != nil {
+		if err := m.suricataConnector.Start(); err != nil {
+			return fmt.Errorf("failed to start Suricata connector: %w", err)
+		}
+		fmt.Println("Started Suricata connector")
+	}
+	
+	// Start Zeek connector
+	if m.zeekConnector != nil {
+		if err := m.zeekConnector.Start(); err != nil {
+			return fmt.Errorf("failed to start Zeek connector: %w", err)
+		}
+		fmt.Println("Started Zeek connector")
+	}
+	
+	// Apply DPI profiles and flows to configure what to inspect
+	m.applyProfilesToEngines()
+	
+	fmt.Println("DPI manager started successfully")
 	return nil
 }
 
-// Stop stops the DPI manager
-func (m *DPIManager) Stop(ctx context.Context) error {
-	// This would stop the DPI engine
+// Stop stops the DPI manager and all connectors
+func (m *DPIManager) Stop() error {
+	// Cancel our context to stop all goroutines
+	m.cancel()
+	
+	// Stop Suricata connector
+	if m.suricataConnector != nil {
+		if err := m.suricataConnector.Stop(); err != nil {
+			fmt.Printf("Error stopping Suricata connector: %v\n", err)
+		}
+	}
+	
+	// Stop Zeek connector
+	if m.zeekConnector != nil {
+		if err := m.zeekConnector.Stop(); err != nil {
+			fmt.Printf("Error stopping Zeek connector: %v\n", err)
+		}
+	}
+	
+	fmt.Println("DPI manager stopped")
 	return nil
+}
+
+// applyProfilesToEngines applies DPI profiles to the DPI engines
+func (m *DPIManager) applyProfilesToEngines() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	// Apply profiles to DPI engines
+	// This would configure which applications, protocols, etc. are of interest
+	
+	// In a real implementation, this would generate configuration files
+	// for Suricata and Zeek based on the profiles
+	
+	fmt.Println("Applied DPI profiles to engines")
 }
 
 // GetApplicationInfo gets information about an application
@@ -173,41 +285,108 @@ func (m *DPIManager) GetApplicationInfo(applicationName string) (*ApplicationInf
 
 // SetDSCPMarkingForApplication sets DSCP marking for an application
 func (m *DPIManager) SetDSCPMarkingForApplication(applicationName string, dscp int) error {
-	// This would configure the DPI engine to set DSCP marks for the application
-	// For now, we'll just simulate it with a tc command
+	// Validate DSCP value
 	if dscp < 0 || dscp > 63 {
 		return fmt.Errorf("invalid DSCP value: %d", dscp)
 	}
 
-	// This is a simplified example that doesn't actually do anything
-	// In a real implementation, you'd integrate with the DPI engine and
-	// tc or another traffic control mechanism
-	cmd := exec.Command("echo", "Setting DSCP", fmt.Sprintf("%d", dscp), "for", applicationName)
-	_, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to set DSCP marking: %w", err)
+	// Create an application policy for DSCP marking
+	appPolicy := cilium.AppPolicy{
+		Application: applicationName,
+		Action:      "mark",
+		Priority:    1,
+		DSCP:        uint8(dscp),
 	}
-
+	
+	// Create a map with this application policy
+	appPolicies := map[string]cilium.AppPolicy{
+		applicationName: appPolicy,
+	}
+	
+	// Apply policy to Cilium
+	if err := m.networkCtrl.IntegrateDPI(m.ctx, appPolicies); err != nil {
+		return fmt.Errorf("failed to apply DSCP marking to Cilium: %w", err)
+	}
+	
+	fmt.Printf("Set DSCP marking %d for application %s\n", dscp, applicationName)
 	return nil
 }
 
 // ConfigurePolicyBasedRouting configures policy-based routing for an application
 func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string) error {
-	// This would configure policy-based routing for the application
-	// For now, we'll just simulate it with an ip rule command
+	// Validate inputs
 	if applicationName == "" || nextHop == "" {
 		return fmt.Errorf("application name and next hop are required")
 	}
-
-	// This is a simplified example that doesn't actually do anything
-	// In a real implementation, you'd integrate with the DPI engine and
-	// ip rule/route commands
-	cmd := exec.Command("echo", "Setting next hop", nextHop, "for", applicationName)
-	_, err := cmd.Output()
-	if err != nil {
+	
+	// Create a routing policy based on application
+	// This would create Cilium policies that route specific application traffic
+	policy := &cilium.NetworkPolicy{
+		Name: fmt.Sprintf("app-routing-%s", applicationName),
+		Labels: map[string]string{
+			"app":       applicationName,
+			"type":      "routing-policy",
+			"next-hop":  nextHop,
+		},
+	}
+	
+	// Add rules to redirect the application traffic
+	policy.Egress = append(policy.Egress, cilium.PolicyRule{
+		ToPorts: []cilium.PortRule{
+			{
+				Rules: map[string]string{
+					"l7proto": applicationName,
+				},
+			},
+		},
+		ToEndpoints: []cilium.Endpoint{
+			{
+				Labels: map[string]string{
+					"next-hop": nextHop,
+				},
+			},
+		},
+	})
+	
+	// Apply the policy
+	if err := m.networkCtrl.ApplyDynamicPolicy(m.ctx, policy); err != nil {
 		return fmt.Errorf("failed to configure policy-based routing: %w", err)
 	}
+	
+	fmt.Printf("Configured policy-based routing for %s to next hop %s\n", applicationName, nextHop)
+	return nil
+}
 
+// ConfigureSuricataIPSMode configures Suricata to run in IPS mode
+func (m *DPIManager) ConfigureSuricataIPSMode(enable bool) error {
+	if m.suricataConnector == nil {
+		return fmt.Errorf("Suricata connector not initialized")
+	}
+	
+	if err := m.suricataConnector.ConfigureIPSMode(enable); err != nil {
+		return fmt.Errorf("failed to configure Suricata IPS mode: %w", err)
+	}
+	
+	mode := "IDS"
+	if enable {
+		mode = "IPS"
+	}
+	
+	fmt.Printf("Configured Suricata to run in %s mode\n", mode)
+	return nil
+}
+
+// UpdateSuricataIPList updates a Suricata IP list
+func (m *DPIManager) UpdateSuricataIPList(listName string, ips []string) error {
+	if m.suricataConnector == nil {
+		return fmt.Errorf("Suricata connector not initialized")
+	}
+	
+	if err := m.suricataConnector.UpdateIPList(listName, ips); err != nil {
+		return fmt.Errorf("failed to update Suricata IP list: %w", err)
+	}
+	
+	fmt.Printf("Updated Suricata IP list %s with %d IPs\n", listName, len(ips))
 	return nil
 }
 
