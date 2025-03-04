@@ -1,0 +1,258 @@
+# Example eBPF Program Configurations
+
+---
+# XDP-based DDoS Protection
+apiVersion: ebpf.fos1.io/v1alpha1
+kind: EBPFProgram
+metadata:
+  name: ddos-protection
+spec:
+  description: "XDP-based DDoS protection for external interfaces"
+  type: "xdp"  # xdp program
+  interface: "eth0"  # External interface
+  priority: 1  # Highest priority
+  settings:
+    rateLimiting:
+      enabled: true
+      packetsPerSecond: 1000000
+      connectionsPerSecond: 10000
+      connectionsPerIP: 100
+    synFloodProtection: true
+    icmpFloodProtection: true
+    udpFloodProtection: true
+    blacklist:
+      enabled: true
+      ipSetRef: "malicious-ips"
+    stateful: true
+    actions:
+      default: "pass"  # Default action is to pass
+      rules:
+        - match:
+            protocol: "tcp"
+            flags: "syn"
+          action: "rate-limit"  # Rate limit SYN packets
+status:
+  loaded: true
+  attached: true
+  mapRefs:
+    - "ddos-blacklist"
+    - "ddos-connection-tracking"
+    - "ddos-rate-limit"
+  metrics:
+    packetsProcessed: 1250000
+    packetsDropped: 5000
+    lastUpdated: "2025-03-15T12:34:56Z"
+
+---
+# TC-based Firewall
+apiVersion: ebpf.fos1.io/v1alpha1
+kind: EBPFProgram
+metadata:
+  name: stateful-firewall
+spec:
+  description: "TC-based stateful firewall"
+  type: "tc-ingress"  # TC ingress hook
+  interface: "eth0"
+  priority: 10
+  settings:
+    connectionTracking:
+      enabled: true
+      tcpTimeout: 86400  # 24 hours
+      udpTimeout: 300    # 5 minutes
+      icmpTimeout: 60    # 1 minute
+    rules:
+      - match:
+          srcNet: "0.0.0.0/0"
+          dstNet: "192.168.0.0/16"
+          proto: "tcp"
+          dstPort: 22
+        action: "drop"
+      - match:
+          srcNet: "192.168.0.0/16"
+          dstNet: "0.0.0.0/0"
+          proto: "any"
+        action: "pass"
+    defaultAction: "drop"
+status:
+  loaded: true
+  attached: true
+  mapRefs:
+    - "conntrack-table"
+    - "firewall-rules"
+  metrics:
+    connectionsTracked: 5678
+    rulesMatched: 12345
+    lastUpdated: "2025-03-15T13:45:30Z"
+
+---
+# Advanced NAT with eBPF
+apiVersion: ebpf.fos1.io/v1alpha1
+kind: NATConfig
+metadata:
+  name: ebpf-nat
+spec:
+  description: "eBPF-based NAT configuration"
+  interfaces:
+    source: "eth1"  # Internal interface
+    destination: "eth0"  # External interface
+  type: "masquerade"  # NAT masquerading
+  ipVersion: "both"  # Both IPv4 and IPv6
+  portMappings:
+    - protocol: "tcp"
+      internalIP: "192.168.1.10"
+      internalPort: 80
+      externalPort: 8080
+    - protocol: "udp"
+      internalIP: "192.168.1.20"
+      internalPort: 53
+      externalPort: 53
+  sourceCIDRs:
+    - "192.168.0.0/16"  # Internal networks
+  excludeCIDRs:
+    - "192.168.100.0/24"  # Excluded subnet
+  connectionTracking:
+    enabled: true
+    tcpTimeout: 86400  # 24 hours
+    udpTimeout: 300    # 5 minutes
+    maxConnections: 1000000
+  hairpinning: true  # Allow hairpinning
+  endpointIndependent: true  # Endpoint-independent NAT
+status:
+  active: true
+  programRefs:
+    - "nat-prerouting"
+    - "nat-postrouting"
+  translationCount: 1256
+  lastUpdated: "2025-03-15T14:45:10Z"
+
+---
+# QoS with eBPF Traffic Control
+apiVersion: ebpf.fos1.io/v1alpha1
+kind: TrafficControl
+metadata:
+  name: qos-policy
+spec:
+  description: "QoS policy for different traffic classes"
+  interface: "eth0"
+  direction: "egress"  # Egress traffic control
+  priority: 20
+  queueingDiscipline: "htb"  # Hierarchical Token Bucket
+  classes:
+    - name: "voip"
+      priority: 1  # Highest priority
+      rate: "10Mbps"  # Guaranteed bandwidth
+      ceiling: "20Mbps"  # Maximum bandwidth
+      match:
+        applications: ["sip", "rtp"]
+        ipProto: "udp"
+        dstPorts: [5060, 5061, "10000-20000"]
+      markDSCP: 46  # EF (Expedited Forwarding)
+    - name: "video"
+      priority: 2
+      rate: "50Mbps"
+      ceiling: "100Mbps"
+      match:
+        applications: ["rtsp", "rtmp", "zoom", "teams"]
+        ipProto: "tcp"
+      markDSCP: 34  # AF41
+    - name: "web"
+      priority: 3
+      rate: "30Mbps"
+      ceiling: "70Mbps"
+      match:
+        ipProto: "tcp"
+        dstPorts: [80, 443]
+      markDSCP: 26  # AF31
+    - name: "default"
+      priority: 4  # Lowest priority
+      rate: "5Mbps"
+      ceiling: "unlimited"
+      match:
+        ipProto: "any"
+      markDSCP: 0  # Default
+status:
+  active: true
+  programRef: "tc-egress-qos-eth0"
+  lastUpdated: "2025-03-15T14:30:20Z"
+
+---
+# Socket Monitoring with eBPF
+apiVersion: ebpf.fos1.io/v1alpha1
+kind: EBPFProgram
+metadata:
+  name: socket-monitor
+spec:
+  description: "Socket operation monitoring with eBPF"
+  type: "sockops"  # Socket operations
+  priority: 10
+  settings:
+    monitorEvents:
+      - "connect"
+      - "accept"
+      - "close"
+    latencyTracking: true
+    connectionLogging: true
+    applications:
+      - "nginx"
+      - "postgres"
+    metrics:
+      enabled: true
+      perApplication: true
+      perProtocol: true
+status:
+  loaded: true
+  attached: true
+  mapRefs:
+    - "socket-events"
+    - "socket-metrics"
+  metrics:
+    connectionsTracked: 1234
+    latencyAverage: 0.5  # milliseconds
+    lastUpdated: "2025-03-15T15:20:15Z"
+
+---
+# Container Network Policy with eBPF
+apiVersion: ebpf.fos1.io/v1alpha1
+kind: ContainerPolicy
+metadata:
+  name: database-isolation
+spec:
+  description: "Network isolation for database containers"
+  selector:
+    matchLabels:
+      role: "database"
+  ingress:
+    - from:
+        podSelector:
+          matchLabels:
+            role: "backend"
+      ports:
+        - protocol: "tcp"
+          port: 5432
+    - from:
+        podSelector:
+          matchLabels:
+            role: "monitoring"
+      ports:
+        - protocol: "tcp"
+          port: 9187  # Postgres exporter
+  egress:
+    - to:
+        podSelector:
+          matchLabels:
+            role: "monitoring"
+      ports:
+        - protocol: "tcp"
+          port: 9090  # Prometheus
+    - to:
+        podSelector:
+          matchLabels:
+            role: "logging"
+      ports:
+        - protocol: "tcp"
+          port: 5140  # Syslog
+  enforcement: "ebpf-cgroup"  # Use cgroup eBPF for enforcement
+status:
+  active: true
+  programRef: "cgroup-database-policy"
+  lastUpdated: "2025-03-15T16:10:05Z"
