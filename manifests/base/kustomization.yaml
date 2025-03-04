@@ -9,3 +9,4 @@ resources:
   - dns
   - dhcp
   - monitoring
+  - vpn
