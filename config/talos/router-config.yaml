@@ -1,0 +1,54 @@
+# This is a template Talos configuration for the router/firewall
+# In a real deployment, use talosctl to generate proper configs
+
+version: v1alpha1
+machine:
+  type: controlplane
+  certSANs:
+    - router.local
+  kubelet:
+    extraArgs:
+      node-ip: 192.168.1.1
+  network:
+    hostname: router
+    interfaces:
+      - interface: eth0
+        dhcp: true
+        vip:
+          ip: 192.168.0.1
+      - interface: eth1
+        addresses:
+          - 192.168.1.1/24
+    extraHostEntries:
+      - ip: 127.0.0.1
+        aliases:
+          - router.local
+  install:
+    disk: /dev/sda
+    image: ghcr.io/talos-systems/installer:latest
+    bootloader: true
+    wipe: false
+  sysctls:
+    net.ipv4.ip_forward: "1"
+    net.ipv6.conf.all.forwarding: "1"
+    net.core.bpf_jit_enable: "1"
+  time:
+    disabled: false
+    servers:
+      - time.cloudflare.com
+cluster:
+  controlPlane:
+    endpoint: https://router.local:6443
+  clusterName: router
+  network:
+    cni:
+      name: custom
+    dnsDomain: cluster.local
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/12
+  token: generate-a-secure-token-here
+  ca:
+    crt: generate-with-talosctl
+    key: generate-with-talosctl

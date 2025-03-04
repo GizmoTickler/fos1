@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suricata-config
+  namespace: security
+data:
+  suricata.yaml: |
+    %YAML 1.1
+    ---
+    vars:
+      address-groups:
+        HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+        EXTERNAL_NET: "!$HOME_NET"
+    
+    outputs:
+      - fast:
+          enabled: yes
+          filename: fast.log
+      - eve-log:
+          enabled: yes
+          filetype: regular
+          filename: eve.json
+          types:
+            - alert
+            - http
+            - dns
+            - tls
+            - files
+            - ssh
+    
+    af-packet:
+      - interface: eth0
+        cluster-id: 99
+        cluster-type: cluster_flow
+        defrag: yes
+    
+    logging:
+      default-log-level: notice
+      outputs:
+        - console:
+            enabled: yes
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: suricata
+  namespace: security
+  labels:
+    app: suricata
+    component: ids
+spec:
+  selector:
+    matchLabels:
+      app: suricata
+  template:
+    metadata:
+      labels:
+        app: suricata
+        component: ids
+    spec:
+      hostNetwork: true
+      containers:
+      - name: suricata
+        image: jasonish/suricata:latest
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN", "NET_RAW"]
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/suricata/suricata.yaml
+          subPath: suricata.yaml
+        - name: rules-volume
+          mountPath: /etc/suricata/rules
+        - name: logs-volume
+          mountPath: /var/log/suricata
+      volumes:
+      - name: config-volume
+        configMap:
+          name: suricata-config
+      - name: rules-volume
+        emptyDir: {}
+      - name: logs-volume
+        emptyDir: {}

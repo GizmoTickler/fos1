@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+namePrefix: dev-
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - resource-limits.yaml
+
+configMapGenerator:
+  - name: coredns-config
+    behavior: merge
+    namespace: network
+    literals:
+      - Corefile=|
+          .:53 {
+              errors
+              health
+              forward . 8.8.8.8 8.8.4.4
+              cache 30
+              reload
+          }

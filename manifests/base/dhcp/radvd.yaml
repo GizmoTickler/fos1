@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radvd-config
+  namespace: network
+data:
+  radvd.conf: |
+    interface eth0 {
+        AdvSendAdvert on;
+        MinRtrAdvInterval 30;
+        MaxRtrAdvInterval 100;
+        AdvDefaultLifetime 3600;
+        AdvHomeAgentFlag off;
+        
+        prefix 2001:db8:1::/64 {
+            AdvOnLink on;
+            AdvAutonomous on;
+            AdvRouterAddr on;
+            AdvValidLifetime 86400;
+            AdvPreferredLifetime 14400;
+        };
+        
+        RDNSS 2001:db8:1::1 {
+            AdvRDNSSLifetime 3600;
+        };
+        
+        DNSSL local {
+            AdvDNSSLLifetime 3600;
+        };
+    };
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: radvd
+  namespace: network
+  labels:
+    app: radvd
+    component: ipv6
+spec:
+  selector:
+    matchLabels:
+      app: radvd
+  template:
+    metadata:
+      labels:
+        app: radvd
+        component: ipv6
+    spec:
+      hostNetwork: true
+      containers:
+      - name: radvd
+        image: robbertkl/radvd:latest
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/radvd.conf
+          subPath: radvd.conf
+      volumes:
+      - name: config-volume
+        configMap:
+          name: radvd-config

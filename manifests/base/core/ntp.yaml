@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: chrony
+  namespace: network
+  labels:
+    app: chrony
+    component: ntp
+spec:
+  selector:
+    matchLabels:
+      app: chrony
+  template:
+    metadata:
+      labels:
+        app: chrony
+        component: ntp
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: chrony
+        image: cturra/ntp:latest
+        securityContext:
+          capabilities:
+            add: ["SYS_TIME"]
+        env:
+        - name: NTP_SERVERS
+          value: "pool.ntp.org"
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        volumeMounts:
+        - name: chrony-config
+          mountPath: /etc/chrony/chrony.conf
+          subPath: chrony.conf
+        - name: chrony-var
+          mountPath: /var/lib/chrony
+      volumes:
+      - name: chrony-config
+        configMap:
+          name: chrony-config
+      - name: chrony-var
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chrony-config
+  namespace: network
+data:
+  chrony.conf: |
+    # NTP servers
+    server 0.pool.ntp.org iburst
+    server 1.pool.ntp.org iburst
+    server 2.pool.ntp.org iburst
+    server 3.pool.ntp.org iburst
+    
+    # Record the rate at which the system clock gains/losses time
+    driftfile /var/lib/chrony/drift
+    
+    # Allow the system clock to be stepped in the first three updates
+    makestep 1.0 3
+    
+    # Enable kernel synchronization
+    rtcsync
+    
+    # Serve time locally
+    local stratum 10
+    
+    # Allow NTP client access from local network
+    allow 10.0.0.0/8
+    allow 172.16.0.0/12
+    allow 192.168.0.0/16

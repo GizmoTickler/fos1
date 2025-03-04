@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-config
+  namespace: network
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+           lameduck 5s
+        }
+        ready
+        forward . 8.8.8.8 8.8.4.4 {
+           max_concurrent 1000
+        }
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+    local:53 {
+        errors
+        cache 30
+        hosts {
+           fallthrough
+        }
+        file /etc/coredns/zones/db.local local
+        reload
+    }
+  db.local: |
+    $ORIGIN local.
+    @       3600 IN SOA local. admin.local. (
+                                    2023010101 ; serial
+                                    7200       ; refresh
+                                    3600       ; retry
+                                    1209600    ; expire
+                                    3600 )     ; minimum
+    
+    @       3600 IN NS ns.local.
+    ns      3600 IN A  192.168.1.1
+    router  3600 IN A  192.168.1.1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns
+  namespace: network
+  labels:
+    app: coredns
+    component: dns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coredns
+  template:
+    metadata:
+      labels:
+        app: coredns
+        component: dns
+    spec:
+      hostNetwork: true
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+          - 127.0.0.1
+      containers:
+      - name: coredns
+        image: coredns/coredns:1.10.0
+        args: ["-conf", "/etc/coredns/Corefile"]
+        ports:
+        - containerPort: 53
+          name: dns-udp
+          protocol: UDP
+        - containerPort: 53
+          name: dns-tcp
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 200m
+            memory: 170Mi
+          requests:
+            cpu: 100m
+            memory: 70Mi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/coredns
+        - name: zones-volume
+          mountPath: /etc/coredns/zones
+      volumes:
+      - name: config-volume
+        configMap:
+          name: coredns-config
+          items:
+          - key: Corefile
+            path: Corefile
+      - name: zones-volume
+        configMap:
+          name: coredns-config
+          items:
+          - key: db.local
+            path: db.local

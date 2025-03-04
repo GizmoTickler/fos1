@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zeek
+  namespace: security
+  labels:
+    app: zeek
+    component: nids
+spec:
+  selector:
+    matchLabels:
+      app: zeek
+  template:
+    metadata:
+      labels:
+        app: zeek
+        component: nids
+    spec:
+      hostNetwork: true
+      containers:
+      - name: zeek
+        image: blacktop/zeek:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            /usr/local/zeek/bin/zeekctl deploy
+            tail -f /usr/local/zeek/logs/current/stdout.log
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN", "NET_RAW"]
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /usr/local/zeek/etc/node.cfg
+          subPath: node.cfg
+        - name: logs-volume
+          mountPath: /usr/local/zeek/logs
+      volumes:
+      - name: config-volume
+        configMap:
+          name: zeek-config
+      - name: logs-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeek-config
+  namespace: security
+data:
+  node.cfg: |
+    [manager]
+    type=manager
+    host=localhost
+
+    [proxy-1]
+    type=proxy
+    host=localhost
+
+    [worker-1]
+    type=worker
+    host=localhost
+    interface=eth0

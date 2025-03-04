@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        component: dashboard
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:9.4.7
+        ports:
+        - containerPort: 3000
+          name: http
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "admin"  # Would use a secret in production
+        - name: GF_SECURITY_ADMIN_USER
+          value: "admin"
+        - name: GF_SERVER_ROOT_URL
+          value: "http://localhost:3000/"
+        volumeMounts:
+        - name: data-volume
+          mountPath: /var/lib/grafana
+        - name: config-volume
+          mountPath: /etc/grafana/provisioning/datasources
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      - name: config-volume
+        configMap:
+          name: grafana-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: monitoring
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus:9090
+        access: proxy
+        isDefault: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  selector:
+    app: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http

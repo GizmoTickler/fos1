@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: avahi
+  namespace: network
+  labels:
+    app: avahi
+    component: mdns
+spec:
+  selector:
+    matchLabels:
+      app: avahi
+  template:
+    metadata:
+      labels:
+        app: avahi
+        component: mdns
+    spec:
+      hostNetwork: true
+      containers:
+      - name: avahi
+        image: mvance/avahi:latest
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        volumeMounts:
+        - name: avahi-config
+          mountPath: /etc/avahi/avahi-daemon.conf
+          subPath: avahi-daemon.conf
+      volumes:
+      - name: avahi-config
+        configMap:
+          name: avahi-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: avahi-config
+  namespace: network
+data:
+  avahi-daemon.conf: |
+    [server]
+    #host-name=router
+    domain-name=local
+    use-ipv4=yes
+    use-ipv6=yes
+    allow-interfaces=eth*,br*
+    #deny-interfaces=
+    ratelimit-interval-usec=1000000
+    ratelimit-burst=1000
+    
+    [wide-area]
+    enable-wide-area=yes
+    
+    [publish]
+    publish-hinfo=no
+    publish-workstation=no
+    publish-domain=yes
+    publish-a-on-ipv6=yes
+    publish-aaaa-on-ipv4=yes
+    
+    [reflector]
+    enable-reflector=yes
+    reflect-ipv=yes
+    
+    [rlimits]
+    rlimit-core=0
+    rlimit-data=4194304
+    rlimit-fsize=0
+    rlimit-nofile=300
+    rlimit-stack=4194304
