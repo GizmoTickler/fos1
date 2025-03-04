@@ -1,0 +1,44 @@
+# Binaries and build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Log files
+*.log
+
+# Local development artifacts
+.env
+.env.local
+.env.*.local
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# Talos Linux specific
+*.iso
+*.img
+*.qcow2
+*.vmdk
+
+# Application specific
+node_modules/
+/tmp/
