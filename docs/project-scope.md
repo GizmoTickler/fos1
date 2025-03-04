@@ -25,6 +25,8 @@ This project aims to develop a modern, container-based router and firewall distr
 - DHCPv4/v6 server
 - Router Advertisements for IPv6
 - DNS (authoritative and recursive with filtering)
+- NTP (Network Time Protocol) server with security features
+- mDNS (multicast DNS) and service discovery with cross-VLAN reflection
 - eBPF-based packet processing
 - Static and dynamic routing protocols
 - Multiple WAN support with failover

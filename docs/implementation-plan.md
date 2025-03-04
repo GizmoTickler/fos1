@@ -148,7 +148,21 @@ Week 11-12: Optimization & Documentation
 - Implement lease tracking
 - Test DNS-DHCP integration
 
-**Milestone 6:** Complete address management solution with IPv4/IPv6 support
+#### Task 6.4: NTP Server Implementation (2 days)
+- Deploy Chrony NTP container
+- Configure time sources and synchronization
+- Implement security measures and access controls
+- Set up monitoring and metrics collection
+- Test time synchronization across network segments
+
+#### Task 6.5: mDNS and Service Discovery (3 days)
+- Deploy Avahi and CoreDNS with mDNS plugin
+- Configure service discovery and reflection policies
+- Implement VLAN integration for controlled service visibility
+- Integrate with existing DNS infrastructure
+- Test service discovery across network segments
+
+**Milestone 6:** Complete network services infrastructure with addressing, time synchronization, and service discovery
 
 ## Phase 4: Security Services (Weeks 7-8)
 

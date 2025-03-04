@@ -143,6 +143,22 @@ The system will support comprehensive VLAN capabilities:
   - Configuration through ConfigMaps
   - Support for multiple prefix announcements
 
+#### Time Synchronization
+- **Chrony** for NTP service
+  - Modern, efficient NTP implementation
+  - Support for various time sources (pool servers, PPS, GPS)
+  - Security features including NTS and authentication
+  - Metrics export for monitoring
+  - Per-VLAN time service policies
+
+#### Service Discovery
+- **Avahi** for mDNS and DNS-SD
+  - Service discovery across local network
+  - Reflection capabilities between network segments
+  - Controllable service visibility policies
+  - Integration with CoreDNS for unified DNS experience
+  - Support for .local domain resolution
+
 #### Routing and Firewall
 - **Cilium** for eBPF-based networking
   - Network policies for traffic filtering
