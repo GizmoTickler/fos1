@@ -42,12 +42,13 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Infrastructure configuration design
 - [x] API definitions (CRDs)
 
-### Conceptual Components (Partially Implemented)
+### Designed Components (With Placeholder Implementation)
 
 #### Network Infrastructure
-- [ ] Network interface and VLAN configuration framework
-- [ ] Subnet management with IPv4/IPv6 support definitions
-- [ ] Cilium-based network architecture design
+- [x] Network interface and VLAN configuration framework
+- [x] Routing implementation design (static, dynamic, policy-based)
+- [x] eBPF-based packet processing architecture
+- [x] Cilium integration design for unified networking
 
 #### Security Components
 - [ ] IDS/IPS integration patterns with Suricata and Zeek
@@ -57,11 +58,12 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 #### Kubernetes Manifest Templates
 - [ ] Network service templates (DNS, DHCP, NTP)
 - [ ] Security service templates (Suricata, Zeek)
-- [ ] Basic deployment manifests
+- [x] Example routing, VLAN, and eBPF configurations
 
 ### Go Package Frameworks
-- [ ] Network interface management interfaces
-- [ ] Cilium network controller interfaces
+- [x] Network interface management interfaces (VLAN)
+- [x] Routing interfaces and placeholder implementation
+- [x] eBPF program and map management interfaces
 - [ ] DPI framework interfaces and connectors
 - [ ] NAT/NAT66 conceptual implementation
 
@@ -70,6 +72,8 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Security configuration guide
 - [x] DPI integration documentation
 - [x] Routing configuration guide
+- [x] VLAN implementation design
+- [x] eBPF implementation design
 - [x] Implementation plans and trackers
 
 ### Kubernetes Custom Resources Defined
@@ -78,14 +82,53 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] DPI profiles and flows
 - [x] QoS profiles and traffic classes
 - [x] Routing policies and tables
+- [x] eBPF program configurations
 
 ## Current Architecture Concept
 
-### Unified Network Design (Concept)
-- Cilium-based network stack for all networking functions
-- eBPF for high-performance packet processing
-- NAT/NAT66 through Cilium policies
-- Inter-VLAN routing with Cilium endpoint policies
+### Unified Network Design
+The network architecture is designed around a unified approach where all traffic flows through a consistent processing pipeline:
+
+1. **Packet Ingress**
+   - XDP programs for early packet processing and DDoS protection
+   - TC ingress hooks for stateful firewall and initial processing
+
+2. **Central Processing**
+   - Cilium-based network stack for all networking functions
+   - eBPF for high-performance packet processing
+   - Network policy enforcement
+   - Routing decisions (static, dynamic, policy-based)
+   - NAT/NAT66 through Cilium policies
+
+3. **Packet Egress**
+   - TC egress hooks for QoS and traffic shaping
+   - Final packet modifications
+
+4. **Traffic Flow Path**
+   - All traffic (including client to internet) flows through this pipeline
+   - Ensures consistent policy enforcement and visibility
+   - Leverages eBPF acceleration for optimal performance
+
+### Key Design Components
+
+#### VLAN Implementation
+- Support for VLAN interfaces on physical, bridge, and bond interfaces
+- VLAN trunking capabilities
+- QoS priority handling (802.1p and DSCP)
+- MTU auto-calculation
+
+#### Routing System
+- Comprehensive routing with static, dynamic, and policy-based options
+- Multi-protocol support (BGP, OSPF, IS-IS, BFD, PIM)
+- VRF isolation with Linux VRF and Cilium policies
+- Multi-WAN with various load balancing methods
+- Route filtering and aggregation
+
+#### eBPF Framework
+- Hierarchical map structure for efficient state management
+- Support for all eBPF hooks (XDP, TC, sockops, cgroup)
+- Cilium integration for unified networking
+- Configuration-based programmability through CRDs
 
 ### Security Framework Concept
 - Integration pattern between DPI engines and Cilium:
@@ -98,17 +141,24 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 
 The project is currently in the **architectural design and prototype phase**. The codebase contains:
 
-1. Interface definitions and type structures
-2. Conceptual implementations with placeholder logic
-3. Example configurations rather than production code
-4. Incomplete implementations with TODOs and comments
+1. Detailed architecture designs for core components
+2. Interface definitions and type structures
+3. Placeholder implementations with conceptual logic
+4. Example configurations and CRD definitions
+5. Comprehensive documentation of the intended architecture
+
+Recent progress includes:
+- Complete VLAN implementation design with placeholder code
+- Comprehensive routing implementation design for static, dynamic and policy routing
+- eBPF framework design with support for all hook types
+- Example configurations demonstrating the intended usage
 
 None of the components are currently production-ready or fully functional. This project serves as a blueprint for a future complete implementation.
 
 ## Next Steps for Implementation
 
-1. Complete core network interface implementation
-2. Implement Cilium client with complete YAML conversion
+1. Complete security component designs (IDS/IPS, DPI framework)
+2. Implement DNS/DHCP service integration
 3. Develop fully functional DPI connectors
 4. Add comprehensive test coverage
 5. Implement production-ready error handling
