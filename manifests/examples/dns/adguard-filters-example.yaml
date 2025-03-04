@@ -1,0 +1,93 @@
+apiVersion: dns.fos1.io/v1alpha1
+kind: DNSFilterList
+metadata:
+  name: adguard-filters
+  namespace: network
+spec:
+  enabled: true
+  categories:
+    - ads
+    - tracking
+    - malware
+    - phishing
+  customLists:
+    - name: "AdGuard DNS Filter"
+      url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
+      enabled: true
+    - name: "AdGuard Mobile Ads Filter"
+      url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_11.txt"
+      enabled: true
+    - name: "EasyList"
+      url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_15.txt"
+      enabled: true
+    - name: "Peter Lowe's List"
+      url: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext"
+      enabled: true
+    - name: "Malware Domain List"
+      url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_27.txt"
+      enabled: true
+  allowLists:
+    - name: "False Positives"
+      domains:
+        - "analytics.example.com"
+        - "cdn.example-service.com"
+        - "api.legitimate-service.org"
+---
+apiVersion: dns.fos1.io/v1alpha1
+kind: DNSClient
+metadata:
+  name: trusted-devices
+  namespace: network
+spec:
+  description: "Trusted devices with minimal filtering"
+  identifiers:
+    - type: ip
+      value: 192.168.1.5
+    - type: ip
+      value: 192.168.1.6
+    - type: mac
+      value: "AA:BB:CC:DD:EE:FF"
+    - type: mac
+      value: "11:22:33:44:55:66"
+  filtering:
+    enabled: true
+    exceptions:
+      - "analytics.google.com"
+      - "metrics.apple.com"
+      - "*.githubusercontent.com"
+      - "*.github.com"
+---
+apiVersion: dns.fos1.io/v1alpha1
+kind: DNSClient
+metadata:
+  name: kids-devices
+  namespace: network
+spec:
+  description: "Children's devices with enhanced filtering"
+  identifiers:
+    - type: ip
+      value: 192.168.1.100
+    - type: ip
+      value: 192.168.1.101
+    - type: mac
+      value: "CC:DD:EE:FF:00:11"
+  filtering:
+    enabled: true
+    blockLists:
+      - "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts"
+      - "https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt"
+      - "https://raw.githubusercontent.com/blocklistproject/Lists/master/gambling.txt"
+---
+apiVersion: dns.fos1.io/v1alpha1
+kind: DynamicDNSConfig
+metadata:
+  name: dhcp-integration
+  namespace: network
+spec:
+  enabled: true
+  baseDomain: home.local
+  ttl: 3600
+  createReverse: true
+  useClientHostname: true
+  hostnamePattern: "host-{ip}"
+  cleanupGracePeriod: 86400  # 24 hours

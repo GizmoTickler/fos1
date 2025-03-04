@@ -1,0 +1,125 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dnszones.dns.fos1.io
+spec:
+  group: dns.fos1.io
+  names:
+    kind: DNSZone
+    listKind: DNSZoneList
+    plural: dnszones
+    singular: dnszone
+    shortNames:
+      - dz
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - domain
+              properties:
+                domain:
+                  type: string
+                  description: The domain name for this zone
+                  pattern: '^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$'
+                ttl:
+                  type: integer
+                  description: Default TTL for records in this zone
+                  default: 3600
+                  minimum: 1
+                soa:
+                  type: object
+                  description: Start of Authority record for this zone
+                  properties:
+                    refresh:
+                      type: integer
+                      description: Seconds between refresh attempts
+                      default: 7200
+                    retry:
+                      type: integer
+                      description: Seconds between retry attempts
+                      default: 3600
+                    expire:
+                      type: integer
+                      description: Seconds until zone data expires
+                      default: 1209600
+                    minimum:
+                      type: integer
+                      description: Minimum TTL for negative caching
+                      default: 3600
+                records:
+                  type: array
+                  description: DNS records in this zone
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - type
+                      - value
+                    properties:
+                      name:
+                        type: string
+                        description: Record name (without domain)
+                      type:
+                        type: string
+                        description: Record type
+                        enum:
+                          - A
+                          - AAAA
+                          - CNAME
+                          - MX
+                          - TXT
+                          - SRV
+                          - NS
+                          - CAA
+                      value:
+                        type: string
+                        description: Record value
+                      ttl:
+                        type: integer
+                        description: TTL for this record (overrides zone TTL)
+                        minimum: 1
+            status:
+              type: object
+              properties:
+                recordCount:
+                  type: integer
+                  description: Number of records in this zone
+                lastUpdate:
+                  type: string
+                  format: date-time
+                  description: Last time this zone was updated
+                state:
+                  type: string
+                  description: Current state of this zone
+                  enum:
+                    - Active
+                    - Pending
+                    - Error
+                error:
+                  type: string
+                  description: Error message if the zone is in an error state
+      additionalPrinterColumns:
+        - name: Domain
+          type: string
+          jsonPath: .spec.domain
+        - name: Records
+          type: integer
+          jsonPath: .status.recordCount
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

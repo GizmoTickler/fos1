@@ -1,0 +1,85 @@
+apiVersion: dns.fos1.io/v1alpha1
+kind: DNSZone
+metadata:
+  name: home-local
+  namespace: network
+spec:
+  domain: home.local
+  ttl: 3600
+  soa:
+    refresh: 7200
+    retry: 3600
+    expire: 1209600
+    minimum: 3600
+  records:
+  - name: "@"
+    type: A
+    value: 192.168.1.1
+  - name: router
+    type: A
+    value: 192.168.1.1
+  - name: nas
+    type: A
+    value: 192.168.1.10
+  - name: printer
+    type: A
+    value: 192.168.1.20
+  - name: server
+    type: A
+    value: 192.168.1.30
+  - name: homeassistant
+    type: A
+    value: 192.168.1.40
+  - name: plex
+    type: CNAME
+    value: server.home.local.
+  - name: www
+    type: CNAME
+    value: server.home.local.
+  - name: cloud
+    type: CNAME
+    value: nas.home.local.
+  - name: home
+    type: CNAME
+    value: homeassistant.home.local.
+  - name: _http._tcp.server
+    type: SRV
+    value: "0 5 80 server.home.local."
+  - name: _https._tcp.server
+    type: SRV
+    value: "0 5 443 server.home.local."
+  - name: _ssh._tcp.server
+    type: SRV
+    value: "0 5 22 server.home.local."
+  - name: _http._tcp.nas
+    type: SRV
+    value: "0 5 80 nas.home.local."
+  - name: _https._tcp.nas
+    type: SRV
+    value: "0 5 443 nas.home.local."
+  - name: _smb._tcp.nas
+    type: SRV
+    value: "0 5 445 nas.home.local."
+  - name: _device-info._tcp.printer
+    type: TXT
+    value: "model=LaserJet4200"
+---
+apiVersion: dns.fos1.io/v1alpha1
+kind: PTRZone
+metadata:
+  name: 1-168-192-in-addr-arpa
+  namespace: network
+spec:
+  network: 192.168.1.0/24
+  ttl: 3600
+  records:
+  - ip: 192.168.1.1
+    hostname: router.home.local.
+  - ip: 192.168.1.10
+    hostname: nas.home.local.
+  - ip: 192.168.1.20
+    hostname: printer.home.local.
+  - ip: 192.168.1.30
+    hostname: server.home.local.
+  - ip: 192.168.1.40
+    hostname: homeassistant.home.local.

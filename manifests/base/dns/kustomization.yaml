@@ -5,3 +5,5 @@ resources:
   - coredns.yaml
   - adguard.yaml
   - mdns.yaml
+  - crds/dnszone.yaml
+  - crds/mdnsreflection.yaml

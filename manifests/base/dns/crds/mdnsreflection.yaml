@@ -1,0 +1,106 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mdnsreflections.dns.fos1.io
+spec:
+  group: dns.fos1.io
+  names:
+    kind: MDNSReflection
+    listKind: MDNSReflectionList
+    plural: mdnsreflections
+    singular: mdnsreflection
+    shortNames:
+      - mdnsr
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - enabled
+                - reflectionRules
+              properties:
+                enabled:
+                  type: boolean
+                  description: Whether mDNS reflection is enabled
+                reflectionRules:
+                  type: array
+                  description: Rules for mDNS reflection between VLANs
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - sourceVLANs
+                      - destinationVLANs
+                    properties:
+                      name:
+                        type: string
+                        description: Name of this reflection rule
+                      sourceVLANs:
+                        type: array
+                        description: Source VLANs for mDNS queries
+                        items:
+                          type: integer
+                          minimum: 1
+                          maximum: 4094
+                      destinationVLANs:
+                        type: array
+                        description: Destination VLANs for mDNS queries
+                        items:
+                          type: integer
+                          minimum: 1
+                          maximum: 4094
+                      serviceTypes:
+                        type: array
+                        description: Service types to reflect (empty for all)
+                        items:
+                          type: string
+            status:
+              type: object
+              properties:
+                reflectedServices:
+                  type: integer
+                  description: Number of services being reflected
+                reflectionRate:
+                  type: number
+                  description: Average reflections per minute
+                lastUpdate:
+                  type: string
+                  format: date-time
+                  description: Last time configuration was updated
+                state:
+                  type: string
+                  description: Current state of reflection
+                  enum:
+                    - Active
+                    - Inactive
+                    - Error
+                error:
+                  type: string
+                  description: Error message if the reflection is in an error state
+      additionalPrinterColumns:
+        - name: Enabled
+          type: boolean
+          jsonPath: .spec.enabled
+        - name: Rules
+          type: integer
+          jsonPath: .spec.reflectionRules.length
+        - name: Services
+          type: integer
+          jsonPath: .status.reflectedServices
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

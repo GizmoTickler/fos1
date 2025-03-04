@@ -1,0 +1,70 @@
+apiVersion: dns.fos1.io/v1alpha1
+kind: MDNSReflection
+metadata:
+  name: home-vlans
+  namespace: network
+spec:
+  enabled: true
+  reflectionRules:
+    - name: "Media Devices"
+      sourceVLANs: 
+        - 10  # Main network
+        - 20  # IoT network
+      destinationVLANs:
+        - 10  # Main network
+        - 20  # IoT network
+      serviceTypes:
+        - "_airplay._tcp"
+        - "_googlecast._tcp"
+        - "_spotify-connect._tcp"
+        - "_sonos._tcp"
+        - "_raop._tcp"
+    
+    - name: "Printing Services"
+      sourceVLANs: 
+        - 10  # Main network
+        - 30  # Guest network
+      destinationVLANs:
+        - 10  # Main network
+      serviceTypes:
+        - "_ipp._tcp"
+        - "_ipps._tcp"
+        - "_printer._tcp"
+        - "_scanner._tcp"
+        - "_pdl-datastream._tcp"
+    
+    - name: "Home Automation"
+      sourceVLANs: 
+        - 10  # Main network
+      destinationVLANs:
+        - 10  # Main network
+        - 20  # IoT network
+      serviceTypes:
+        - "_hue._tcp"
+        - "_homekit._tcp"
+        - "_matter._tcp"
+        - "_home-assistant._tcp"
+        - "_esphomelib._tcp"
+    
+    - name: "Device Discovery"
+      sourceVLANs: 
+        - 10  # Main network
+      destinationVLANs:
+        - 10  # Main network
+        - 20  # IoT network
+        - 30  # Guest network
+      serviceTypes:
+        - "_device-info._tcp"
+        - "_workstation._tcp"
+    
+    - name: "File Sharing"
+      sourceVLANs: 
+        - 10  # Main network
+      destinationVLANs:
+        - 10  # Main network
+      serviceTypes:
+        - "_smb._tcp"
+        - "_afpovertcp._tcp"
+        - "_nfs._tcp"
+        - "_sftp-ssh._tcp"
+        - "_webdav._tcp"
