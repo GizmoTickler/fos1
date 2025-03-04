@@ -1,0 +1,155 @@
+# Example VLAN Interface Configurations
+
+---
+# Basic VLAN Interface
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: vlan-100
+spec:
+  name: vlan100
+  type: vlan
+  parent: eth0
+  vlanId: 100
+  addresses:
+    - 192.168.100.1/24
+  mtu: 1496  # 1500 (parent) - 4 (VLAN header)
+  state: up
+
+---
+# VLAN with QoS Configuration
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: vlan-200-qos
+spec:
+  name: vlan200
+  type: vlan
+  parent: eth0
+  vlanId: 200
+  addresses:
+    - 192.168.200.1/24
+  mtu: 1496
+  qos:
+    priority: 5  # Voice traffic
+    dscp: 46     # EF (Expedited Forwarding)
+  state: up
+
+---
+# Multiple VLANs on a Bridge (Trunk)
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: bridge-0
+spec:
+  name: br0
+  type: bridge
+  interfaces:
+    - eth0
+    - eth1
+  mtu: 1500
+  state: up
+
+---
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: vlan-100-on-bridge
+spec:
+  name: vlan100
+  type: vlan
+  parent: br0
+  vlanId: 100
+  addresses:
+    - 192.168.100.1/24
+  mtu: 1496
+  state: up
+
+---
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: vlan-200-on-bridge
+spec:
+  name: vlan200
+  type: vlan
+  parent: br0
+  vlanId: 200
+  addresses:
+    - 192.168.200.1/24
+  mtu: 1496
+  state: up
+
+---
+# VLAN with IPv6 and QoS
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: vlan-300-ipv6
+spec:
+  name: vlan300
+  type: vlan
+  parent: eth0
+  vlanId: 300
+  addresses:
+    - 192.168.30.1/24
+    - 2001:db8:300::1/64
+  mtu: 1496
+  qos:
+    priority: 4
+    dscp: 34  # AF41
+  state: up
+
+---
+# Bond with VLANs
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: bond-0
+spec:
+  name: bond0
+  type: bond
+  interfaces:
+    - eth2
+    - eth3
+  bondMode: 802.3ad
+  mtu: 1500
+  state: up
+
+---
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: vlan-400-on-bond
+spec:
+  name: vlan400
+  type: vlan
+  parent: bond0
+  vlanId: 400
+  addresses:
+    - 192.168.40.1/24
+  mtu: 1496
+  state: up
+
+---
+# Subnet for VLAN
+apiVersion: network.fos1.io/v1alpha1
+kind: Subnet
+metadata:
+  name: vlan100-subnet
+spec:
+  name: VLAN100
+  network: 192.168.100.0/24
+  interface: vlan100
+  dhcp:
+    enabled: true
+    rangeStart: 192.168.100.100
+    rangeEnd: 192.168.100.200
+    leaseTime: 86400
+    options:
+      router: 192.168.100.1
+      domain-name-servers: 192.168.100.1
+  dns:
+    domain: vlan100.local
+    servers:
+      - 192.168.100.1
