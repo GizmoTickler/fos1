@@ -1,0 +1,254 @@
+# Example Filter Policy CRD Instance
+apiVersion: security.fos1.io/v1alpha1
+kind: FilterPolicy
+metadata:
+  name: web-traffic-policy
+spec:
+  description: "Control web traffic between zones"
+  scope: "zone"
+  enabled: true
+  priority: 100
+  
+  # Parent policies (for inheritance)
+  inherits:
+    - name: base-security-policy
+      overrideStrategy: merge
+  
+  # Matching criteria
+  selectors:
+    # Source selectors
+    sources:
+      - type: zone
+        values: ["internal"]
+      - type: cidr
+        values: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+    
+    # Destination selectors
+    destinations:
+      - type: zone
+        values: ["dmz"]
+      - type: service
+        values: ["web-servers"]
+    
+    # Application selectors
+    applications:
+      - type: protocol
+        values: ["HTTP", "HTTPS"]
+      - type: metadata
+        key: "tls.sni"
+        operator: "endsWith"
+        values: [".example.com", ".trusted-domain.org"]
+    
+    # Port selectors
+    ports:
+      - protocol: tcp
+        ports: [80, 443, 8080, 8443]
+    
+    # Time-based selectors
+    timeWindows:
+      - days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        startTime: "09:00"
+        endTime: "17:00"
+        timezone: "UTC"
+  
+  # Actions to take on matched traffic
+  actions:
+    # Allow action
+    - type: allow
+      parameters:
+        log: true
+        logLevel: "info"
+    
+    # Rate limiting action
+    - type: rateLimit
+      parameters:
+        rate: 1000
+        burst: 100
+        per: "source.ip"
+    
+    # DSCP marking for QoS
+    - type: dscp
+      parameters:
+        value: 26
+        description: "Expedited web traffic"
+  
+  # Additional metadata
+  tags:
+    - web
+    - security
+    - business-hours
+---
+# Example Filter Zone CRD Instance
+apiVersion: security.fos1.io/v1alpha1
+kind: FilterZone
+metadata:
+  name: internal-zone
+spec:
+  description: "Internal corporate network zone"
+  
+  # Zone membership criteria
+  networks:
+    - cidr: "10.0.0.0/8"
+    - cidr: "172.16.0.0/12"
+    - cidr: "192.168.0.0/16"
+  
+  # Interface definitions
+  interfaces:
+    - name: "eth1"
+      description: "Internal interface"
+  
+  # Trust level (used for default policies)
+  trustLevel: high
+  
+  # Default action for inter-zone traffic
+  defaultIngressAction: deny
+  defaultEgressAction: allow
+  
+  # Zone-specific policy references
+  policies:
+    - "web-traffic-policy"
+    - "internal-dns-policy"
+---
+# Example Filter Policy Group CRD Instance
+apiVersion: security.fos1.io/v1alpha1
+kind: FilterPolicyGroup
+metadata:
+  name: web-access-policies
+spec:
+  description: "Group of policies controlling web access"
+  enabled: true
+  priority: 50
+  
+  # Member policies
+  policies:
+    - "web-traffic-policy"
+    - "web-filtering-policy"
+    - "web-authentication-policy"
+  
+  # Default action for this group
+  defaultAction: deny
+  
+  # Override settings for member policies
+  overrides:
+    - policyName: "web-traffic-policy"
+      enable: true
+      priority: 110
+---
+# Example Application Specific Policy
+apiVersion: security.fos1.io/v1alpha1
+kind: FilterPolicy
+metadata:
+  name: http-header-policy
+spec:
+  description: "HTTP header-based filtering"
+  scope: "application"
+  enabled: true
+  priority: 200
+  
+  # Matching criteria
+  selectors:
+    # Application specific selectors
+    applications:
+      - type: protocol
+        values: ["HTTP"]
+      - type: properties
+        key: "http.method"
+        operator: "in"
+        values: ["GET", "HEAD", "POST"]
+      - type: properties
+        key: "http.headers.user-agent"
+        operator: "contains"
+        values: ["Chrome", "Firefox", "Safari"]
+      - type: properties
+        key: "http.path"
+        operator: "startsWith"
+        values: ["/api/", "/public/", "/assets/"]
+  
+  # Actions
+  actions:
+    - type: allow
+      parameters:
+        log: true
+    - type: rateLimit
+      parameters:
+        rate: 500
+        burst: 50
+        per: "source.ip+http.path"
+---
+# Example TLS Metadata Policy
+apiVersion: security.fos1.io/v1alpha1
+kind: FilterPolicy
+metadata:
+  name: tls-metadata-policy
+spec:
+  description: "TLS metadata-based filtering without content inspection"
+  scope: "application"
+  enabled: true
+  priority: 150
+  
+  # Matching criteria
+  selectors:
+    # Application specific selectors
+    applications:
+      - type: protocol
+        values: ["TLS"]
+      - type: metadata
+        key: "tls.sni"
+        operator: "endsWith"
+        values: [".example.com", ".trusted-domain.org"]
+      - type: metadata
+        key: "tls.version"
+        operator: "in"
+        values: ["1.2", "1.3"]
+      - type: metadata
+        key: "tls.cert.issuer"
+        operator: "contains"
+        values: ["Let's Encrypt", "DigiCert", "Comodo"]
+  
+  # Actions
+  actions:
+    - type: allow
+      parameters:
+        log: true
+---
+# Example Policy for HTTP and DNS Together
+apiVersion: security.fos1.io/v1alpha1
+kind: FilterPolicy
+metadata:
+  name: http-dns-policy
+spec:
+  description: "Combined HTTP and DNS filtering"
+  scope: "application"
+  enabled: true
+  priority: 175
+  
+  # Matching criteria
+  selectors:
+    applications:
+      - type: protocol
+        values: ["HTTP", "DNS"]
+      # HTTP-specific rules
+      - type: properties
+        key: "http.path"
+        operator: "contains"
+        values: ["/download/", "/upload/"]
+      # DNS-specific rules
+      - type: properties
+        key: "dns.query.type"
+        operator: "in"
+        values: ["A", "AAAA", "CNAME", "MX"]
+      - type: properties
+        key: "dns.query.name"
+        operator: "endsWith"
+        values: [".example.com", ".trusted-domain.org"]
+  
+  # Actions
+  actions:
+    - type: allow
+      parameters:
+        log: true
+    - type: rateLimit
+      parameters:
+        rate: 100
+        burst: 20
+        per: "source.ip+application"

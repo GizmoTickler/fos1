@@ -1,0 +1,140 @@
+# Examples of our Custom Resources that are translated to Cilium policies
+
+---
+# Example 1: Network interface with VLAN
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: lan1
+spec:
+  type: physical
+  device: eth1
+  vlan:
+    enabled: true
+    id: 10
+  cilium:
+    labels:
+      zone: lan
+      interface: lan1
+  qos:
+    enabled: true
+    defaultClass: normal
+
+---
+# Example 2: Firewall zone
+apiVersion: security.fos1.io/v1alpha1
+kind: FirewallZone
+metadata:
+  name: lan
+spec:
+  description: "Local area network zone"
+  interfaces:
+  - lan1
+  trust_level: 50
+  default_policy: accept
+  cilium:
+    label_key: zone
+    label_value: lan
+
+---
+# Example 3: Firewall rule
+apiVersion: security.fos1.io/v1alpha1
+kind: FirewallRule
+metadata:
+  name: allow-web-from-lan-to-wan
+spec:
+  description: "Allow web traffic from LAN to WAN zone"
+  priority: 100
+  fromZone: lan
+  toZone: wan
+  protocol: tcp
+  ports: [80, 443]
+  action: allow
+  enabled: true
+  logging: true
+
+---
+# Example 4: NAT configuration
+apiVersion: network.fos1.io/v1alpha1
+kind: NetworkNAT
+metadata:
+  name: outbound-nat
+spec:
+  sourceNetwork: 192.168.1.0/24
+  outboundInterface: eth0
+  masquerade: true
+  hairpin: false
+  ipv6: false
+  
+---
+# Example 5: VRF definition
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: customer-a
+spec:
+  id: 10
+  description: "VRF for Customer A"
+  interfaces:
+  - vlan10
+  - vlan20
+  routing:
+    routeDistinguisher: "65000:10"
+    importTargets: ["65000:10"]
+    exportTargets: ["65000:10"]
+  cilium:
+    isolationEnabled: true
+    labelKey: vrf
+    labelValue: customer-a
+
+---
+# Example 6: DPI profile
+apiVersion: security.fos1.io/v1alpha1
+kind: DPIProfile
+metadata:
+  name: web-traffic
+spec:
+  description: "Profile for HTTP/HTTPS traffic"
+  engine: suricata
+  applications:
+  - name: http
+    ports: [80, 8080]
+    signatures: ["http-*"]
+  - name: https
+    ports: [443, 8443]
+    signatures: ["tls-*"]
+  actions:
+    allow:
+    - http
+    - https
+    block:
+    - bittorrent
+    - file-transfer
+  cilium:
+    integration:
+      enabled: true
+      policyGeneration: true
+      
+---
+# Example 7: VLAN Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: VLANPolicy
+metadata:
+  name: vlan10-to-vlan20
+spec:
+  description: "Policy between VLAN 10 and VLAN 20"
+  fromVLAN: 10
+  toVLAN: 20
+  allowAll: false
+  rules:
+  - protocol: tcp
+    port: 80
+    allow: true
+  - protocol: tcp
+    port: 443
+    allow: true
+  - protocol: udp
+    port: 53
+    allow: true
+  cilium:
+    generateNetworkPolicy: true

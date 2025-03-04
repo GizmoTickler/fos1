@@ -5,3 +5,4 @@ resources:
   - suricata.yaml
   - zeek.yaml
   - dpi-manager.yaml
+  - filter-policy-crds.yaml
