@@ -15,10 +15,10 @@ This project aims to develop a network gateway solution with:
 
 ## Documentation
 
-- [Project Scope](project-scope.md) - Detailed overview of project goals and requirements
-- [Architecture Components](architecture-components.md) - Technical architecture and design
-- [Implementation Plan](implementation-plan.md) - Step-by-step development plan
-- [Project Tracker](project-tracker.md) - Status tracking for all components
+- [Project Scope](docs/project-scope.md) - Detailed overview of project goals and requirements
+- [Architecture Components](docs/architecture-components.md) - Technical architecture and design
+- [Implementation Plan](docs/implementation-plan.md) - Step-by-step development plan
+- [Project Tracker](docs/project-tracker.md) - Status tracking for all components
 
 ## Project Structure
 
