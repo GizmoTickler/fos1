@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comprehensive DNS implementation with CoreDNS, AdGuard, and mDNS
+- DNS Manager with DHCP integration for dynamic DNS updates
+- Custom CRDs for DNS zone and mDNS reflection management
+- Cross-VLAN mDNS service discovery with rule-based configuration
+- Advanced security system design (threat intelligence, security orchestration)
+- Policy-based filtering with hierarchical policy model
 - Routing configuration guide with examples
 - Cilium network controller interfaces
 - DPI framework architectural design
@@ -21,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored project tracker to show actual implementation status
 - Moved from NFTables concept to Cilium eBPF design in architecture documentation
 - Reorganized code to separate deprecated concepts from current architectural approach
+- Enhanced AdGuard Home configuration with upstream DNS support
 
 ### Fixed
 - Corrected implementation status in all documentation to reflect conceptual nature

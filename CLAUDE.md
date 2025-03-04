@@ -58,7 +58,8 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Threat intelligence system design
 
 #### Kubernetes Manifest Templates
-- [ ] Network service templates (DNS, DHCP, NTP)
+- [x] Network service templates (DNS - CoreDNS, AdGuard, mDNS)
+- [ ] Network service templates (DHCP, NTP)
 - [x] Security service templates (Suricata, Zeek, DPI Manager)
 - [x] Example routing, VLAN, and eBPF configurations
 - [x] Filter policy CRDs and examples
@@ -70,6 +71,7 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] DPI framework interfaces and connectors (Suricata, Zeek, nProbe)
 - [x] NAT/NAT66 conceptual implementation with Cilium
 - [x] Policy controller for filter policy management
+- [x] DNS manager with DHCP integration
 
 ### Documentation Created
 - [x] Network configuration guide
@@ -78,6 +80,7 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Routing configuration guide
 - [x] VLAN implementation design
 - [x] eBPF implementation design
+- [x] DNS implementation design
 - [x] Implementation plans and trackers
 
 ### Kubernetes Custom Resources Defined
@@ -87,6 +90,8 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] QoS profiles and traffic classes
 - [x] Routing policies and tables
 - [x] eBPF program configurations
+- [x] DNS zones and records
+- [x] mDNS reflection rules
 
 ## Current Architecture Concept
 
@@ -159,15 +164,18 @@ Recent progress includes:
 - Advanced security component designs (DPI, IDS/IPS, threat intelligence)
 - Policy-based filtering system with hierarchical policies
 - Integration framework for all security components
+- Comprehensive DNS implementation with CoreDNS, AdGuard, and mDNS
+- Cross-VLAN mDNS reflection with rule-based configuration
+- Dynamic DNS updates from DHCP leases
 - Example configurations demonstrating the intended usage
 
 None of the components are currently production-ready or fully functional. This project serves as a blueprint for a future complete implementation.
 
 ## Next Steps for Implementation
 
-1. Complete security component designs (IDS/IPS, DPI framework)
-2. Implement DNS/DHCP service integration
-3. Develop fully functional DPI connectors
+1. Complete DHCP service integration
+2. Implement NTP service design
+3. Develop fully functional network monitoring
 4. Add comprehensive test coverage
 5. Implement production-ready error handling
 6. Create deployable container images
