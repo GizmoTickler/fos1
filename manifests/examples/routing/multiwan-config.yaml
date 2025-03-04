@@ -1,0 +1,220 @@
+# Example Multi-WAN Configurations
+
+---
+# Dual WAN with Load Balancing
+apiVersion: network.fos1.io/v1alpha1
+kind: MultiWAN
+metadata:
+  name: multi-wan-loadbalance
+spec:
+  description: "Dual WAN configuration with load balancing"
+  wanInterfaces:
+    - name: "wan1"
+      interface: "eth0"
+      weight: 70  # Higher weight gets more traffic
+      priority: 10  # Lower number = higher priority
+      description: "Primary fiber connection"
+      gateway: "192.168.100.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+          - "1.1.1.1"
+        method: "ping"
+        interval: 5  # seconds
+        timeout: 1  # seconds
+        failThreshold: 3  # failures to mark as down
+        successThreshold: 2  # successes to mark as up
+    - name: "wan2"
+      interface: "eth1"
+      weight: 30  # Lower weight gets less traffic
+      priority: 20
+      description: "Secondary cable connection"
+      gateway: "192.168.200.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+          - "1.1.1.1"
+        method: "ping"
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+  loadBalancing:
+    enabled: true
+    method: "weighted"  # weighted, round-robin, per-connection, per-packet
+    sticky: true  # Keep connections on same WAN
+    stickyTimeout: 300  # seconds
+  failover:
+    enabled: true  # Enable failover if a WAN goes down
+    preempt: true  # Return to higher priority WAN when available
+    preemptDelay: 60  # Wait 60 seconds before switching back
+  defaultRouteMetric: 100
+status:
+  activeWANs:
+    - name: "wan1"
+      state: "up"
+      rtt: 15.6  # milliseconds
+      packetLoss: 0  # percentage
+    - name: "wan2"
+      state: "up"
+      rtt: 45.2
+      packetLoss: 0
+  currentPrimary: "wan1"
+  lastStateChange: "2025-03-15T08:45:12Z"
+
+---
+# WAN Failover Only (No Load Balancing)
+apiVersion: network.fos1.io/v1alpha1
+kind: MultiWAN
+metadata:
+  name: multi-wan-failover
+spec:
+  description: "Dual WAN configuration with failover only"
+  wanInterfaces:
+    - name: "fiber"
+      interface: "eth0"
+      weight: 100
+      priority: 10
+      description: "Primary fiber connection"
+      gateway: "192.168.100.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+          - "1.1.1.1"
+        method: "ping"
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+    - name: "lte"
+      interface: "wwan0"
+      weight: 100
+      priority: 20
+      description: "Backup LTE connection"
+      gateway: "192.168.200.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+          - "1.1.1.1"
+        method: "ping"
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+  loadBalancing:
+    enabled: false  # Disable load balancing
+  failover:
+    enabled: true
+    preempt: true
+    preemptDelay: 300  # Longer delay for cellular to avoid flapping
+  defaultRouteMetric: 100
+
+---
+# Triple WAN with Mixed Methods
+apiVersion: network.fos1.io/v1alpha1
+kind: MultiWAN
+metadata:
+  name: multi-wan-triple
+spec:
+  description: "Triple WAN with mixed monitoring methods"
+  wanInterfaces:
+    - name: "fiber"
+      interface: "eth0"
+      weight: 60
+      priority: 10
+      description: "Primary fiber connection"
+      gateway: "192.168.100.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+          - "1.1.1.1"
+        method: "ping"
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+    - name: "cable"
+      interface: "eth1"
+      weight: 30
+      priority: 20
+      description: "Secondary cable connection"
+      gateway: "192.168.200.1"
+      monitoring:
+        targets:
+          - "dns.google"
+        method: "dns"  # DNS query monitoring
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+    - name: "lte"
+      interface: "wwan0"
+      weight: 10
+      priority: 30
+      description: "Backup LTE connection"
+      gateway: "192.168.250.1"
+      monitoring:
+        targets:
+          - "https://www.google.com"
+        method: "http"  # HTTP check
+        interval: 10
+        timeout: 2
+        failThreshold: 3
+        successThreshold: 2
+  loadBalancing:
+    enabled: true
+    method: "weighted"
+    sticky: true
+    stickyTimeout: 300
+  failover:
+    enabled: true
+    preempt: true
+    preemptDelay: 60
+  defaultRouteMetric: 100
+
+---
+# Per-Packet Load Balancing
+apiVersion: network.fos1.io/v1alpha1
+kind: MultiWAN
+metadata:
+  name: multi-wan-per-packet
+spec:
+  description: "Dual WAN with per-packet load balancing"
+  wanInterfaces:
+    - name: "wan1"
+      interface: "eth0"
+      weight: 1  # Equal weights for per-packet balancing
+      priority: 10
+      description: "First connection"
+      gateway: "192.168.100.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+        method: "ping"
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+    - name: "wan2"
+      interface: "eth1"
+      weight: 1  # Equal weights for per-packet balancing
+      priority: 10  # Same priority
+      description: "Second connection"
+      gateway: "192.168.200.1"
+      monitoring:
+        targets:
+          - "8.8.8.8"
+        method: "ping"
+        interval: 5
+        timeout: 1
+        failThreshold: 3
+        successThreshold: 2
+  loadBalancing:
+    enabled: true
+    method: "per-packet"  # Important: per-packet method
+    sticky: false  # Cannot be sticky with per-packet
+  failover:
+    enabled: true
+    preempt: true
+    preemptDelay: 60
+  defaultRouteMetric: 100

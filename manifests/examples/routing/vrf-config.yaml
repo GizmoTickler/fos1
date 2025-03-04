@@ -1,0 +1,139 @@
+# Example VRF Configurations
+
+---
+# Basic VRF for Customer Isolation
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: customer-a
+spec:
+  description: "Isolated VRF for Customer A"
+  tableId: 100  # Routing table ID
+  interfaces:
+    - "vlan100"
+    - "vlan101"
+  routeTargets:  # Used with BGP
+    import:
+      - "65000:100"
+    export:
+      - "65000:100"
+  ciliumPolicy: true  # Use Cilium policy for isolation
+status:
+  state: "active"
+  routeCount: 45
+  interfaces:
+    - name: "vlan100"
+      state: "up"
+    - name: "vlan101"
+      state: "up"
+
+---
+# VRF with Route Leaking
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: customer-b
+spec:
+  description: "VRF for Customer B with controlled Internet access"
+  tableId: 200
+  interfaces:
+    - "vlan200"
+  routeTargets:
+    import:
+      - "65000:200"
+    export:
+      - "65000:200"
+  leakRoutes:
+    - fromVRF: "main"  # Import from main VRF
+      destinations:
+        - "8.8.8.8/32"  # Google DNS
+        - "8.8.4.4/32"  # Google DNS alternate
+        - "0.0.0.0/0"   # Default route for Internet access
+    - toVRF: "main"    # Export to main VRF
+      destinations:
+        - "192.168.200.0/24"  # Allow main VRF to reach this network
+  ciliumPolicy: true
+
+---
+# VRF with Specific Routing Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: guest
+spec:
+  description: "VRF for guest networks with limited access"
+  tableId: 300
+  interfaces:
+    - "vlan300"
+    - "wlan0"  # Guest WiFi
+  leakRoutes:
+    - fromVRF: "main"
+      destinations:
+        - "0.0.0.0/0"  # Default route only
+  ciliumPolicy: true
+
+---
+# Management VRF
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: management
+spec:
+  description: "Isolated VRF for device management"
+  tableId: 400
+  interfaces:
+    - "mgmt0"
+  leakRoutes:
+    - fromVRF: "main"
+      destinations:
+        - "0.0.0.0/0"  # Allow outbound management traffic
+  ciliumPolicy: true
+
+---
+# VRF for IoT Devices
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: iot
+spec:
+  description: "Isolated VRF for IoT devices"
+  tableId: 500
+  interfaces:
+    - "vlan500"
+  leakRoutes:
+    - fromVRF: "main"
+      destinations:
+        - "8.8.8.8/32"  # DNS
+        - "1.1.1.1/32"  # Alternate DNS
+        - "123.123.123.123/32"  # NTP server
+        - "0.0.0.0/0"  # Selective Internet access
+  ciliumPolicy: true
+
+---
+# Multi-Tenant VRF with Complex Leaking
+apiVersion: network.fos1.io/v1alpha1
+kind: VRF
+metadata:
+  name: tenant-shared
+spec:
+  description: "Shared services VRF accessible by all tenants"
+  tableId: 600
+  interfaces:
+    - "vlan600"
+  leakRoutes:
+    - fromVRF: "customer-a"
+      destinations:
+        - "10.1.0.0/16"  # Customer A networks
+    - fromVRF: "customer-b"
+      destinations:
+        - "10.2.0.0/16"  # Customer B networks
+    - toVRF: "customer-a"
+      destinations:
+        - "10.100.0.0/24"  # Shared services
+    - toVRF: "customer-b"
+      destinations:
+        - "10.100.0.0/24"  # Shared services
+    - toVRF: "main"
+      destinations:
+        - "10.100.0.0/24"  # Shared services
+  ciliumPolicy: true

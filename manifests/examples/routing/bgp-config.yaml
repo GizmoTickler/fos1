@@ -1,0 +1,196 @@
+# Example BGP Configuration
+
+---
+# Basic BGP Configuration with ISP Peer
+apiVersion: network.fos1.io/v1alpha1
+kind: BGPConfig
+metadata:
+  name: bgp-isp1
+spec:
+  enabled: true
+  asNumber: 65000  # Local AS number
+  routerId: "192.168.1.1"
+  neighbors:
+    - address: "192.168.100.1"
+      remoteAsNumber: 65001
+      description: "ISP 1 Router"
+      keepaliveInterval: 30
+      holdTime: 90
+      connectRetryInterval: 10
+      authentication:
+        type: "md5"
+        secretRef:
+          name: "bgp-password"
+          key: "password"
+      bfdEnabled: true
+  addressFamilies:
+    - type: "ipv4-unicast"
+      enabled: true
+      redistributions:
+        - protocol: "connected"
+          routeMapRef: "redist-connected"
+        - protocol: "static"
+          routeMapRef: "redist-static"
+      networks:
+        - "192.168.0.0/16"
+        - "10.0.0.0/8"
+    - type: "ipv6-unicast"
+      enabled: true
+      redistributions:
+        - protocol: "connected"
+      networks:
+        - "2001:db8::/32"
+  vrf: "main"
+  ebgpMultihop: 2
+  deterministic-med: true
+  multipath: true
+status:
+  state: "established"
+  uptime: "10h15m"
+  prefixReceived: 150
+  prefixSent: 25
+  neighbors:
+    - address: "192.168.100.1"
+      state: "established"
+      uptime: "10h15m"
+      prefixReceived: 150
+      prefixSent: 25
+
+---
+# Dual-ISP BGP Configuration
+apiVersion: network.fos1.io/v1alpha1
+kind: BGPConfig
+metadata:
+  name: bgp-multi-isp
+spec:
+  enabled: true
+  asNumber: 65000
+  routerId: "192.168.1.1"
+  neighbors:
+    - address: "192.168.100.1"
+      remoteAsNumber: 65001
+      description: "Primary ISP"
+      bfdEnabled: true
+    - address: "192.168.200.1"
+      remoteAsNumber: 65002
+      description: "Secondary ISP"
+      bfdEnabled: true
+  addressFamilies:
+    - type: "ipv4-unicast"
+      enabled: true
+      redistributions:
+        - protocol: "connected"
+        - protocol: "static"
+      networks:
+        - "192.168.0.0/16"
+  vrf: "main"
+  multipath: true
+
+---
+# BGP Configuration with Route Map Filtering
+apiVersion: network.fos1.io/v1alpha1
+kind: BGPConfig
+metadata:
+  name: bgp-with-filters
+spec:
+  enabled: true
+  asNumber: 65000
+  routerId: "192.168.1.1"
+  neighbors:
+    - address: "192.168.100.1"
+      remoteAsNumber: 65001
+      description: "ISP with Filtering"
+      routeMapIn: "isp1-in"  # Apply route-map for incoming routes
+      routeMapOut: "isp1-out"  # Apply route-map for outgoing routes
+  addressFamilies:
+    - type: "ipv4-unicast"
+      enabled: true
+      redistributions:
+        - protocol: "connected"
+          routeMapRef: "redist-connected"
+        - protocol: "static"
+          routeMapRef: "redist-static"
+      networks:
+        - "192.168.0.0/16"
+  vrf: "main"
+
+---
+# BGP Route Map for Filtering
+apiVersion: network.fos1.io/v1alpha1
+kind: RouteMap
+metadata:
+  name: isp1-in
+spec:
+  description: "Filter incoming routes from ISP1"
+  entries:
+    - sequence: 10
+      action: "permit"
+      match:
+        prefix: "0.0.0.0/0"  # Default route
+      set:
+        localPreference: 200  # Higher local preference for default route
+    - sequence: 20
+      action: "permit"
+      match:
+        prefix: "8.8.8.8/32"  # Google DNS
+      set:
+        localPreference: 150
+    - sequence: 30
+      action: "deny"
+      match:
+        prefix: "10.0.0.0/8"  # Deny RFC1918
+    - sequence: 40
+      action: "deny"
+      match:
+        prefix: "172.16.0.0/12"  # Deny RFC1918
+    - sequence: 50
+      action: "deny"
+      match:
+        prefix: "192.168.0.0/16"  # Deny RFC1918
+    - sequence: 60
+      action: "permit"
+      match:
+        prefix: "0.0.0.0/0"  # Permit everything else
+        prefixLen: "8-24"    # But only if it's reasonably specific
+      set:
+        localPreference: 100  # Default local preference
+
+---
+# BGP in Customer VRF
+apiVersion: network.fos1.io/v1alpha1
+kind: BGPConfig
+metadata:
+  name: bgp-customer-a
+spec:
+  enabled: true
+  asNumber: 65000
+  routerId: "10.1.1.1"
+  neighbors:
+    - address: "10.1.1.2"
+      remoteAsNumber: 65100
+      description: "Customer A Router"
+  addressFamilies:
+    - type: "ipv4-unicast"
+      enabled: true
+      redistributions:
+        - protocol: "static"
+      networks:
+        - "10.1.0.0/16"
+  vrf: "customer-a"  # Customer-specific VRF
+
+---
+# BFD Configuration for Fast Failover
+apiVersion: network.fos1.io/v1alpha1
+kind: BFDConfig
+metadata:
+  name: bgp-bfd-config
+spec:
+  enabled: true
+  minTxInterval: 300  # milliseconds
+  minRxInterval: 300  # milliseconds
+  multiplier: 3  # Detection multiplier
+  peers:
+    - address: "192.168.100.1"
+      interface: "eth0"
+    - address: "192.168.200.1" 
+      interface: "eth1"

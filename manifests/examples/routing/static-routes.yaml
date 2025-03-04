@@ -1,0 +1,157 @@
+# Example Static Route Configurations
+
+---
+# Basic Static Route
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: datacenter-route
+spec:
+  description: "Route to datacenter network"
+  destination: "10.0.0.0/16"
+  nextHop: "192.168.100.1"
+  metric: 100
+  protocol: "static"
+  preference: 1  # Administrative distance
+  vrf: "main"
+  table: "main"
+  tags:
+    - "datacenter"
+    - "corporate"
+
+---
+# Static Route with Multiple Next Hops (ECMP)
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: server-farm-route
+spec:
+  description: "Route to server farm with load balancing"
+  destination: "172.16.0.0/16"
+  nextHops:
+    - address: "192.168.1.1"
+      weight: 1
+    - address: "192.168.1.2"
+      weight: 1
+  metric: 110
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+  
+---
+# Static Route with Unequal Cost Multipath
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: branch-office-route
+spec:
+  description: "Route to branch office with preferred path"
+  destination: "192.168.50.0/24"
+  nextHops:
+    - address: "192.168.1.10"
+      weight: 10  # Higher weight, preferred path
+    - address: "192.168.1.20"
+      weight: 1   # Lower weight, backup path
+  metric: 120
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+
+---
+# IPv6 Static Route
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: ipv6-datacenter-route
+spec:
+  description: "IPv6 route to datacenter"
+  destination: "2001:db8:1::/48"
+  nextHop: "2001:db8:ff::1"
+  metric: 100
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+
+---
+# Static Route in Custom VRF
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: customer-a-route
+spec:
+  description: "Route for Customer A network"
+  destination: "10.10.0.0/16"
+  nextHop: "10.1.1.1"
+  metric: 100
+  protocol: "static"
+  preference: 1
+  vrf: "customer-a"  # Customer-specific VRF
+  
+---
+# Static Route with Interface Next Hop
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: direct-attached-route
+spec:
+  description: "Route to directly attached network"
+  destination: "172.20.0.0/24"
+  nextHop: "vlan20"  # Interface name instead of IP
+  metric: 0  # Direct connections typically have low metric
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+
+---
+# Default Route
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: default-route-wan1
+spec:
+  description: "Default route via primary WAN"
+  destination: "0.0.0.0/0"  # Default route for IPv4
+  nextHop: "192.168.100.1"
+  metric: 10  # Primary has lower metric
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+  tags:
+    - "wan"
+    - "primary"
+
+---
+# Backup Default Route
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: default-route-wan2
+spec:
+  description: "Default route via backup WAN"
+  destination: "0.0.0.0/0"
+  nextHop: "192.168.200.1"
+  metric: 20  # Higher metric makes this a backup route
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+  tags:
+    - "wan"
+    - "backup"
+
+---
+# IPv6 Default Route
+apiVersion: network.fos1.io/v1alpha1
+kind: Route
+metadata:
+  name: default-ipv6-route
+spec:
+  description: "Default IPv6 route"
+  destination: "::/0"  # Default route for IPv6
+  nextHop: "2001:db8:ff::1"
+  metric: 10
+  protocol: "static"
+  preference: 1
+  vrf: "main"
+  tags:
+    - "wan"
+    - "ipv6"

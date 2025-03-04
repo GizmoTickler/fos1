@@ -1,0 +1,184 @@
+# Example Policy-Based Routing Configurations
+
+---
+# Source-Based Routing Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: guest-network-policy
+spec:
+  description: "Route guest network traffic via secondary ISP"
+  priority: 100  # Lower number = higher priority
+  match:
+    source:
+      networks:
+        - "192.168.30.0/24"  # Guest network
+      interfaces:
+        - "vlan30"  # Guest VLAN
+    destination:
+      networks:
+        - "0.0.0.0/0"  # All destinations
+    protocol: "all"  # Match all protocols
+  action:
+    type: "route"  # Route action
+    nextHop: "192.168.200.1"  # Secondary ISP
+  vrf: "main"
+status:
+  active: true
+  matchCount: 1250
+  lastMatched: "2025-03-15T12:34:56Z"
+
+---
+# Application-Based Routing Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: streaming-traffic-policy
+spec:
+  description: "Route streaming traffic via high-bandwidth ISP"
+  priority: 50  # Higher priority than the guest network policy
+  match:
+    applications:  # Requires DPI integration
+      - "netflix"
+      - "youtube"
+      - "hulu"
+      - "disney-plus"
+    protocol: "tcp"
+  action:
+    type: "route"
+    nextHop: "192.168.100.1"  # Primary ISP with higher bandwidth
+    dscp: 34  # Set DSCP for QoS (AF41)
+  vrf: "main"
+
+---
+# Traffic Type-Based Routing Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: voip-traffic-policy
+spec:
+  description: "Route VoIP traffic via low-latency path"
+  priority: 10  # Very high priority
+  match:
+    applications:
+      - "sip"
+      - "rtp"
+    trafficType:
+      - "voip"
+    protocol: "all"
+    ports:
+      - start: 5060
+        end: 5061
+      - start: 10000
+        end: 20000
+  action:
+    type: "route"
+    nextHop: "192.168.100.1"
+    dscp: 46  # EF (Expedited Forwarding)
+    mark: 0x5  # For QoS identification
+  vrf: "main"
+
+---
+# Time-Based Routing Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: business-hours-policy
+spec:
+  description: "Different routing during business hours"
+  priority: 80
+  match:
+    source:
+      networks:
+        - "192.168.10.0/24"  # Office network
+    time:
+      daysOfWeek:
+        - "monday"
+        - "tuesday"
+        - "wednesday"
+        - "thursday"
+        - "friday"
+      timeOfDay:
+        - start: "08:00"
+          end: "18:00"
+  action:
+    type: "route"
+    nextHop: "192.168.100.1"  # Primary ISP during business hours
+  vrf: "main"
+
+---
+# Routing Table Selection Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: use-alternate-table
+spec:
+  description: "Use alternate routing table for specific traffic"
+  priority: 70
+  match:
+    source:
+      networks:
+        - "192.168.20.0/24"  # Development network
+    destination:
+      networks:
+        - "172.16.0.0/16"  # Internal services
+  action:
+    type: "table"
+    table: "alt-routes"  # Use alternate routing table
+  vrf: "main"
+
+---
+# Multi-Criteria Routing Policy
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: complex-routing-policy
+spec:
+  description: "Complex policy with multiple criteria"
+  priority: 60
+  match:
+    source:
+      networks:
+        - "192.168.50.0/24"
+      interfaces:
+        - "vlan50"
+    destination:
+      networks:
+        - "8.8.8.8/32"
+        - "8.8.4.4/32"
+    protocol: "udp"
+    ports:
+      - start: 53
+        end: 53
+    time:
+      daysOfWeek:
+        - "saturday"
+        - "sunday"
+  action:
+    type: "route"
+    nextHop: "192.168.200.1"
+  vrf: "main"
+
+---
+# Routing Policy in VRF
+apiVersion: network.fos1.io/v1alpha1
+kind: RoutingPolicy
+metadata:
+  name: customer-b-policy
+spec:
+  description: "Special routing for Customer B"
+  priority: 50
+  match:
+    source:
+      networks:
+        - "10.2.0.0/16"
+    protocol: "tcp"
+    ports:
+      - start: 80
+        end: 80
+      - start: 443
+        end: 443
+  action:
+    type: "route"
+    nextHop: "10.2.1.254"
+  vrf: "customer-b"  # Policy applies only in this VRF
