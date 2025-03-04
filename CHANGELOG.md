@@ -8,49 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Comprehensive DPI framework with Cilium integration
-  - Suricata connector for IDS/IPS functionality
-  - Zeek connector for protocol analysis
-  - DPI manager for coordinating security components
-  - IP reputation list management
-  - Dynamic policy generation from DPI events
-- Suricata IPS mode support with NFQueue integration
-- Cilium Hubble for network flow visibility
-- DPI manager Kubernetes deployment
-- Real-time policy enforcement based on DPI events
+- Routing configuration guide with examples
+- Cilium network controller interfaces
+- DPI framework architectural design
+- Suricata and Zeek connector interfaces
+- DPI manager interface design
+- Conceptual implementation of Cilium integration
+- Documentation for DPI event processing architecture
 
 ### Changed
-- Replaced NFTables-based firewall with Cilium eBPF policies
-- Consolidated all networking on unified Cilium stack
-- Implemented NAT/NAT66 through Cilium instead of separate component
-- Enhanced inter-VLAN routing with Cilium endpoint policies
-- Updated security documentation to reflect Cilium-based approach
-- Improved Suricata configuration with IP list support
+- Updated CLAUDE.md to accurately reflect project status as conceptual framework
+- Refactored project tracker to show actual implementation status
+- Moved from NFTables concept to Cilium eBPF design in architecture documentation
+- Reorganized code to separate deprecated concepts from current architectural approach
 
 ### Fixed
-- Corrected integration between DPI engines and policy enforcement
-- Fixed missing link between security event detection and mitigation
+- Corrected implementation status in all documentation to reflect conceptual nature
+- Added missing import statements in various files
+- Fixed incorrect implementation status in project tracker
 
 ## [0.2.0] - 2025-03-04
 
-Enhanced security release with Cilium integration and DPI capabilities.
+Architectural design update with Cilium and DPI framework concepts.
 
 ### Added
-- Comprehensive DPI framework with Cilium integration
-- Suricata and Zeek integration with dynamic policy generation
-- IPS capabilities with real-time enforcement
-- Unified networking stack based on Cilium eBPF
-- End-to-end security pipeline for threat detection and mitigation
+- Architectural design for DPI framework with Cilium integration
+- Interface definitions for Suricata and Zeek connectors
+- Conceptual design for unified networking based on Cilium eBPF
+- Architecture pattern for security pipeline with DPI engines
 
 ## [0.1.0] - 2025-02-15
 
-Initial release of the Kubernetes-based router/firewall distribution.
+Initial release of the Kubernetes-based router/firewall architectural concept.
 
 ### Added
-- Basic routing functionality
-- VLAN support
-- DNS services (CoreDNS, AdGuard Home)
-- DHCP services (Kea) and IPv6 router advertisements
-- Network Time Protocol (NTP) via Chrony
-- Initial security features with Suricata and Zeek
-- Multi-service DNS discovery with mDNS
+- Basic architectural design
+- VLAN configuration concept
+- DNS services architecture (CoreDNS, AdGuard Home)
+- DHCP services design (Kea) and IPv6 router advertisements
+- Initial security architecture with Suricata and Zeek
+- Documentation structure
