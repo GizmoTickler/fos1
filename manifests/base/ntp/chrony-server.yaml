@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ntp-chrony
+  namespace: network
+  labels:
+    app: ntp-chrony
+spec:
+  selector:
+    matchLabels:
+      app: ntp-chrony
+  template:
+    metadata:
+      labels:
+        app: ntp-chrony
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: chrony
+        image: custom/chrony:latest
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          capabilities:
+            add: ["SYS_TIME", "NET_ADMIN"]
+          privileged: true
+        ports:
+        - containerPort: 123
+          name: ntp
+          protocol: UDP
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/chrony
+        - name: drift-volume
+          mountPath: /var/lib/chrony
+        - name: localtime
+          mountPath: /etc/localtime
+          readOnly: true
+        - name: devices
+          mountPath: /dev
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          exec:
+            command:
+            - chronyc
+            - tracking
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - chronyc
+            - tracking
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+      - name: exporter
+        image: custom/ntp-exporter:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9559
+          name: metrics
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/chrony
+          readOnly: true
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9559
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      volumes:
+      - name: config-volume
+        configMap:
+          name: chrony-config
+      - name: drift-volume
+        persistentVolumeClaim:
+          claimName: chrony-drift
+      - name: localtime
+        hostPath:
+          path: /etc/localtime
+      - name: devices
+        hostPath:
+          path: /dev
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntp-chrony
+  namespace: network
+  labels:
+    app: ntp-chrony
+spec:
+  selector:
+    app: ntp-chrony
+  ports:
+  - name: ntp
+    port: 123
+    protocol: UDP
+    targetPort: ntp
+  - name: metrics
+    port: 9559
+    protocol: TCP
+    targetPort: metrics
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chrony-drift
+  namespace: network
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: local-storage
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chrony-config
+  namespace: network
+data:
+  chrony.conf: |
+    # Default configuration - will be overwritten by controller
+    pool pool.ntp.org iburst maxsources 4
+    driftfile /var/lib/chrony/drift
+    makestep 1.0 3
+    logdir /var/log/chrony
+    log measurements statistics tracking
+    allow all
+    local stratum 10
+  chrony.keys: |
+    # Authentication keys will be configured by controller

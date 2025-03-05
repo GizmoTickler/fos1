@@ -1,0 +1,107 @@
+apiVersion: ntp.fos1.io/v1alpha1
+kind: NTPService
+metadata:
+  name: main-ntp
+  namespace: network
+spec:
+  enabled: true
+  
+  # Time sources configuration
+  sources:
+    pools:
+      - name: "pool.ntp.org"
+        servers: 4
+        iburst: true
+        prefer: false
+      - name: "time.cloudflare.com"
+        servers: 2
+        iburst: true
+        prefer: true
+    
+    servers:
+      - address: "time.google.com"
+        iburst: true
+        prefer: false
+        minpoll: 6
+        maxpoll: 10
+    
+    # Hardware clock sources configuration (disabled by default)
+    hardware:
+      pps:
+        enabled: false
+        device: "/dev/pps0"
+        prefer: true
+      gps:
+        enabled: false
+        device: "/dev/ttyS0"
+        refclock: true
+        prefer: true
+  
+  # Server configuration
+  server:
+    stratum: 2
+    driftfile: "/var/lib/chrony/drift"
+    makestep: 
+      threshold: 1.0  # Step if offset larger than 1 second
+      limit: 3  # Allow stepping in first 3 clock updates
+    
+    # Local clock as fallback reference
+    local:
+      enabled: true
+      stratum: 10  # High stratum means low priority
+  
+  # Security settings
+  security:
+    nts:
+      enabled: false  # Network Time Security
+    authentication:
+      enabled: true
+      keys:
+        - id: 1
+          type: "SHA256"
+          value: "SecureKeyForVLAN10"  # In production this should be from a Kubernetes Secret
+        - id: 2
+          type: "SHA256"
+          value: "SecureKeyForVLAN20"  # In production this should be from a Kubernetes Secret
+        - id: 3
+          type: "SHA256"
+          value: "SecureKeyForVLAN30"  # In production this should be from a Kubernetes Secret
+    
+    ratelimit:
+      enabled: true
+      interval: 3  # Seconds
+      burst: 8  # Packets
+    
+    # Access controls
+    access:
+      - network: "192.168.0.0/16"
+        permission: "allow"
+      - network: "10.0.0.0/8"
+        permission: "allow"
+      - network: "172.16.0.0/12"
+        permission: "allow"
+      - network: "0.0.0.0/0"
+        permission: "deny"
+  
+  # VLAN-specific configuration
+  vlanConfig:
+    - vlanRef: vlan-10  # Main network
+      enabled: true
+      broadcast: true
+      clientsOnly: false
+    - vlanRef: vlan-20  # IoT network
+      enabled: true
+      broadcast: false
+      clientsOnly: true
+    - vlanRef: vlan-30  # Guest network
+      enabled: true
+      broadcast: false
+      clientsOnly: true
+  
+  # Monitoring configuration
+  monitoring:
+    enabled: true
+    offset:
+      warningThreshold: 100  # milliseconds
+      criticalThreshold: 1000  # milliseconds
+    sourcesMinimum: 3  # Minimum number of valid sources

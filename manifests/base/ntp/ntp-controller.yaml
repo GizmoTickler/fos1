@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntp-controller
+  namespace: network
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ntp-controller
+  template:
+    metadata:
+      labels:
+        app: ntp-controller
+    spec:
+      serviceAccountName: ntp-controller
+      containers:
+      - name: controller
+        image: custom/ntp-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--chrony-config=/etc/chrony/chrony.conf"
+        - "--chrony-keys=/etc/chrony/chrony.keys"
+        - "--chrony-command=chronyc"
+        - "--metrics=true"
+        - "--metrics-port=9559"
+        - "--metrics-interval=15s"
+        - "--integration=true"
+        - "--workers=2"
+        - "--resync-period=30m"
+        - "--v=2"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+        - name: controller-config
+          mountPath: /etc/ntp-controller
+        - name: chrony-config
+          mountPath: /etc/chrony
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: controller-config
+        configMap:
+          name: ntp-controller-config
+      - name: chrony-config
+        configMap:
+          name: chrony-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ntp-controller
+  namespace: network
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ntp-controller
+rules:
+- apiGroups: ["ntp.fos1.io"]
+  resources: ["ntpservices"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["ntp.fos1.io"]
+  resources: ["ntpservices/status"]
+  verbs: ["update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "pods", "services", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["network.fos.io"]
+  resources: ["vlans"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ntp-controller
+subjects:
+- kind: ServiceAccount
+  name: ntp-controller
+  namespace: network
+roleRef:
+  kind: ClusterRole
+  name: ntp-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntp-controller-config
+  namespace: network
+data:
+  config.yaml: |
+    controller:
+      resyncPeriod: 30m
+      workers: 2
+      leaderElection:
+        enabled: true
+        leaseDuration: 15s
+        renewDeadline: 10s
+        retryPeriod: 2s
+    chrony:
+      configPath: "/etc/chrony/chrony.conf"
+      keyPath: "/etc/chrony/chrony.keys"
+      driftPath: "/var/lib/chrony/drift"
+    exporter:
+      port: 9559
+      interval: 15s
+    integration:
+      dhcp:
+        enabled: true
+      dns:
+        enabled: true
