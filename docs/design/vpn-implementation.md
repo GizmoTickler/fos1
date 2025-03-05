@@ -57,24 +57,79 @@ Username/password authentication will be implemented using PAM (Pluggable Authen
 
 Certificate-based authentication will be implemented using X.509 certificates.
 
-Here's an example of a `VPNConfig` CRD:
+6.  **Integration with Other Components**
 
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: VPNConfig
-metadata:
-  name: my-vpn
-spec:
-  protocol: wireguard
-  serverMode: true
-  clientMode: false
-  interface: wg0
-  listenPort: 51820
-  privateKeySecret: wireguard-private-key
-  peers:
-    - publicKey: <peer_public_key>
+The VPN component will integrate with the following components:
+
+*   6.1. Policy Enforcement
+
+    *   Cilium network policies will be used to filter traffic entering and exiting the VPN tunnel.
+    *   Policies can be defined based on source/destination IP addresses, ports, protocols, and application metadata.
+*   6.2. Routing
+
+    *   Static and dynamic routes will be configured to direct traffic to and from the VPN tunnel.
+    *   Policy-based routing will allow selective routing of specific clients/networks over the VPN.
+*   6.3. Threat Intelligence
+
+    *   The Threat Intelligence system will provide indicators of compromise (IoCs) to the DPI system for inspection of VPN traffic.
+    *   Threat intelligence data will not directly affect VPN configuration.
+*   6.4. DPI Stack
+
+    *   The DPI stack will inspect VPN traffic to identify applications and extract metadata.
+    *   DPI results will be used for policy-based filtering and routing of VPN traffic.
+
+7.  **Custom Resource Definitions**
+
+The VPN component will use the following CRDs:
+
+*   7.1. VPNConfig CRD
+
+    *   Defines the configuration for a VPN connection.
+
+    ```yaml
+    apiVersion: network.fos1.io/v1alpha1
+    kind: VPNConfig
+    metadata:
+      name: my-vpn
+    spec:
+      protocol: wireguard
+      serverMode: true
+      clientMode: false
+      interface: wg0
+      listenPort: 51820
+      privateKeySecret: wireguard-private-key
+      peers:
+        - publicKey: <peer_public_key>
+          allowedIPs:
+            - 10.0.0.2/32
+      authentication:
+        type: certificate
+        caCertificateSecret: ca-cert
+      policy:
+        ingress: "allow-all"
+        egress: "block-p2p"
+      routingTable: "vpn-table"
+    ```
+
+*   7.2. VPNClient CRD
+
+    *   Defines the client configuration for connecting to a VPN server.
+
+    ```yaml
+    apiVersion: network.fos1.io/v1alpha1
+    kind: VPNClient
+    metadata:
+      name: my-vpn-client
+    spec:
+      serverAddress: <server_ip_address>
+      serverPort: 51820
+      protocol: wireguard
+      authentication:
+        type: certificate
+        clientCertificateSecret: client-cert
+        clientKeySecret: client-key
       allowedIPs:
-        - 10.0.0.2/32
-  authentication:
-    type: certificate
-    caCertificateSecret: ca-cert
+        - 0.0.0.0/0
+      dnsServers:
+        - 1.1.1.1
+        - 8.8.8.8
