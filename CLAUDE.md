@@ -37,7 +37,7 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Project documentation structure with guides and references
 
 #### Architecture Design
-- [x] Network architecture design
+- [x] Network architecture design with hardware integration for Intel NICs
 - [x] Security component design
 - [x] Infrastructure configuration design
 - [x] API definitions (CRDs)
@@ -46,8 +46,10 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 
 #### Network Infrastructure
 - [x] Network interface and VLAN configuration framework
+- [x] Hardware integration for Intel X540, X550, and I225 NICs
 - [x] Routing implementation design (static, dynamic, policy-based)
 - [x] eBPF-based packet processing architecture
+- [x] Multi-WAN management with failover and load balancing
 - [x] Cilium integration design for unified networking
 
 #### Security Components
@@ -163,6 +165,15 @@ The project is currently in the **architectural design and prototype phase**. Th
 5. Comprehensive documentation of the intended architecture
 
 Recent progress includes:
+- Hardware integration design for Intel X540, X550, and I225 NICs
+- Multi-queue utilization approach for X540/X550 NICs (up to 64 hardware queues)
+- eBPF-based NAT66 and NPT implementation using TC hooks for stateful operation
+- On-demand packet capture system design with filtering capabilities
+- Multi-WAN management with failover and load balancing
+- Selective hardware offloading configuration (TX checksum, TSO, GRO)
+- VPN implementation design with WireGuard kernel module as preferred approach
+- Kea database backend integration design with PostgreSQL
+- DPI and Threat Intelligence interaction architecture with Mermaid diagram
 - Complete VLAN implementation design with placeholder code
 - Comprehensive routing implementation design for static, dynamic and policy routing
 - eBPF framework design with support for all hook types

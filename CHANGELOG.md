@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Hardware integration design document detailing low-level interaction with network interfaces
+- Support for Intel X540, X550, and I225 NICs in the hardware integration design
+- eBPF-based NAT66 and NPT implementation approach using TC hooks for stateful operation
+- Multi-queue utilization design for X540/X550 NICs (supporting up to 64 hardware queues)
+- On-demand packet capture system with filtering capabilities
+- Multi-WAN management with failover and load balancing
+- Selective hardware offloading configuration (TX checksum, TSO, GRO)
+- VPN implementation design with WireGuard kernel module as preferred approach
+- Comprehensive Kea database backend integration design for DHCP services
+- Mermaid diagram for DPI and Threat Intelligence interaction
 - Comprehensive DNS implementation with CoreDNS, AdGuard, and mDNS
 - DNS Manager with DHCP integration for dynamic DNS updates
 - Custom CRDs for DNS zone and mDNS reflection management
@@ -32,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation for DPI event processing architecture
 
 ### Changed
+- Updated network architecture to leverage NIC-specific capabilities
+- Improved NAT implementation to use TC hooks rather than XDP for stateful operation
+- Enhanced Cilium integration with hardware-aware configuration
 - Updated CLAUDE.md to accurately reflect project status as conceptual framework
 - Refactored project tracker to show actual implementation status
 - Moved from NFTables concept to Cilium eBPF design in architecture documentation
