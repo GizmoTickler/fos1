@@ -1,0 +1,12 @@
+graph LR
+    A[Traffic] --> B(DPI Manager);
+    B --> C{Suricata/Zeek};
+    C --> D[Application Detector & Metadata Extraction];
+    D -- Queries --> E(Threat Intelligence Manager);
+    E -- Threat Indicators --> C;
+    D --> F[Integration Controller];
+    F --> G[Cilium Policy Enforcement];
+    G --> H{Network};
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style H fill:#f9f,stroke:#333,stroke-width:2px
+    style E fill:#ccf,stroke:#333,stroke-width:2px
