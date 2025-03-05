@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 	
-	"github.com/your-org/fos1/pkg/cilium"
-	"github.com/your-org/fos1/pkg/security/dpi/connectors"
+	"github.com/varuntirumala1/fos1/pkg/cilium"
+	"github.com/varuntirumala1/fos1/pkg/security/dpi/connectors"
 )
 
 // DPIManager manages Deep Packet Inspection functionality

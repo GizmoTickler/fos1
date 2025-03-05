@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/your-org/fos1/pkg/cilium"
+	"github.com/varuntirumala1/fos1/pkg/cilium"
 )
 
 // ZeekConnector integrates Zeek with Cilium

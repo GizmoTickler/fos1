@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/fos1/pkg/cilium"
+	"github.com/varuntirumala1/fos1/pkg/cilium"
 )
 
 // NProbeOptions configures the nProbe connector

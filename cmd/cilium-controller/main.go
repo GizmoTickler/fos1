@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-org/fos1/pkg/cilium"
+	"github.com/varuntirumala1/fos1/pkg/cilium"
 )
 
 func main() {
