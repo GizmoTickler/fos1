@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dhcp-controller
+  namespace: network
+  labels:
+    app: dhcp-controller
+    component: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dhcp-controller
+  template:
+    metadata:
+      labels:
+        app: dhcp-controller
+        component: controller
+    spec:
+      serviceAccountName: dhcp-controller
+      containers:
+      - name: controller
+        image: registry.fos.io/controllers/dhcp-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - --v=2
+        - --logtostderr=true
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - name: kea-config
+          mountPath: /etc/kea
+      volumes:
+      - name: kea-config
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dhcp-controller
+  namespace: network
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dhcp-controller
+rules:
+- apiGroups: ["network.fos.io"]
+  resources: ["dhcpv4services", "dhcpv6services", "vlans"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps", "events"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dhcp-controller
+subjects:
+- kind: ServiceAccount
+  name: dhcp-controller
+  namespace: network
+roleRef:
+  kind: ClusterRole
+  name: dhcp-controller
+  apiGroup: rbac.authorization.k8s.io

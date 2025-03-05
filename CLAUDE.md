@@ -59,7 +59,8 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 
 #### Kubernetes Manifest Templates
 - [x] Network service templates (DNS - CoreDNS, AdGuard, mDNS)
-- [ ] Network service templates (DHCP, NTP)
+- [x] Network service templates (DHCP with Kea)
+- [ ] Network service templates (NTP)
 - [x] Security service templates (Suricata, Zeek, DPI Manager)
 - [x] Example routing, VLAN, and eBPF configurations
 - [x] Filter policy CRDs and examples
@@ -72,6 +73,7 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] NAT/NAT66 conceptual implementation with Cilium
 - [x] Policy controller for filter policy management
 - [x] DNS manager with DHCP integration
+- [x] DHCP manager with dynamic DNS updates
 
 ### Documentation Created
 - [x] Network configuration guide
@@ -81,6 +83,7 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] VLAN implementation design
 - [x] eBPF implementation design
 - [x] DNS implementation design
+- [x] DHCP implementation design
 - [x] Implementation plans and trackers
 
 ### Kubernetes Custom Resources Defined
@@ -92,6 +95,7 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] eBPF program configurations
 - [x] DNS zones and records
 - [x] mDNS reflection rules
+- [x] DHCPv4 and DHCPv6 services
 
 ## Current Architecture Concept
 
@@ -166,17 +170,20 @@ Recent progress includes:
 - Integration framework for all security components
 - Comprehensive DNS implementation with CoreDNS, AdGuard, and mDNS
 - Cross-VLAN mDNS reflection with rule-based configuration
+- Comprehensive DHCP implementation design with Kea DHCP server
+- DHCP controller design for managing configurations across VLANs
 - Dynamic DNS updates from DHCP leases
+- DHCPv4 and DHCPv6 services with static reservations
+- Domain suffix configuration per VLAN
 - Example configurations demonstrating the intended usage
 
 None of the components are currently production-ready or fully functional. This project serves as a blueprint for a future complete implementation.
 
 ## Next Steps for Implementation
 
-1. Complete DHCP service integration
-2. Implement NTP service design
-3. Develop fully functional network monitoring
-4. Add comprehensive test coverage
-5. Implement production-ready error handling
-6. Create deployable container images
-7. Develop real configuration validation
+1. Implement NTP service design
+2. Develop fully functional network monitoring
+3. Add comprehensive test coverage
+4. Implement production-ready error handling
+5. Create deployable container images
+6. Develop real configuration validation

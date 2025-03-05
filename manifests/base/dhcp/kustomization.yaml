@@ -4,3 +4,6 @@ kind: Kustomization
 resources:
   - kea.yaml
   - radvd.yaml
+  - dhcp-controller.yaml
+  - crds/dhcpv4service.yaml
+  - crds/dhcpv6service.yaml

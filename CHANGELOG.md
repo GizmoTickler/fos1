@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DNS Manager with DHCP integration for dynamic DNS updates
 - Custom CRDs for DNS zone and mDNS reflection management
 - Cross-VLAN mDNS service discovery with rule-based configuration
+- DHCP service implementation with IPv4 and IPv6 support
+  - Kea DHCP server deployment configuration
+  - DHCPv4Service and DHCPv6Service CRDs for configuration
+  - Custom DHCP controller with VLAN integration
+  - Dynamic DNS updates from DHCP leases
+  - Static reservations support for MAC addresses and DUID/Client IDs
+  - DHCP option configuration support
+  - Domain suffix configuration per VLAN
+  - Lease persistence design
 - Advanced security system design (threat intelligence, security orchestration)
 - Policy-based filtering with hierarchical policy model
 - Routing configuration guide with examples

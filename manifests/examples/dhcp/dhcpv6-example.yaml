@@ -1,0 +1,86 @@
+apiVersion: network.fos.io/v1
+kind: DHCPv6Service
+metadata:
+  name: vlan-10-dhcpv6
+  namespace: network
+spec:
+  vlanRef: vlan-10   # Reference to a VLAN CRD
+  
+  # DHCP settings
+  leaseTime: 86400   # Default lease time in seconds (1 day)
+  maxLeaseTime: 604800  # Maximum lease time in seconds (7 days)
+  
+  # Range of addresses to allocate dynamically
+  range:
+    start: 2001:db8:10::100
+    end: 2001:db8:10::200
+  
+  # Domain name to provide to clients
+  domain: vlan10.local
+  
+  # DHCP options to provide
+  options:
+    - code: 23    # DNS recursive servers
+      value: 2001:db8:10::1, 2001:db8:10::2
+    - code: 24    # Domain search list
+      value: vlan10.local
+    - code: 31    # SNTP servers
+      value: 2001:db8:10::1
+  
+  # Static reservations
+  reservations:
+    - hostname: printer
+      duid: 00:03:00:01:00:11:22:33:44:55
+      ipAddress: 2001:db8:10::50
+    - hostname: nas
+      hwAddress: 00:22:33:44:55:66
+      ipAddress: 2001:db8:10::51
+    - hostname: server
+      duid: 00:01:00:01:23:45:67:89:AB:CD
+      ipAddress: 2001:db8:10::52
+  
+  # DNS integration
+  dnsIntegration:
+    enabled: true
+    forwardUpdates: true
+    reverseUpdates: true
+    ttl: 3600
+---
+apiVersion: network.fos.io/v1
+kind: DHCPv6Service
+metadata:
+  name: vlan-20-dhcpv6
+  namespace: network
+spec:
+  vlanRef: vlan-20
+  
+  leaseTime: 43200   # 12 hours
+  maxLeaseTime: 86400  # 1 day
+  
+  range:
+    start: 2001:db8:20::100
+    end: 2001:db8:20::200
+  
+  domain: vlan20.local
+  
+  options:
+    - code: 23    # DNS recursive servers
+      value: 2001:db8:20::1
+    - code: 24    # Domain search list
+      value: vlan20.local
+    - code: 31    # SNTP servers
+      value: 2001:db8:20::1
+  
+  reservations:
+    - hostname: desktop
+      hwAddress: 00:33:44:55:66:77
+      ipAddress: 2001:db8:20::50
+    - hostname: laptop
+      hwAddress: 00:44:55:66:77:88
+      ipAddress: 2001:db8:20::51
+  
+  dnsIntegration:
+    enabled: true
+    forwardUpdates: true
+    reverseUpdates: true
+    ttl: 3600

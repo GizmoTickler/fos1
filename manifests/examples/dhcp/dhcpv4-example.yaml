@@ -1,0 +1,88 @@
+apiVersion: network.fos.io/v1
+kind: DHCPv4Service
+metadata:
+  name: vlan-10-dhcp
+  namespace: network
+spec:
+  vlanRef: vlan-10   # Reference to a VLAN CRD
+  
+  # DHCP settings
+  leaseTime: 86400   # Default lease time in seconds (1 day)
+  maxLeaseTime: 604800  # Maximum lease time in seconds (7 days)
+  
+  # Range of addresses to allocate dynamically
+  range:
+    start: 192.168.10.100
+    end: 192.168.10.200
+  
+  # Domain name to provide to clients
+  domain: vlan10.local
+  
+  # DHCP options to provide
+  options:
+    - code: 6    # DNS servers
+      value: 192.168.10.1, 192.168.10.2
+    - code: 42   # NTP servers
+      value: 192.168.10.1
+    - code: 15   # Domain name
+      value: vlan10.local
+    - code: 252  # WPAD (Web Proxy Auto-Discovery)
+      value: "http://proxy.vlan10.local/wpad.dat"
+  
+  # Static reservations
+  reservations:
+    - hostname: printer
+      macAddress: 00:11:22:33:44:55
+      ipAddress: 192.168.10.50
+    - hostname: nas
+      macAddress: 00:22:33:44:55:66
+      ipAddress: 192.168.10.51
+    - hostname: server
+      clientId: client-id-123
+      ipAddress: 192.168.10.52
+  
+  # DNS integration
+  dnsIntegration:
+    enabled: true
+    forwardUpdates: true
+    reverseUpdates: true
+    ttl: 3600
+---
+apiVersion: network.fos.io/v1
+kind: DHCPv4Service
+metadata:
+  name: vlan-20-dhcp
+  namespace: network
+spec:
+  vlanRef: vlan-20
+  
+  leaseTime: 43200   # 12 hours
+  maxLeaseTime: 86400  # 1 day
+  
+  range:
+    start: 192.168.20.100
+    end: 192.168.20.200
+  
+  domain: vlan20.local
+  
+  options:
+    - code: 6    # DNS servers
+      value: 192.168.20.1
+    - code: 42   # NTP servers
+      value: 192.168.20.1
+    - code: 15   # Domain name
+      value: vlan20.local
+  
+  reservations:
+    - hostname: desktop
+      macAddress: 00:33:44:55:66:77
+      ipAddress: 192.168.20.50
+    - hostname: laptop
+      macAddress: 00:44:55:66:77:88
+      ipAddress: 192.168.20.51
+  
+  dnsIntegration:
+    enabled: true
+    forwardUpdates: true
+    reverseUpdates: true
+    ttl: 3600

@@ -1,0 +1,126 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dhcpv6services.network.fos.io
+spec:
+  group: network.fos.io
+  names:
+    kind: DHCPv6Service
+    listKind: DHCPv6ServiceList
+    plural: dhcpv6services
+    singular: dhcpv6service
+    shortNames:
+      - dhcp6
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - vlanRef
+                - range
+              properties:
+                vlanRef:
+                  type: string
+                  description: "Reference to a VLAN CRD"
+                leaseTime:
+                  type: integer
+                  description: "Default lease time in seconds"
+                  default: 86400
+                maxLeaseTime:
+                  type: integer
+                  description: "Maximum lease time in seconds"
+                  default: 604800
+                range:
+                  type: object
+                  required:
+                    - start
+                    - end
+                  properties:
+                    start:
+                      type: string
+                      description: "Start of the DHCPv6 range"
+                    end:
+                      type: string
+                      description: "End of the DHCPv6 range"
+                domain:
+                  type: string
+                  description: "Domain name to provide to DHCP clients"
+                options:
+                  type: array
+                  description: "DHCPv6 options to provide to clients"
+                  items:
+                    type: object
+                    required:
+                      - code
+                      - value
+                    properties:
+                      code:
+                        type: integer
+                        description: "DHCPv6 option code"
+                      value:
+                        type: string
+                        description: "DHCPv6 option value"
+                reservations:
+                  type: array
+                  description: "Static IPv6 reservations"
+                  items:
+                    type: object
+                    required:
+                      - ipAddress
+                    properties:
+                      hostname:
+                        type: string
+                        description: "Client hostname"
+                      duid:
+                        type: string
+                        description: "Client DUID"
+                      hwAddress:
+                        type: string
+                        description: "Client hardware address"
+                        pattern: "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
+                      ipAddress:
+                        type: string
+                        description: "Reserved IPv6 address"
+                dnsIntegration:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Whether DNS integration is enabled"
+                      default: true
+                    forwardUpdates:
+                      type: boolean
+                      description: "Whether to update forward DNS records"
+                      default: true
+                    reverseUpdates:
+                      type: boolean
+                      description: "Whether to update reverse DNS records"
+                      default: true
+                    ttl:
+                      type: integer
+                      description: "TTL for DNS records in seconds"
+                      default: 3600
+      additionalPrinterColumns:
+        - name: VLAN
+          type: string
+          jsonPath: .spec.vlanRef
+        - name: Domain
+          type: string
+          jsonPath: .spec.domain
+        - name: DNS
+          type: boolean
+          jsonPath: .spec.dnsIntegration.enabled
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
