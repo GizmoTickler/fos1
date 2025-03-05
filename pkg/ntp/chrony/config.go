@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fos/pkg/ntp"
+	"github.com/varuntirumala1/fos1/pkg/ntp"
 )
 
 // ConfigGenerator generates Chrony configuration from NTP service spec

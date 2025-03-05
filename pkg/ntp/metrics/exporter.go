@@ -8,8 +8,8 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/fos/pkg/ntp"
-	"github.com/fos/pkg/ntp/chrony"
+	"github.com/varuntirumala1/fos1/pkg/ntp"
+	"github.com/varuntirumala1/fos1/pkg/ntp/chrony"
 )
 
 // Exporter manages exporting NTP metrics
