@@ -1,0 +1,25 @@
+apiVersion: dns.fos1.io/v1alpha1
+kind: DNSFilterList
+metadata:
+  name: default-filtering
+  namespace: default
+spec:
+  name: "Default DNS Filtering"
+  enabled: true
+  categories:
+    - ads
+    - trackers
+    - malware
+    - phishing
+  customLists:
+    - name: "Custom AdBlock List"
+      url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+      enabled: true
+    - name: "MalwareDomains"
+      url: "https://malwaredomains.com/files/justdomains"
+      enabled: true
+  allowLists:
+    - name: "Allowed Domains"
+      domains:
+        - "example.com"
+        - "trusted-analytics.com"

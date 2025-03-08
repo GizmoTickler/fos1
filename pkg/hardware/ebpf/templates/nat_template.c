@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2023 Your Organization
+// Compatible with Cilium Network Policies
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -11,6 +12,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+// Include common Cilium definitions
+#include "cilium_common.h"
+
 // NAT Configuration structure
 struct nat_config {
     __u32 external_ip;     // External IP address for SNAT/DNAT
@@ -19,6 +23,9 @@ struct nat_config {
     __u8 enable_portmap;   // Enable port mapping
     __u8 enable_tracking;  // Enable connection tracking
     __u8 default_action;   // Default action: 0 = pass, 1 = drop
+    __u8 cilium_integration; // Enable Cilium integration
+    __u8 hw_offload;        // Enable hardware offload optimizations
+    __u16 cilium_policy_index; // Reference to Cilium policy to apply
 };
 
 // Define map for configuration
@@ -62,7 +69,8 @@ struct {
     __type(value, struct port_mapping);
 } portmap_map SEC(".maps");
 
-// Connection tracking structure
+// Connection tracking is available in cilium_common.h as cilium_ct_entry
+// but we use a simpler version here for NAT-specific tracking
 struct conn_track {
     __u64 last_seen;       // Timestamp
     __u8 state;            // Connection state
@@ -76,9 +84,74 @@ struct {
     __type(value, struct conn_track);
 } conntrack_map SEC(".maps");
 
+// Cilium identity map - using common definition
+DECLARE_CILIUM_IPCACHE;
+
+// Cilium to local NAT policy for service redirection
+struct cilium_nat_policy {
+    __u32 from_identity;    // Source identity
+    __u32 to_identity;      // Destination identity
+    __u32 nat_target_ip;    // NAT target IP
+    __u16 nat_target_port;  // NAT target port
+    __u8 protocol;          // Protocol
+};
+
+// Define map for Cilium NAT policies
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u32);     // Policy index
+    __type(value, struct cilium_nat_policy);
+} cilium_nat_map SEC(".maps");
+
 // Helper function for checksum calculation
 static __always_inline void update_checksum(struct __sk_buff *skb, __u16 old_val, __u16 new_val, __u16 checksum_offset) {
     bpf_l4_csum_replace(skb, checksum_offset, old_val, new_val, sizeof(new_val));
+}
+
+// Check Cilium identity-based NAT policies
+static __always_inline int check_cilium_nat_policy(struct __sk_buff *skb, struct iphdr *iph, 
+                                          __u16 src_port, __u16 dst_port,
+                                          struct nat_config *cfg) {
+    // Skip if Cilium integration is not enabled
+    if (!cfg->cilium_integration || !cfg->cilium_policy_index) {
+        return 0; // Continue with regular NAT
+    }
+    
+    // Use the common cilium_check_policy helper to determine if the connection is allowed
+    int verdict = cilium_check_policy(
+        skb,            // Context
+        iph->saddr,      // Source IP
+        iph->daddr,      // Destination IP
+        iph->protocol,   // Protocol
+        src_port,        // Source port
+        dst_port         // Destination port
+    );
+    
+    // If the policy check indicates DROP, don't perform NAT
+    if (verdict == 1) { // DROP
+        return -1; // Return -1 to indicate policy check failed, don't NAT
+    }
+    
+    // For custom NAT rules based on Cilium identities, we still need some specialized logic
+    __u32 policy_key = cfg->cilium_policy_index;
+    struct cilium_nat_policy *policy = bpf_map_lookup_elem(&cilium_nat_map, &policy_key);
+    
+    if (policy) {
+        struct cilium_identity *src_identity = bpf_map_lookup_elem(&cilium_ipcache, &iph->saddr);
+        struct cilium_identity *dst_identity = bpf_map_lookup_elem(&cilium_ipcache, &iph->daddr);
+        
+        if (src_identity && dst_identity && 
+            (policy->from_identity == 0 || policy->from_identity == src_identity->id) &&
+            (policy->to_identity == 0 || policy->to_identity == dst_identity->id) &&
+            (policy->protocol == 0 || policy->protocol == iph->protocol)) {
+            
+            // This connection matches the Cilium NAT policy
+            return 1; // Indicates a Cilium policy match occurred
+        }
+    }
+    
+    return 0; // No Cilium policy match, use regular NAT
 }
 
 // Helper function to calculate connection tuple hash for TCP/UDP
@@ -262,6 +335,14 @@ int tc_nat(struct __sk_buff *skb) {
     struct nat_config *cfg = bpf_map_lookup_elem(&config_map, &key);
     if (!cfg)
         return TC_ACT_OK; // No config, pass the packet
+        
+    // Hardware offload optimizations using common macros
+    if (cfg->hw_offload) {
+        // Use the appropriate hardware offload macro based on NIC type
+        X540_OFFLOAD_SUPPORTED("nat");
+        X550_OFFLOAD_SUPPORTED("nat");
+        I225_OFFLOAD_SUPPORTED("nat");
+    }
     
     // Parse Ethernet header
     struct ethhdr eth;
@@ -389,6 +470,15 @@ int tc_nat(struct __sk_buff *skb) {
     
     // Default action
     return cfg->default_action ? TC_ACT_SHOT : TC_ACT_OK;
+}
+
+// Define Cilium tail call program to enable integration with Cilium's datapath
+SEC("cilium_nat")
+int cilium_nat(struct __sk_buff *skb) {
+    // This function would be called by Cilium's datapath when using integration
+    // In a real implementation, this would likely call a Cilium function or tail call
+    // For now, we just pass packets to our own NAT handler
+    return tc_nat(skb);
 }
 
 char _license[] SEC("license") = "GPL";

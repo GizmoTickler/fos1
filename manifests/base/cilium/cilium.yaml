@@ -1,0 +1,356 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cilium
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: cilium
+  template:
+    metadata:
+      labels:
+        app: cilium
+    spec:
+      serviceAccountName: cilium
+      containers:
+      - name: cilium-agent
+        image: cilium/cilium:v1.17.1
+        command: ["cilium-agent"]
+        args:
+          - "--config-dir=/tmp/cilium/config-map"
+          - "--debug=$(CILIUM_DEBUG)"
+          - "--enable-ipv4=true"
+          - "--enable-ipv6=false"
+          - "--k8s-require-ipv4-pod-cidr=true"
+          - "--agent-health-port=9876"
+          - "--enable-l7-proxy=true"
+          - "--enable-bpf-clock-probe=true"
+          - "--enable-endpoint-routes=true"
+          - "--enable-local-redirect-policy=true"
+          - "--enable-policy=default"
+          - "--enable-hubble=true"
+          - "--hubble-socket-path=/var/run/cilium/hubble.sock"
+          - "--hubble-metrics=dns:query;ignoreAAAA;destinationContext=pod-short,drop,tcp,flow,icmp,http"
+          # eBPF and Interface Integration
+          - "--enable-bgp=true"
+          - "--bpf-lb-mode=dsr"
+          - "--enable-bandwidth-manager=true"
+          - "--enable-envoy-config=true"
+          - "--enable-clustermesh=false"
+          - "--native-routing-cidr=$(NATIVE_ROUTING_CIDR)"
+          - "--devices=eth*,eno*,en*"
+          - "--enable-host-legacy-routing=false"
+          - "--install-no-conntrack-iptables-rules=true"
+          - "--datapath-mode=veth"
+          - "--enable-vtep=true"
+          - "--vtep-endpoint=$(VTEP_ENDPOINT)"
+          - "--vtep-cidr=$(VTEP_CIDR)"
+          - "--vtep-mask=$(VTEP_MASK)"
+          # DNS Integration - Using existing DNSZone and PTRZone CRDs
+          - "--enable-dns=true"
+          - "--tofqdns-enable-poller=true"
+          - "--tofqdns-enable-dns-compression=true"
+          # DHCP Integration - Using existing DHCPv4Service and DHCPv6Service CRDs
+          - "--enable-l7-proxy=true"
+          - "--proxy-enable-dhcp=true"
+          - "--auto-create-cilium-node-resource=true"
+          # Routing Integration - Using existing Route CRDs
+          - "--enable-bgp-control-plane=true"
+          - "--bgp-announce-lb-ip=true"
+          # Service access and policies
+          - "--enable-service-topology=true"
+          - "--enable-external-ips=true"
+          - "--enable-node-port=true"
+          - "--enable-l7-policy=true"
+          - "--enable-external-workloads=true"
+          - "--synchronize-k8s-nodes=true"
+        env:
+          - name: CILIUM_DEBUG
+            valueFrom:
+              configMapKeyRef:
+                name: cilium-config
+                key: debug
+                optional: true
+          - name: KUBERNETES_SERVICE_HOST
+            value: "kubernetes.default.svc"
+          - name: KUBERNETES_SERVICE_PORT
+            value: "443"
+          - name: NATIVE_ROUTING_CIDR
+            valueFrom:
+              configMapKeyRef:
+                name: cilium-config
+                key: native-routing-cidr
+                optional: false
+          - name: VTEP_ENDPOINT
+            valueFrom:
+              configMapKeyRef:
+                name: cilium-config
+                key: vtep-endpoint
+                optional: false
+          - name: VTEP_CIDR
+            valueFrom:
+              configMapKeyRef:
+                name: cilium-config
+                key: vtep-cidr
+                optional: false
+          - name: VTEP_MASK
+            valueFrom:
+              configMapKeyRef:
+                name: cilium-config
+                key: vtep-mask
+                optional: false
+        volumeMounts:
+          - name: bpf-maps
+            mountPath: /sys/fs/bpf
+            mountPropagation: Bidirectional
+          - name: cilium-run
+            mountPath: /var/run/cilium
+          - name: cni-path
+            mountPath: /host/opt/cni/bin
+          - name: etc-cni-netd
+            mountPath: /host/etc/cni/net.d
+          - name: cilium-config-path
+            mountPath: /tmp/cilium/config-map
+            readOnly: true
+        securityContext:
+          privileged: true
+      volumes:
+        - name: bpf-maps
+          hostPath:
+            path: /sys/fs/bpf
+            type: DirectoryOrCreate
+        - name: cilium-run
+          hostPath:
+            path: /var/run/cilium
+            type: DirectoryOrCreate
+        - name: cni-path
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: etc-cni-netd
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+        - name: cilium-config-path
+          configMap:
+            name: cilium-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cilium
+  namespace: kube-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cilium-config
+  namespace: kube-system
+data:
+  debug: "false"
+  enable-ipv4: "true"
+  enable-ipv6: "false"
+  tunnel: "vxlan"
+  enable-endpoint-routes: "true"
+  install-iptables-rules: "true"
+  auto-direct-node-routes: "false"
+  kube-proxy-replacement: "strict"
+  enable-bandwidth-manager: "true"
+  enable-bgp: "true"
+  bgp-announce-pods: "true"
+  enable-envoy-config: "true"
+  enable-l7-proxy: "true"
+  enable-hubble: "true"
+  hubble-metrics: "dns:query;ignoreAAAA;destinationContext=pod-short,drop,tcp,flow,icmp,http"
+  monitor-aggregation: "medium"
+  # Interface, VLAN and eBPF integration
+  devices: "eth*,eno*,en*"
+  datapath-mode: "veth"
+  bpf-lb-mode: "dsr"
+  enable-host-legacy-routing: "false"
+  install-no-conntrack-iptables-rules: "true"
+  # Native routing for direct network access
+  native-routing-cidr: "10.0.0.0/8"
+  # VTEP configuration for VLAN integration
+  enable-vtep: "true"
+  vtep-endpoint: "192.168.100.1"
+  vtep-cidr: "10.0.0.0/8"
+  vtep-mask: "255.0.0.0"
+  # Network interface controller integration
+  enable-bpf-masquerade: "true"
+  enable-ipv4-masquerade: "true"
+  ipv4-native-routing-cidr: "10.0.0.0/8"
+  
+  # DNS Integration
+  enable-dns: "true"
+  dns-port: "53"
+  dns-policy-max-ttl: "3600"
+  dns-policy-min-ttl: "3"
+  dns-policy-cache-size: "10000"
+  dns-policy-session-rules-enable: "true"
+  dns-max-ips-per-restored-rule: "1000"
+  
+  # DHCP Integration
+  proxy-enable-dhcp: "true"
+  dhcp-server-addresses: "10.96.0.100"
+  auto-create-cilium-node-resource: "true"
+  
+  # Routing Integration
+  enable-bgp-control-plane: "true"
+  bgp-announce-lb-ip: "true"
+  bgp-control-plane-mode: "integrated"
+  bgp-control-plane-max-neighbors: "32"
+  
+  # NTP Integration
+  enable-host-port: "true"
+  host-port-whitelist: "123/UDP"
+  
+  # Service Integration Controller
+  enable-service-topology: "true"
+  enable-external-ips: "true"
+  enable-node-port: "true"
+  enable-l7-policy: "true"
+  enable-external-workloads: "true"
+  synchronize-k8s-nodes: "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cilium
+rules:
+  - apiGroups:
+      - "networking.k8s.io"
+    resources:
+      - networkpolicies
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - "cilium.io"
+    resources:
+      - ciliumnetworkpolicies
+      - ciliumnetworkpolicies/status
+      - ciliumclusterwidenetworkpolicies
+      - ciliumclusterwidenetworkpolicies/status
+      - ciliumendpoints
+      - ciliumendpoints/status
+      - ciliumnodes
+      - ciliumnodes/status
+      - ciliumidentities
+      - ciliumidentities/status
+    verbs:
+      - '*'
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - nodes
+      - namespaces
+      - endpoints
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+  # Specific permissions for custom FOS1 network resources
+  - apiGroups:
+      - "networking.fos1.io"
+    resources:
+      - "networkinterfaces"
+      - "networkinterfaces/status"
+      - "routes"
+      - "routes/status"
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Firewall and DPI policies for network security
+  - apiGroups:
+      - "security.fos1.io"
+    resources:
+      - "firewallrules"
+      - "firewallrules/status"
+      - "dpipolicies"
+      - "dpipolicies/status"
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # VLAN management permissions
+  - apiGroups:
+      - "networking.fos1.io"
+    resources:
+      - "vlans"
+      - "vlans/status"
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  # DNS resource permissions
+  - apiGroups:
+      - "dns.fos1.io"
+    resources:
+      - "dnszones"
+      - "dnszones/status"
+      - "dnsclients"
+      - "dnsclients/status"
+      - "ptrzones"
+      - "ptrzones/status"
+      - "dnsfilterlist"
+      - "dnsfilterlist/status"
+    verbs:
+      - get
+      - list
+      - watch
+  # DHCP resource permissions
+  - apiGroups:
+      - "dhcp.fos1.io"
+    resources:
+      - "dhcpv4services"
+      - "dhcpv4services/status"
+      - "dhcpv6services"
+      - "dhcpv6services/status"
+    verbs:
+      - get
+      - list
+      - watch
+  # Node-specific permissions for eBPF
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/status
+    verbs:
+      - patch
+      - update
+  # Required for BGP integration
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/proxy
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cilium
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cilium
+subjects:
+  - kind: ServiceAccount
+    name: cilium
+    namespace: kube-system

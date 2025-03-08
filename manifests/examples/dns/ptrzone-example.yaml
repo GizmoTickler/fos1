@@ -1,0 +1,18 @@
+apiVersion: dns.fos1.io/v1alpha1
+kind: PTRZone
+metadata:
+  name: internal-network
+  namespace: default
+spec:
+  network: "192.168.1.0/24"
+  ttl: 3600
+  syncWithDHCP: true
+  defaultDomain: "example.local"
+  records:
+    - ip: "192.168.1.1"
+      target: "router.example.local"
+      ttl: 86400
+    - ip: "192.168.1.10"
+      target: "server.example.local"
+    - ip: "192.168.1.20"
+      target: "printer.example.local"

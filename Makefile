@@ -23,15 +23,41 @@ KUBE_CONTEXT := default
 .PHONY: all
 all: build test lint
 
+# Setup the project
+.PHONY: setup
+setup:
+	chmod +x scripts/setup.sh
+	./scripts/setup.sh
+
 # Build targets
 .PHONY: build
 build:
 	$(GO) build $(BUILD_FLAGS) ./...
 
+.PHONY: build-dns
+build-dns:
+	$(GO) build $(BUILD_FLAGS) ./pkg/dns/...
+
+.PHONY: build-dhcp
+build-dhcp:
+	$(GO) build $(BUILD_FLAGS) ./pkg/dhcp/...
+
 # Test targets
 .PHONY: test
 test:
 	$(GO) test $(TEST_FLAGS) ./...
+
+.PHONY: test-dns
+test-dns:
+	$(GO) test $(TEST_FLAGS) ./pkg/dns/...
+
+.PHONY: test-dhcp
+test-dhcp:
+	$(GO) test $(TEST_FLAGS) ./pkg/dhcp/...
+
+.PHONY: test-dns-dhcp
+test-dns-dhcp:
+	$(GO) test $(TEST_FLAGS) ./pkg/dns/... ./pkg/dhcp/... ./test/integration/...
 
 .PHONY: integration-test
 integration-test:
@@ -64,6 +90,16 @@ manifests:
 	mkdir -p dist/manifests
 	kustomize build manifests/base > dist/manifests/all.yaml
 
+.PHONY: dns-manifests
+dns-manifests:
+	mkdir -p dist/manifests/dns
+	kustomize build manifests/base/dns > dist/manifests/dns/all.yaml
+
+.PHONY: dhcp-manifests
+dhcp-manifests:
+	mkdir -p dist/manifests/dhcp
+	kustomize build manifests/base/dhcp > dist/manifests/dhcp/all.yaml
+
 .PHONY: validate-manifests
 validate-manifests:
 	find manifests -name "*.yaml" -o -name "*.yml" | xargs $(KUBECONFORM) -kubernetes-version 1.23.0
@@ -71,6 +107,14 @@ validate-manifests:
 .PHONY: apply
 apply:
 	$(KUBECTL) --context $(KUBE_CONTEXT) apply -f dist/manifests/all.yaml
+
+.PHONY: apply-dns
+apply-dns:
+	$(KUBECTL) --context $(KUBE_CONTEXT) apply -f dist/manifests/dns/all.yaml
+
+.PHONY: apply-dhcp
+apply-dhcp:
+	$(KUBECTL) --context $(KUBE_CONTEXT) apply -f dist/manifests/dhcp/all.yaml
 
 # Development environment
 .PHONY: dev-env-up
@@ -111,12 +155,20 @@ docker-build:
 .PHONY: help
 help:
 	@echo "Available targets:"
+	@echo "  setup            - Set up the project and install dependencies"
 	@echo "  build            - Build all packages"
+	@echo "  build-dns        - Build only DNS packages"
+	@echo "  build-dhcp       - Build only DHCP packages"
 	@echo "  test             - Run all tests"
+	@echo "  test-dns         - Run DNS subsystem tests"
+	@echo "  test-dhcp        - Run DHCP subsystem tests"
+	@echo "  test-dns-dhcp    - Run both DNS and DHCP tests including integration"
 	@echo "  integration-test - Run integration tests"
 	@echo "  lint             - Run all linters"
 	@echo "  fmt              - Format Go code"
-	@echo "  manifests        - Generate Kubernetes manifests"
+	@echo "  manifests        - Generate all Kubernetes manifests"
+	@echo "  dns-manifests    - Generate DNS Kubernetes manifests"
+	@echo "  dhcp-manifests   - Generate DHCP Kubernetes manifests"
 	@echo "  apply            - Apply manifests to Kubernetes cluster"
 	@echo "  dev-env-up       - Start development environment"
 	@echo "  dev-env-down     - Stop development environment"

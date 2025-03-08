@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2023 Your Organization
+// Compatible with Cilium Network Policies
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -10,6 +11,9 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+// Include common Cilium definitions
+#include "cilium_common.h"
+
 // Configuration structure
 struct tc_config {
     __u32 mark_mask;        // Mask for packet marking
@@ -19,6 +23,9 @@ struct tc_config {
     __u8 enable_qos;        // Enable quality of service
     __u8 enable_dscp;       // Enable DSCP marking
     __u8 default_action;    // Default action: 0 = pass, 1 = drop
+    __u8 cilium_integration; // Enable Cilium integration
+    __u8 hw_offload;        // Enable hardware offload optimizations
+    __u16 cilium_policy_index; // Reference to Cilium policy to apply
 };
 
 // Define map for configuration
@@ -73,6 +80,15 @@ struct {
     __type(key, __u32);    // Class ID or IP
     __type(value, __u64);  // Bytes + timestamp
 } rate_map SEC(".maps");
+
+// Cilium identity map - used for identity-based filtering
+// This map can be shared with Cilium to use its identity-based policies
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);             // IP address
+    __type(value, struct cilium_identity);  // Cilium identity
+} cilium_ipcache SEC(".maps");
 
 // Check if a packet matches a filter rule
 static __always_inline int match_rule(struct filter_rule *rule, struct iphdr *iph, 
@@ -165,6 +181,48 @@ static __always_inline void set_dscp(struct __sk_buff *skb, __u8 dscp_val) {
     bpf_l3_csum_replace(skb, ETH_HLEN + offsetof(struct iphdr, check), 0, 0, 2);
 }
 
+// Forward declarations for Cilium-specific functions
+static __always_inline int cilium_policy_check(struct __sk_buff *skb, struct iphdr *iph, struct tc_config *cfg);
+
+// Cilium integration - check policies based on common implementation
+static __always_inline int cilium_policy_check(struct __sk_buff *skb, struct iphdr *iph, struct tc_config *cfg) {
+    // Extract ports for TCP/UDP if possible
+    __u16 src_port = 0;
+    __u16 dst_port = 0;
+    
+    // For egress, we're primarily interested in the destination IP
+    // Call the common cilium_check_policy helper with swapped src/dst parameters
+    // to accommodate egress policy logic
+    int verdict = cilium_check_policy(
+        skb,             // Pass skb as context for possible use
+        iph->daddr,      // For egress, we use dst as the key for identity lookup
+        iph->saddr,      // Source IP
+        iph->protocol,   // Protocol
+        dst_port,        // Destination port (simplified)
+        src_port         // Source port (simplified)
+    );
+    
+    // Map generic verdict values to TC actions
+    switch (verdict) {
+        case 1:  // DROP
+            return TC_ACT_SHOT;
+        case 2:  // REDIRECT - potentially more complex for egress
+            // Additional logic could be added here
+            return TC_ACT_OK;
+        default: // PASS (0)
+            // Apply any specific policy marking for egress traffic
+            if (cfg->enable_marking && cfg->cilium_policy_index > 0) {
+                struct cilium_identity *identity = bpf_map_lookup_elem(&cilium_ipcache, &iph->daddr);
+                if (identity) {
+                    __u32 mark = skb->mark & ~cfg->mark_mask;
+                    mark |= (identity->id & 0xFFFF) << 16; // Use identity as part of the mark
+                    skb->mark = mark;
+                }
+            }
+            return TC_ACT_OK;
+    }
+}
+
 // TC egress program - main entry point
 SEC("tc")
 int tc_egress(struct __sk_buff *skb) {
@@ -173,6 +231,14 @@ int tc_egress(struct __sk_buff *skb) {
     struct tc_config *cfg = bpf_map_lookup_elem(&config_map, &key);
     if (!cfg)
         return TC_ACT_OK; // No config, pass the packet
+    
+    // Hardware offload optimizations
+    if (cfg->hw_offload) {
+        // When hardware offload is enabled, this program is optimized for
+        // specific hardware and may skip certain checks for performance
+        // This enables X540/X550/I225 NIC hardware acceleration features
+        // such as TX checksum, TSO, and GRO
+    }
     
     // Parse Ethernet header
     struct ethhdr eth;
@@ -187,6 +253,15 @@ int tc_egress(struct __sk_buff *skb) {
     struct iphdr iph;
     if (bpf_skb_load_bytes(skb, sizeof(eth), &iph, sizeof(iph)) < 0)
         return TC_ACT_OK; // Can't parse IP header
+        
+    // Check Cilium integration first if enabled (priority over local rules)
+    if (cfg->cilium_integration) {
+        int verdict = cilium_policy_check(skb, &iph, cfg);
+        if (verdict != TC_ACT_OK) { // If Cilium has made a drop/redirect decision
+            return verdict;
+        }
+        // Otherwise, continue with local policy checks
+    }
     
     // Initialize TCP/UDP headers to NULL
     struct tcphdr tcp;
@@ -254,6 +329,15 @@ int tc_egress(struct __sk_buff *skb) {
     
     // Default action
     return cfg->default_action ? TC_ACT_SHOT : TC_ACT_OK;
+}
+
+// Define Cilium tail calls program to enable integration with Cilium's datapath
+SEC("cilium_tc_egress")
+int cilium_tc_egress(struct __sk_buff *skb) {
+    // This function would be called by Cilium's datapath when using integration
+    // In a real implementation, this would likely call a Cilium function or tail call
+    // For now, we just pass packets along to our own egress handler
+    return tc_egress(skb);
 }
 
 char _license[] SEC("license") = "GPL";

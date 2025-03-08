@@ -2,17 +2,19 @@
 
 ## Overview
 
-This document describes the design for the eBPF (extended Berkeley Packet Filter) implementation in the Kubernetes-based Router/Firewall system. The implementation leverages eBPF for high-performance packet processing, network address translation, traffic control, load balancing, and network visibility.
+This document describes the design for the eBPF (extended Berkeley Packet Filter) implementation in the Kubernetes-based Router/Firewall system. The implementation leverages Cilium's eBPF implementation for high-performance packet processing, network address translation, traffic control, load balancing, and network visibility.
+
+> **IMPORTANT UPDATE (March 2025)**: We have standardized on Cilium's native network policies (CNP/CCNP) for all networking policy enforcement. The custom EBPFNetworkPolicy CRD has been deprecated. This document has been updated to reflect this architectural decision.
 
 ## Goals
 
 - Implement high-performance packet processing using eBPF
 - Support all major eBPF hooks (XDP, TC, sockops, cgroup)
 - Integrate fully with the routing and VRF design
-- Provide configuration-based programmability through CRDs
-- Leverage Cilium's infrastructure while adding custom functionality
-- Enable comprehensive monitoring and debugging capabilities
-- Implement using Cilium's Go eBPF library
+- Utilize Cilium's native policy system and CRDs for network policy enforcement
+- Leverage Cilium's infrastructure for core networking capabilities
+- Enable comprehensive monitoring and debugging capabilities via Hubble
+- Use native Cilium implementations where possible to reduce maintenance overhead
 
 ## Non-Goals
 
@@ -20,6 +22,7 @@ This document describes the design for the eBPF (extended Berkeley Packet Filter
 - Integration with non-Kubernetes environments
 - Compatibility with non-Linux operating systems
 - Support for deprecated eBPF features
+- Maintaining custom network policy implementations that duplicate Cilium functionality
 
 ## Design Details
 
@@ -27,34 +30,34 @@ This document describes the design for the eBPF (extended Berkeley Packet Filter
 
 The eBPF implementation consists of several key components:
 
-1. **eBPF Programs**: The actual eBPF code that runs in the kernel
-2. **Program Manager**: Handles loading, unloading, and updating eBPF programs
-3. **Map Manager**: Manages eBPF maps for state sharing
-4. **Configuration Controller**: Translates CRDs to eBPF program configurations
-5. **Monitoring System**: Gathers metrics and provides debugging tools
+1. **Cilium's eBPF Programs**: The core networking functionality using Cilium's eBPF programs
+2. **Native Cilium Policies**: Using CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy for policy enforcement
+3. **Custom eBPF Programs**: Additional eBPF programs for specialized router/firewall features
+4. **eBPF Map Integration**: Integration with Cilium's maps for state sharing
+5. **Hubble**: Monitoring and observability for network flows and policy decisions
 
-The architecture leverages Cilium for core functionality while adding a thin controller layer for router/firewall specific features.
+The architecture fully leverages Cilium for core networking functionality, particularly network policy enforcement, while maintaining custom programs only for specialized functionality not provided by Cilium.
 
 ```
 ┌─────────────────────────────────┐
-│       Custom Controller         │◄───┐
-└───────────────┬─────────────────┘    │
-                │                       │
-                ▼                       │
-┌─────────────────────────────────┐    │
-│        Cilium Integration       │    │ Configuration
-└───────────────┬─────────────────┘    │    CRDs
-                │                       │
-                ▼                       │
-┌─────────────────────────────────┐    │
-│      eBPF Program Manager       │◄───┘
+│    CiliumNetworkPolicy CRDs    │
 └───────────────┬─────────────────┘
                 │
-        ┌───────┴────────┐
-        │                │
-        ▼                ▼
-┌─────────────┐   ┌─────────────┐
-│ eBPF Maps   │   │ eBPF Programs│
+                ▼
+┌─────────────────────────────────┐
+│        Cilium Agent             │◄───┐
+└───────────────┬─────────────────┘    │
+                │                       │
+                ▼                       │ Custom
+┌─────────────────────────────────┐    │ Config
+│    Cilium's eBPF Programs       │    │  CRDs
+└───────────────┬─────────────────┘    │
+                │                       │
+        ┌───────┴────────┐             │
+        │                │             │
+        ▼                ▼             │
+┌─────────────┐   ┌─────────────┐     │
+│ Cilium Maps │   │ Custom Maps │◄────┘
 └─────────────┘   └─────────────┘
         │                │
         └───────┬────────┘
@@ -196,9 +199,18 @@ type ProgramManager interface {
 
 ### Configuration
 
-eBPF programs are configured through CRDs that define their behavior without requiring users to write eBPF code.
+#### Network Policies
 
-#### eBPF Program Configuration CRD
+Network policies are configured using Cilium's native CRDs:
+
+1. **CiliumNetworkPolicy (CNP)**: Namespace-scoped policies
+2. **CiliumClusterwideNetworkPolicy (CCNP)**: Cluster-wide policies
+
+These replace the deprecated EBPFNetworkPolicy CRD and provide superior integration with Cilium's datapath.
+
+#### Custom eBPF Program Configuration
+
+For specialized functionality not covered by Cilium's native features, custom eBPF programs are configured through CRDs:
 
 ```yaml
 apiVersion: ebpf.fos1.io/v1alpha1

@@ -33,44 +33,79 @@ spec:
   accessedBy:
     - "xdp-packet-filter"
 ---
-apiVersion: networking.fos1.io/v1alpha1
-kind: EBPFNetworkPolicy
+# DEPRECATED: This example uses the deprecated EBPFNetworkPolicy format
+# apiVersion: networking.fos1.io/v1alpha1
+# kind: EBPFNetworkPolicy
+# metadata:
+#   name: api-server-protection
+#   namespace: default
+# spec:
+#   description: "Network policy to protect API server"
+#   policyType: filtering
+#   priority: 100
+#   selector:
+#     podSelector:
+#       matchLabels:
+#         app: api-server
+#   ingress:
+#     - description: "Allow incoming HTTPS traffic"
+#       ports:
+#         - protocol: TCP
+#           port: 443
+#       action: allow
+#     - description: "Log and rate limit incoming API requests"
+#       ports:
+#         - protocol: TCP
+#           port: 8080
+#       action: allow
+#       rateLimit:
+#         bitsPerSecond: 1000000  # 1Mbps
+#         burstSize: 32768  # 32KB burst
+#   egress:
+#     - description: "Allow outgoing DB traffic"
+#       to:
+#         - ipBlock:
+#             cidr: "10.0.0.0/8"
+#       ports:
+#         - protocol: TCP
+#           port: 5432
+#       action: allow
+#     - description: "Default deny all other outgoing traffic"
+#       action: deny
+---
+# RECOMMENDED: Use native Cilium Network Policy instead
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: api-server-protection
   namespace: default
 spec:
   description: "Network policy to protect API server"
-  policyType: filtering
-  priority: 100
-  selector:
-    podSelector:
-      matchLabels:
-        app: api-server
+  endpointSelector:
+    matchLabels:
+      app: api-server
   ingress:
     - description: "Allow incoming HTTPS traffic"
-      ports:
-        - protocol: TCP
-          port: 443
-      action: allow
-    - description: "Log and rate limit incoming API requests"
-      ports:
-        - protocol: TCP
-          port: 8080
-      action: allow
-      rateLimit:
-        bitsPerSecond: 1000000  # 1Mbps
-        burstSize: 32768  # 32KB burst
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - description: "Allow incoming API requests"
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
   egress:
     - description: "Allow outgoing DB traffic"
-      to:
-        - ipBlock:
-            cidr: "10.0.0.0/8"
-      ports:
-        - protocol: TCP
-          port: 5432
-      action: allow
-    - description: "Default deny all other outgoing traffic"
-      action: deny
+      toCIDR: 
+        - "10.0.0.0/8"
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+  labels:
+    - key: "priority"
+      value: "100"
 ---
 apiVersion: networking.fos1.io/v1alpha1
 kind: EBPFTrafficControl
@@ -150,43 +185,79 @@ spec:
       internalPort: 8443
       description: "HTTPS traffic to web server"
 ---
-apiVersion: networking.fos1.io/v1alpha1
-kind: EBPFContainerPolicy
+# DEPRECATED: This example uses a custom EBPFContainerPolicy format
+# apiVersion: networking.fos1.io/v1alpha1
+# kind: EBPFContainerPolicy
+# metadata:
+#   name: database-network-policy
+#   namespace: default
+# spec:
+#   description: "Network policy for database containers"
+#   selector:
+#     podSelector:
+#       matchLabels:
+#         app: database
+#   resourceLimits:
+#     enableAccounting: true
+#     bandwidthLimits:
+#       egressBitsPerSecond: 100000000  # 100Mbps
+#       ingressBitsPerSecond: 200000000  # 200Mbps
+#     connectionLimits:
+#       maxConnections: 100
+#   networkControls:
+#     enableEgressControl: true
+#     enableIngressControl: true
+#     defaultEgressAction: deny
+#     defaultIngressAction: deny
+#     ingressRules:
+#       - description: "Allow database client connections"
+#         ports:
+#           - protocol: TCP
+#             port: 5432
+#         action: allow
+#     egressRules:
+#       - description: "Allow DNS lookups"
+#         ports:
+#           - protocol: UDP
+#             port: 53
+#         action: allow
+#       - description: "Allow NTP"
+#         ports:
+#           - protocol: UDP
+#             port: 123
+#         action: allow
+---
+# RECOMMENDED: Use native Cilium Network Policy with bandwidth management
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   name: database-network-policy
   namespace: default
 spec:
-  description: "Network policy for database containers"
-  selector:
-    podSelector:
-      matchLabels:
-        app: database
-  resourceLimits:
-    enableAccounting: true
-    bandwidthLimits:
-      egressBitsPerSecond: 100000000  # 100Mbps
-      ingressBitsPerSecond: 200000000  # 200Mbps
-    connectionLimits:
-      maxConnections: 100
-  networkControls:
-    enableEgressControl: true
-    enableIngressControl: true
-    defaultEgressAction: deny
-    defaultIngressAction: deny
-    ingressRules:
-      - description: "Allow database client connections"
-        ports:
-          - protocol: TCP
-            port: 5432
-        action: allow
-    egressRules:
-      - description: "Allow DNS lookups"
-        ports:
-          - protocol: UDP
-            port: 53
-        action: allow
-      - description: "Allow NTP"
-        ports:
-          - protocol: UDP
-            port: 123
-        action: allow
+  description: "Network policy for database containers with resource limits"
+  endpointSelector:
+    matchLabels:
+      app: database
+  ingress:
+    - description: "Allow database client connections"
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+  egress:
+    - description: "Allow DNS lookups"
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+    - description: "Allow NTP"
+      toPorts:
+        - ports:
+            - port: "123"
+              protocol: UDP
+    - description: "Apply bandwidth limits"
+      toBandwidth:
+        rate: "100M"  # 100Mbps egress limit
+  labels:
+    - key: "app"
+      value: "database"

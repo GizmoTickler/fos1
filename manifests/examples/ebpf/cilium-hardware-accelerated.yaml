@@ -1,0 +1,90 @@
+# Example Cilium Network Policies with Hardware Acceleration
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: hardware-accelerated-web
+  namespace: default
+spec:
+  description: "Web server protection policy with hardware acceleration"
+  endpointSelector:
+    matchLabels:
+      app: web-server
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: frontend
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+  options:
+    # Enable XDP acceleration
+    xdp: "true"
+    # Enable XDP hardware offload
+    xdpOffload: "true"
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: smartnic-database
+  namespace: default
+spec:
+  description: "Database protection policy with SmartNIC acceleration"
+  endpointSelector:
+    matchLabels:
+      app: database
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: api-server
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+  options:
+    # Enable SmartNIC processing for high throughput
+    smartNIC: "true"
+    # Specify hardware type (optional)
+    hardwareType: "bluefield-2"
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: global-security-policy
+spec:
+  description: "Global security policy with hardware acceleration for control plane nodes"
+  nodeSelector:
+    matchLabels:
+      node-role.kubernetes.io/control-plane: ""
+  ingress:
+    - fromEndpoints: []
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+  options:
+    # Enable XDP acceleration
+    xdp: "true"
+    # Specify DPDK acceleration with device path
+    dpdk: "0000:03:00.0"
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: high-performance-ingress
+spec:
+  description: "High-performance ingress policy for edge nodes"
+  nodeSelector:
+    matchLabels:
+      node-role.kubernetes.io/edge: ""
+  ingress:
+    - fromEndpoints: []
+  options:
+    # Enable all hardware acceleration options for maximum performance
+    xdp: "true"
+    xdpOffload: "true"
+    smartNIC: "true"
+    # Set high bandwidth limit (Gbps)
+    bandwidthLimit: "40"

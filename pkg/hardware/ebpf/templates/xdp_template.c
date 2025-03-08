@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2023 Your Organization
+// Compatible with Cilium Network Policies
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
@@ -8,6 +9,9 @@
 #include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+
+// Include common Cilium definitions
+#include "cilium_common.h"
 
 // Define map for rate limiting
 struct {
@@ -25,6 +29,9 @@ struct {
     __type(value, __u8);   // 1 = blacklisted
 } blacklist_map SEC(".maps");
 
+// Cilium identity map - using common definition
+DECLARE_CILIUM_IPCACHE;
+
 // Define map for stateful tracking
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -35,11 +42,14 @@ struct {
 
 // Define map for configuration
 struct config {
-    __u32 ratelimit_pps;   // Packets per second threshold
-    __u8 enable_blacklist; // Enable blacklist
-    __u8 enable_ratelimit; // Enable rate limiting
-    __u8 enable_stateful;  // Enable stateful tracking
-    __u8 default_action;   // Default action: 0 = pass, 1 = drop
+    __u32 ratelimit_pps;       // Packets per second threshold
+    __u8 enable_blacklist;     // Enable blacklist
+    __u8 enable_ratelimit;     // Enable rate limiting
+    __u8 enable_stateful;      // Enable stateful tracking
+    __u8 default_action;       // Default action: 0 = pass, 1 = drop
+    __u8 cilium_integration;   // Enable Cilium integration
+    __u8 hw_offload;           // Enable hardware offload optimizations
+    __u16 cilium_policy_index; // Reference to Cilium policy to apply
 };
 
 struct {
@@ -67,6 +77,9 @@ static __always_inline __u64 flow_hash(struct iphdr *iph) {
     }
 }
 
+// Forward declarations for Cilium-specific functions
+static __always_inline int cilium_policy_check(struct iphdr *iph, struct config *cfg);
+
 // XDP program - main entry point
 SEC("xdp")
 int xdp_filter(struct xdp_md *ctx) {
@@ -91,6 +104,23 @@ int xdp_filter(struct xdp_md *ctx) {
     struct config *cfg = bpf_map_lookup_elem(&config_map, &key);
     if (!cfg)
         return XDP_PASS;  // No config, pass the packet
+    
+    // Hardware offload optimizations using common macros
+    if (cfg->hw_offload) {
+        // Use the appropriate hardware offload macro based on NIC type
+        X540_OFFLOAD_SUPPORTED("xdp");
+        X550_OFFLOAD_SUPPORTED("xdp");
+        I225_OFFLOAD_SUPPORTED("xdp");
+    }
+    
+    // Check Cilium integration first if enabled (priority over local rules)
+    if (cfg->cilium_integration) {
+        int verdict = cilium_policy_check(iph, cfg);
+        if (verdict != XDP_PASS) { // If Cilium has made a drop/redirect decision
+            return verdict;
+        }
+        // Otherwise, continue with local policy checks
+    }
     
     // Check blacklist if enabled
     if (cfg->enable_blacklist) {
@@ -132,6 +162,43 @@ int xdp_filter(struct xdp_md *ctx) {
     
     // Default action based on configuration
     return cfg->default_action ? XDP_DROP : XDP_PASS;
+}
+
+// Cilium integration - check policies based on common implementation
+static __always_inline int cilium_policy_check(struct iphdr *iph, struct config *cfg) {
+    // Extract ports for TCP/UDP if needed (simplified version)
+    __u16 src_port = 0;
+    __u16 dst_port = 0;
+    
+    // Call the common cilium_check_policy helper and translate its generic return values
+    // to XDP-specific actions
+    int verdict = cilium_check_policy(
+        NULL,           // No context needed for XDP in this simplified version
+        iph->saddr,     // Source IP
+        iph->daddr,     // Destination IP
+        iph->protocol,  // Protocol
+        src_port,       // Source port (simplified)
+        dst_port        // Destination port (simplified)
+    );
+    
+    // Map generic verdict values to XDP actions
+    switch (verdict) {
+        case 1:  // DROP
+            return XDP_DROP;
+        case 2:  // REDIRECT (not fully supported in this simplified version)
+            // For a real implementation, would need to handle redirection
+            return XDP_PASS;
+        default: // PASS (0)
+            return XDP_PASS;
+    }
+}
+
+// Define Cilium tail calls program to enable integration with Cilium's datapath
+SEC("cilium_xdp_entry")
+int cilium_xdp_entry(struct xdp_md *ctx) {
+    // This is a specialized entry point for Cilium integration
+    // When used with Cilium, this will be called through their tail call mechanism
+    return xdp_filter(ctx);
 }
 
 char _license[] SEC("license") = "GPL";

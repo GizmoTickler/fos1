@@ -1,0 +1,165 @@
+# Example Native Cilium Network Policy Configurations
+
+---
+# Basic application segmentation with Cilium policies
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: frontend-backend-segmentation
+  namespace: app
+spec:
+  description: "Allow frontend to access backend API"
+  endpointSelector:
+    matchLabels:
+      app: backend
+      tier: api
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: frontend
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: "GET"
+                path: "/api/v1/.*"
+              - method: "POST"
+                path: "/api/v1/data"
+  labels:
+    - key: "policy"
+      value: "app-segmentation"
+
+---
+# Advanced L7 policy with HTTP headers filtering
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-gateway-security
+  namespace: app
+spec:
+  description: "Secure API gateway with L7 filtering"
+  endpointSelector:
+    matchLabels:
+      app: api-gateway
+  ingress:
+    - fromEndpoints:
+        - matchLabels: {}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+          rules:
+            http:
+              - method: "GET"
+                path: "/public/.*"
+              - method: "GET"
+                path: "/api/.*"
+                headers:
+                  - name: "X-API-Key"
+                    secret:
+                      name: "api-keys"
+                      namespace: "app"
+  egress:
+    - toFQDNs:
+        - matchPattern: "*.api.internal"
+    - toCIDR:
+        - "10.0.0.0/16"
+  labels:
+    - key: "tier"
+      value: "security"
+
+---
+# Network-wide DNS control with Cilium DNS policies
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: dns-egress-control
+spec:
+  description: "Control DNS-based egress across the cluster"
+  endpointSelector:
+    matchLabels: {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            "k8s:k8s-app": kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: "*.allowed-domain.com"
+              - matchPattern: "*.api.cloud.provider.com"
+    - toFQDNs:
+        - matchName: "allowed-domain.com"
+        - matchPattern: "*.api.cloud.provider.com"
+  labels:
+    - key: "scope"
+      value: "cluster-wide"
+
+---
+# Hardware-accelerated security policy using Cilium's XDP integration
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: hardware-accelerated-security
+spec:
+  description: "Policy leveraging hardware XDP acceleration for high throughput filtering"
+  nodeSelector:
+    matchLabels:
+      node-role: edge-router
+  ingress:
+    - fromCIDR:
+        - "0.0.0.0/0"
+  egressDeny:
+    - toCIDR:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+    - toEntities:
+        - "host"
+  options:
+    # Enable XDP acceleration (requires compatible hardware)
+    xdp: "on"
+    # Indicates this policy should be processed at the earliest point possible
+    priority: "ingress"
+  labels:
+    - key: "hardware"
+      value: "xdp-accelerated"
+
+---
+# QoS and Bandwidth Management with Cilium
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: bandwidth-control
+  namespace: app
+spec:
+  description: "QoS and bandwidth controls for applications"
+  endpointSelector:
+    matchLabels:
+      app: streaming-service
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            org: premium-customer
+      fromBandwidth:
+        rate: "100M"  # 100 Mbps guaranteed bandwidth for premium customers
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app: content-delivery
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+      toBandwidth:
+        rate: "50M"  # 50 Mbps egress limit per endpoint
+  labels:
+    - key: "qos"
+      value: "streaming"

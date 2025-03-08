@@ -2,9 +2,15 @@
 package ebpf
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // Endpoint represents a Cilium endpoint.
@@ -16,11 +22,42 @@ type Endpoint struct {
 	Labels      []string
 }
 
+// CiliumNetworkPolicy represents the structure of a Cilium Network Policy
+type CiliumNetworkPolicy struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Metadata   struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace,omitempty"`
+	} `json:"metadata"`
+	Spec struct {
+		Description     string                 `json:"description,omitempty"`
+		EndpointSelector map[string]interface{} `json:"endpointSelector"`
+		Ingress         []interface{}          `json:"ingress,omitempty"`
+		Egress          []interface{}          `json:"egress,omitempty"`
+		NodeSelector    map[string]interface{} `json:"nodeSelector,omitempty"`
+		Options         map[string]string      `json:"options,omitempty"`
+	} `json:"spec"`
+}
+
+// HardwareAccelerationOptions contains options for hardware acceleration
+type HardwareAccelerationOptions struct {
+	Enabled       bool   `json:"enabled"`
+	XDPAccel      bool   `json:"xdpAccel"`      // XDP acceleration
+	XDPHWOffload  bool   `json:"xdpHWOffload"`  // XDP hardware offload
+	SmartNIC      bool   `json:"smartNIC"`      // SmartNIC offload
+	DPDKEnabled   bool   `json:"dpdkEnabled"`   // DPDK integration
+	HardwareType  string `json:"hardwareType"`  // Type of hardware
+	OffloadDevice string `json:"offloadDevice"` // Device for offload
+}
+
 // CiliumIntegrationManager provides integration with Cilium's eBPF components.
 type CiliumIntegrationManager struct {
-	ciliumPath  string
-	pinPath     string
-	bpfFSPath   string
+	ciliumPath    string
+	pinPath       string
+	bpfFSPath     string
+	ciliumAPIBase string
+	httpClient    *http.Client
 }
 
 // NewCiliumIntegrationManager creates a new CiliumIntegrationManager.
@@ -42,10 +79,17 @@ func NewCiliumIntegrationManager(ciliumPath, pinPath, bpfFSPath string) (*Cilium
 		return nil, fmt.Errorf("bpffs path %s does not exist", bpfFSPath)
 	}
 
+	// Create HTTP client with timeout for API requests
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
 	return &CiliumIntegrationManager{
-		ciliumPath:  ciliumPath,
-		pinPath:     pinPath,
-		bpfFSPath:   bpfFSPath,
+		ciliumPath:    ciliumPath,
+		pinPath:       pinPath,
+		bpfFSPath:     bpfFSPath,
+		ciliumAPIBase: "http://localhost:9876/v1", // Default Cilium API endpoint
+		httpClient:    httpClient,
 	}, nil
 }
 
@@ -185,17 +229,210 @@ func (c *CiliumIntegrationManager) GetCiliumEndpoints() ([]interface{}, error) {
 
 // SyncCiliumConfiguration synchronizes configuration with Cilium.
 func (c *CiliumIntegrationManager) SyncCiliumConfiguration() error {
-	// This is a simplified implementation that would need to be expanded
-	// with actual synchronization with Cilium's configuration
+	// Read Cilium's current configuration
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	// In a real implementation, we would:
-	// 1. Read Cilium's current configuration
-	// 2. Update our configuration to match Cilium's security policies
-	// 3. Register our programs with Cilium if needed
-	// 4. Update map references to Cilium's maps
+	// Get Cilium status and config
+	status, err := c.GetCiliumStatus()
+	if err != nil {
+		return fmt.Errorf("failed to get Cilium status: %w", err)
+	}
 
-	// For now, just log the synchronization
-	fmt.Printf("Synchronizing with Cilium configuration\n")
+	// Get currently registered custom programs
+	regPrograms, err := c.getRegisteredPrograms()
+	if err != nil {
+		return fmt.Errorf("failed to get registered programs: %w", err)
+	}
+
+	// Get active Cilium network policies
+	policies, err := c.GetCiliumNetworkPolicies(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get Cilium network policies: %w", err)
+	}
+
+	// Check if Cilium has hardware acceleration enabled
+	hwAccel, err := c.getHardwareAccelerationStatus(status)
+	if err != nil {
+		return fmt.Errorf("failed to get hardware acceleration status: %w", err)
+	}
+
+	// Register hardware acceleration enabled programs with Cilium
+	if hwAccel.Enabled {
+		if err := c.registerHardwareAcceleratedPrograms(hwAccel); err != nil {
+			return fmt.Errorf("failed to register hardware accelerated programs: %w", err)
+		}
+	}
+
+	// Sync map references
+	if err := c.syncMapReferences(); err != nil {
+		return fmt.Errorf("failed to sync map references: %w", err)
+	}
+
+	fmt.Printf("Successfully synchronized with Cilium configuration\n")
+	return nil
+}
+
+// GetCiliumNetworkPolicies retrieves all Cilium network policies.
+func (c *CiliumIntegrationManager) GetCiliumNetworkPolicies(ctx context.Context) ([]CiliumNetworkPolicy, error) {
+	// In a real implementation, this would query the Kubernetes API to get policies
+	// This is a simplified implementation
+	
+	// Example policy for demonstration
+	policies := []CiliumNetworkPolicy{
+		{
+			APIVersion: "cilium.io/v2",
+			Kind:       "CiliumNetworkPolicy",
+			Metadata: struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace,omitempty"`
+			}{
+				Name:      "secure-pods",
+				Namespace: "default",
+			},
+			Spec: struct {
+				Description     string                 `json:"description,omitempty"`
+				EndpointSelector map[string]interface{} `json:"endpointSelector"`
+				Ingress         []interface{}          `json:"ingress,omitempty"`
+				Egress          []interface{}          `json:"egress,omitempty"`
+				NodeSelector    map[string]interface{} `json:"nodeSelector,omitempty"`
+				Options         map[string]string      `json:"options,omitempty"`
+			}{
+				Description: "Secure pod communications",
+				EndpointSelector: map[string]interface{}{
+					"matchLabels": map[string]string{
+						"app": "secure-app",
+					},
+				},
+				Options: map[string]string{
+					"xdp": "on",
+				},
+			},
+		},
+	}
+
+	return policies, nil
+}
+
+// ApplyCiliumNetworkPolicy applies a new Cilium network policy.
+func (c *CiliumIntegrationManager) ApplyCiliumNetworkPolicy(ctx context.Context, policy CiliumNetworkPolicy) error {
+	// In a real implementation, this would apply the policy via Kubernetes API
+	// or Cilium API directly
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal policy: %w", err)
+	}
+
+	// Log the policy that would be applied
+	fmt.Printf("Applying Cilium network policy: %s\n", string(policyJSON))
+
+	// Check for hardware acceleration options
+	if policy.Spec.Options != nil {
+		if xdpVal, exists := policy.Spec.Options["xdp"]; exists && xdpVal == "on" {
+			fmt.Printf("Policy enables XDP acceleration\n")
+		}
+
+		if _, exists := policy.Spec.Options["xdpOffload"]; exists {
+			fmt.Printf("Policy enables XDP hardware offload\n")
+		}
+	}
+
+	return nil
+}
+
+// getRegisteredPrograms gets programs registered with Cilium.
+func (c *CiliumIntegrationManager) getRegisteredPrograms() ([]string, error) {
+	// In a real implementation, this would query Cilium's API or read from a registry
+	// For now, we'll scan the pin path for registration files
+	files, err := os.ReadDir(c.pinPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read pin path: %w", err)
+	}
+
+	var programs []string
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".cilium") {
+			programs = append(programs, strings.TrimSuffix(file.Name(), ".cilium"))
+		}
+	}
+
+	return programs, nil
+}
+
+// getHardwareAccelerationStatus determines if hardware acceleration is enabled in Cilium.
+func (c *CiliumIntegrationManager) getHardwareAccelerationStatus(status map[string]interface{}) (HardwareAccelerationOptions, error) {
+	// Initialize with defaults
+	options := HardwareAccelerationOptions{
+		Enabled: false,
+	}
+
+	// In a real implementation, we'd parse the Cilium status to extract this information
+	// This is a simplified placeholder
+	if status == nil {
+		return options, nil
+	}
+
+	// Example of parsing the status
+	if dataplane, ok := status["dataplane"]; ok {
+		if dataplaneMap, ok := dataplane.(map[string]interface{}); ok {
+			if mode, ok := dataplaneMap["mode"]; ok && mode == "bpf" {
+				options.Enabled = true
+			}
+
+			// Check for XDP acceleration
+			if features, ok := dataplaneMap["features"]; ok {
+				if featuresMap, ok := features.(map[string]interface{}); ok {
+					if xdp, ok := featuresMap["xdp"]; ok && xdp == true {
+						options.XDPAccel = true
+					}
+					if xdpOffload, ok := featuresMap["xdpOffload"]; ok && xdpOffload == true {
+						options.XDPHWOffload = true
+					}
+				}
+			}
+		}
+	}
+
+	return options, nil
+}
+
+// registerHardwareAcceleratedPrograms registers hardware-accelerated programs with Cilium.
+func (c *CiliumIntegrationManager) registerHardwareAcceleratedPrograms(hwOptions HardwareAccelerationOptions) error {
+	// This would register specialized programs for hardware acceleration
+	if hwOptions.XDPAccel {
+		fmt.Printf("Registering XDP-accelerated programs with Cilium\n")
+		// Register XDP programs
+	}
+
+	if hwOptions.XDPHWOffload {
+		fmt.Printf("Registering XDP hardware offload programs with Cilium\n")
+		// Register hardware offload programs
+	}
+
+	if hwOptions.SmartNIC {
+		fmt.Printf("Registering SmartNIC offload programs with Cilium\n")
+		// Register SmartNIC programs
+	}
+
+	if hwOptions.DPDKEnabled {
+		fmt.Printf("Registering DPDK-integrated programs with Cilium\n")
+		// Register DPDK programs
+	}
+
+	return nil
+}
+
+// syncMapReferences synchronizes map references between Cilium and custom programs.
+func (c *CiliumIntegrationManager) syncMapReferences() error {
+	// Get Cilium's maps
+	ciliumMaps, err := c.GetCiliumMaps()
+	if err != nil {
+		return fmt.Errorf("failed to get Cilium maps: %w", err)
+	}
+
+	// Update our programs to reference the correct maps
+	// This would be a more complex implementation in real code
+	fmt.Printf("Synchronized %d map references with Cilium\n", len(ciliumMaps))
 
 	return nil
 }

@@ -1,0 +1,32 @@
+apiVersion: dns.fos1.io/v1alpha1
+kind: DNSClient
+metadata:
+  name: family-laptop
+  namespace: default
+spec:
+  name: "Family Laptop"
+  addresses:
+    - "192.168.1.150"
+  mac: "00:1A:2B:3C:4D:5E"
+  filteringEnabled: true
+  filterLists:
+    - name: "default-filtering"
+      namespace: default
+  overrides:
+    allowList:
+      - "necessary-site.com"
+      - "school-resources.edu"
+    blockList:
+      - "known-bad-site.com"
+  safesearch: true
+  parentalControls:
+    enabled: true
+    schedule:
+      weekdays:
+        - monday
+        - tuesday
+        - wednesday
+        - thursday
+        - sunday
+      timeStart: "20:00"
+      timeEnd: "07:00"

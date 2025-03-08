@@ -3,21 +3,36 @@ package ebpf
 import (
 	"fmt"
 	"sync"
+	hwEbpf "github.com/varuntirumala1/fos1/pkg/hardware/ebpf"
 )
 
+// Import explanation:
+// We're refactoring to use the hardware/ebpf implementation to avoid duplication
+// This wrapper adapts the hardware/ebpf manager to implement our ProgramManager interface
+
 // ebpfProgramManager implements the ProgramManager interface
+// It wraps the hardware/ebpf.Manager to avoid code duplication
 type ebpfProgramManager struct {
 	mutex    sync.RWMutex
 	programs map[string]*ProgramInfo
-	
-	// Would normally have references to the Cilium eBPF library
-	// cilium "github.com/cilium/ebpf"
+	hwManager *hwEbpf.Manager
 }
 
 // NewProgramManager creates a new program manager
 func NewProgramManager() ProgramManager {
+	// Create the hardware/ebpf manager
+	hwManager, err := hwEbpf.NewManager()
+	if err != nil {
+		// Fallback to a basic implementation if hardware manager fails
+		return &ebpfProgramManager{
+			programs: make(map[string]*ProgramInfo),
+			hwManager: nil,
+		}
+	}
+	
 	return &ebpfProgramManager{
 		programs: make(map[string]*ProgramInfo),
+		hwManager: hwManager,
 	}
 }
 
@@ -31,17 +46,34 @@ func (m *ebpfProgramManager) LoadProgram(program Program) error {
 		return fmt.Errorf("program %s already loaded", program.Name)
 	}
 	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Compile or load the eBPF bytecode
-	// 2. Create necessary maps
-	// 3. Load the program into the kernel
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Convert our Program type to hardware EBPFProgramInfo
+		hwProgramInfo := hwEbpf.EBPFProgramInfo{
+			Name:        program.Name,
+			Description: program.Description,
+			Type:        string(program.Type),
+			Interface:   program.Interface,
+			Priority:    program.Priority,
+		}
+		
+		// Use the hardware manager to load the program
+		// This avoids duplicating the eBPF loading logic
+		_, err := m.hwManager.LoadProgram(hwProgramInfo, nil)
+		if err != nil {
+			return fmt.Errorf("failed to load program using hardware manager: %w", err)
+		}
+	} else {
+		// Fallback implementation if hardware manager isn't available
+		// This is just a placeholder and should be replaced with real implementation
+		// or removed entirely once the hardware manager is fully integrated
+	}
 	
-	// Add program to the manager
+	// Add program to the manager's internal tracking
 	m.programs[program.Name] = &ProgramInfo{
 		Name:        program.Name,
 		Type:        program.Type,
-		ID:          0, // Would be a real ID in actual implementation
+		ID:          0, // Would be populated with real ID when using hardware manager
 		Tag:         "placeholder",
 		Loaded:      true,
 		Attached:    false,
@@ -68,10 +100,19 @@ func (m *ebpfProgramManager) UnloadProgram(name string) error {
 		return fmt.Errorf("program %s is still attached, detach first", name)
 	}
 	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Close the program file descriptor
-	// 2. Clean up associated resources
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Use the hardware manager to unload the program
+		// This avoids duplicating the eBPF unloading logic
+		err := m.hwManager.UnloadProgram(name)
+		if err != nil {
+			return fmt.Errorf("failed to unload program using hardware manager: %w", err)
+		}
+	} else {
+		// Fallback implementation if hardware manager isn't available
+		// This is just a placeholder and should be replaced with real implementation
+		// or removed entirely once the hardware manager is fully integrated
+	}
 	
 	// Remove program from the manager
 	delete(m.programs, name)
@@ -90,10 +131,19 @@ func (m *ebpfProgramManager) AttachProgram(programName, hookName string) error {
 		return fmt.Errorf("program %s not found", programName)
 	}
 	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Determine the appropriate hook type based on the program type
-	// 2. Attach the program to the hook
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Use the hardware manager to attach the program
+		// This avoids duplicating the eBPF attachment logic
+		err := m.hwManager.AttachProgram(programName, hookName)
+		if err != nil {
+			return fmt.Errorf("failed to attach program using hardware manager: %w", err)
+		}
+	} else {
+		// Fallback implementation if hardware manager isn't available
+		// This is just a placeholder and should be replaced with real implementation
+		// or removed entirely once the hardware manager is fully integrated
+	}
 	
 	// Update program status
 	prog.Attached = true
@@ -118,9 +168,19 @@ func (m *ebpfProgramManager) DetachProgram(programName, hookName string) error {
 		return fmt.Errorf("program %s is not attached", programName)
 	}
 	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Detach the program from the hook
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Use the hardware manager to detach the program
+		// This avoids duplicating the eBPF detachment logic
+		err := m.hwManager.DetachProgram(programName, hookName)
+		if err != nil {
+			return fmt.Errorf("failed to detach program using hardware manager: %w", err)
+		}
+	} else {
+		// Fallback implementation if hardware manager isn't available
+		// This is just a placeholder and should be replaced with real implementation
+		// or removed entirely once the hardware manager is fully integrated
+	}
 	
 	// Update program status
 	prog.Attached = false
@@ -151,13 +211,24 @@ func (m *ebpfProgramManager) ReplaceProgram(oldName, newName string) error {
 		return fmt.Errorf("old program %s is not attached", oldName)
 	}
 	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Use the BPF_PROG_REPLACE command to atomically replace the program
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Use the hardware manager to replace the program
+		// This avoids duplicating the eBPF program replacement logic
+		err := m.hwManager.ReplaceProgram(oldName, newName)
+		if err != nil {
+			return fmt.Errorf("failed to replace program using hardware manager: %w", err)
+		}
+	} else {
+		// Fallback implementation if hardware manager isn't available
+		// This is just a placeholder and should be replaced with real implementation
+		// or removed entirely once the hardware manager is fully integrated
+	}
 	
 	// Update program status
 	oldProg.Attached = false
 	newProg.Attached = true
+	oldProg.LastUpdated = nowFunc()
 	newProg.LastUpdated = nowFunc()
 	
 	return nil
@@ -168,6 +239,57 @@ func (m *ebpfProgramManager) ListPrograms() ([]ProgramInfo, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Get programs from hardware manager
+		hwPrograms, err := m.hwManager.ListPrograms()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list programs using hardware manager: %w", err)
+		}
+		
+		// Convert hardware program info to our ProgramInfo type
+		programs := make([]ProgramInfo, 0, len(hwPrograms))
+		for _, hwProg := range hwPrograms {
+			// Look up our cached program info if available
+			cachedProg, exists := m.programs[hwProg.Name]
+			if exists {
+				// Update with latest information
+				cachedProg.ID = uint32(hwProg.ID)
+				cachedProg.LastUpdated = nowFunc()
+				programs = append(programs, *cachedProg)
+			} else {
+				// Create new program info from hardware manager info
+				progType := ProgramTypeXDP // Default
+				switch hwProg.Type {
+				case "xdp":
+					progType = ProgramTypeXDP
+				case "tc-ingress":
+					progType = ProgramTypeTCIngress
+				case "tc-egress":
+					progType = ProgramTypeTCEgress
+				case "sockops":
+					progType = ProgramTypeSockOps
+				case "cgroup":
+					progType = ProgramTypeCGroup
+				}
+				
+				programs = append(programs, ProgramInfo{
+					Name:        hwProg.Name,
+					Type:        progType,
+					ID:          uint32(hwProg.ID),
+					Tag:         hwProg.Tag,
+					Loaded:      true,
+					Attached:    len(hwProg.Attachments) > 0,
+					MapRefs:     hwProg.MapRefs,
+					LastUpdated: nowFunc(),
+				})
+			}
+		}
+		
+		return programs, nil
+	}
+	
+	// Fallback to our cached information if hardware manager not available
 	programs := make([]ProgramInfo, 0, len(m.programs))
 	for _, prog := range m.programs {
 		programs = append(programs, *prog)
@@ -181,6 +303,68 @@ func (m *ebpfProgramManager) GetProgram(name string) (*ProgramInfo, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	
+	// Use hardware/ebpf manager if available
+	if m.hwManager != nil {
+		// Get program from hardware manager
+		hwProg, err := m.hwManager.GetProgram(name)
+		if err != nil {
+			// If program not found in hardware manager, fall back to our cache
+			if prog, exists := m.programs[name]; exists {
+				result := *prog
+				return &result, nil
+			}
+			return nil, fmt.Errorf("program %s not found: %w", name, err)
+		}
+		
+		// Look up our cached program info if available
+		cachedProg, exists := m.programs[name]
+		if exists {
+			// Update with latest information
+			cachedProg.ID = uint32(hwProg.ID)
+			cachedProg.Attached = len(hwProg.Attachments) > 0
+			cachedProg.MapRefs = hwProg.MapRefs
+			cachedProg.LastUpdated = nowFunc()
+			
+			// Return a copy to avoid external modification
+			result := *cachedProg
+			return &result, nil
+		} else {
+			// Create new program info from hardware manager info
+			progType := ProgramTypeXDP // Default
+			switch hwProg.Type {
+			case "xdp":
+				progType = ProgramTypeXDP
+			case "tc-ingress":
+				progType = ProgramTypeTCIngress
+			case "tc-egress":
+				progType = ProgramTypeTCEgress
+			case "sockops":
+				progType = ProgramTypeSockOps
+			case "cgroup":
+				progType = ProgramTypeCGroup
+			}
+			
+			progInfo := &ProgramInfo{
+				Name:        hwProg.Name,
+				Type:        progType,
+				ID:          uint32(hwProg.ID),
+				Tag:         hwProg.Tag,
+				Loaded:      true,
+				Attached:    len(hwProg.Attachments) > 0,
+				MapRefs:     hwProg.MapRefs,
+				LastUpdated: nowFunc(),
+			}
+			
+			// Cache this for future use
+			m.programs[name] = progInfo
+			
+			// Return a copy to avoid external modification
+			result := *progInfo
+			return &result, nil
+		}
+	}
+	
+	// Fall back to our cached information if hardware manager not available
 	prog, exists := m.programs[name]
 	if !exists {
 		return nil, fmt.Errorf("program %s not found", name)

@@ -1,11 +1,16 @@
 # Example eBPF Program Configurations
+# Note: While we standardize on Cilium for network policies, these specialized eBPF
+# programs complement Cilium's functionality for specific use cases.
 
 ---
 # XDP-based DDoS Protection
+# Note: Consider using Cilium's native XDP capabilities where possible
 apiVersion: ebpf.fos1.io/v1alpha1
 kind: EBPFProgram
 metadata:
   name: ddos-protection
+  annotations:
+    cilium.io/integration: "compatible"  # Indicates compatibility with Cilium
 spec:
   description: "XDP-based DDoS protection for external interfaces"
   type: "xdp"  # xdp program
@@ -45,12 +50,15 @@ status:
 
 ---
 # TC-based Firewall
+# Note: For most firewall needs, prefer Cilium's CiliumNetworkPolicy
 apiVersion: ebpf.fos1.io/v1alpha1
 kind: EBPFProgram
 metadata:
   name: stateful-firewall
+  annotations:
+    cilium.io/integration: "complementary"  # Works alongside Cilium policies
 spec:
-  description: "TC-based stateful firewall"
+  description: "TC-based stateful firewall for specialized filtering"
   type: "tc-ingress"  # TC ingress hook
   interface: "eth0"
   priority: 10
@@ -86,12 +94,15 @@ status:
 
 ---
 # Advanced NAT with eBPF
+# Note: Cilium includes NAT capabilities that should be preferred when possible
 apiVersion: ebpf.fos1.io/v1alpha1
 kind: NATConfig
 metadata:
   name: ebpf-nat
+  annotations:
+    cilium.io/integration: "specialized"  # Used only for specialized NAT needs
 spec:
-  description: "eBPF-based NAT configuration"
+  description: "eBPF-based NAT configuration for specialized use cases"
   interfaces:
     source: "eth1"  # Internal interface
     destination: "eth0"  # External interface
@@ -127,12 +138,15 @@ status:
 
 ---
 # QoS with eBPF Traffic Control
+# Note: Consider Cilium's Bandwidth Manager for most QoS needs
 apiVersion: ebpf.fos1.io/v1alpha1
 kind: TrafficControl
 metadata:
   name: qos-policy
+  annotations:
+    cilium.io/integration: "specialized"  # Used for specialized QoS beyond Cilium's capabilities
 spec:
-  description: "QoS policy for different traffic classes"
+  description: "Advanced QoS policy for specialized traffic classes"
   interface: "eth0"
   direction: "egress"  # Egress traffic control
   priority: 20
@@ -177,12 +191,15 @@ status:
 
 ---
 # Socket Monitoring with eBPF
+# Note: Compatible with Cilium's network visibility features
 apiVersion: ebpf.fos1.io/v1alpha1
 kind: EBPFProgram
 metadata:
   name: socket-monitor
+  annotations:
+    cilium.io/integration: "compatible"  # Works well with Cilium
 spec:
-  description: "Socket operation monitoring with eBPF"
+  description: "Socket operation monitoring with eBPF - enhances Cilium's visibility"
   type: "sockops"  # Socket operations
   priority: 10
   settings:

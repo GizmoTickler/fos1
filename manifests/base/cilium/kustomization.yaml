@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - crds/routes.yaml
+  - crds/network_interfaces.yaml
+  - crds/firewall_rules.yaml
+  - crds/dpi_policies.yaml
+  - crds/vlans.yaml
+  - crds/cilium_network_policies.yaml
+  - cilium.yaml
+
+namespace: kube-system
+
+commonLabels:
+  app.kubernetes.io/part-of: fos1
+  app.kubernetes.io/component: network

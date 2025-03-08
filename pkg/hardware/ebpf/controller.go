@@ -18,6 +18,42 @@ type ConfigTranslator interface {
 	TranslateNATConfig(config interface{}) (Program, error)
 }
 
+// CiliumNetworkPolicy represents a Cilium network policy
+type CiliumNetworkPolicy struct {
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Metadata   CiliumPolicyMetadata   `json:"metadata"`
+	Spec       CiliumPolicySpec       `json:"spec"`
+}
+
+// CiliumPolicyMetadata contains metadata for a Cilium policy
+type CiliumPolicyMetadata struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// CiliumPolicySpec contains the specification of a Cilium policy
+type CiliumPolicySpec struct {
+	Description     string                 `json:"description,omitempty"`
+	EndpointSelector map[string]interface{} `json:"endpointSelector"`
+	Ingress         []interface{}          `json:"ingress,omitempty"`
+	Egress          []interface{}          `json:"egress,omitempty"`
+	NodeSelector    map[string]interface{} `json:"nodeSelector,omitempty"`
+	// Options for hardware acceleration
+	Options         map[string]string      `json:"options,omitempty"`
+}
+
+// HardwareAccelerationOptions contains options for hardware acceleration
+type HardwareAccelerationOptions struct {
+	Enabled       bool   `json:"enabled"`
+	XDPAccel      bool   `json:"xdpAccel"`      // XDP acceleration
+	XDPHWOffload  bool   `json:"xdpHWOffload"`  // XDP hardware offload
+	SmartNIC      bool   `json:"smartNIC"`      // SmartNIC offload
+	DPDKEnabled   bool   `json:"dpdkEnabled"`   // DPDK integration
+	HardwareType  string `json:"hardwareType"`  // Type of hardware
+	OffloadDevice string `json:"offloadDevice"` // Device for offload
+}
+
 // CiliumIntegration provides integration with Cilium.
 type CiliumIntegration interface {
 	// GetCiliumMaps gets maps managed by Cilium.
@@ -30,6 +66,12 @@ type CiliumIntegration interface {
 	UnregisterFromCilium(programName string) error
 	// GetCiliumEndpoints gets Cilium endpoint information.
 	GetCiliumEndpoints() ([]interface{}, error)
+	// GetCiliumNetworkPolicies retrieves all Cilium network policies.
+	GetCiliumNetworkPolicies(ctx context.Context) ([]CiliumNetworkPolicy, error)
+	// ApplyCiliumNetworkPolicy applies a new Cilium network policy.
+	ApplyCiliumNetworkPolicy(ctx context.Context, policy CiliumNetworkPolicy) error
+	// SyncCiliumConfiguration synchronizes configuration with Cilium.
+	SyncCiliumConfiguration() error
 }
 
 // Controller manages eBPF programs and maps based on configuration.
@@ -41,6 +83,8 @@ type Controller struct {
 	metrics           *MetricsCollector
 	
 	programConfigs    map[string]interface{}
+	ciliumPolicies    map[string]CiliumNetworkPolicy
+	hwAccelOptions    HardwareAccelerationOptions
 	configsMu         sync.RWMutex
 
 	ctx               context.Context
@@ -62,6 +106,8 @@ func NewController(
 		configTranslator:  configTranslator,
 		metrics:           NewMetricsCollector(programManager, mapManager),
 		programConfigs:    make(map[string]interface{}),
+		ciliumPolicies:    make(map[string]CiliumNetworkPolicy),
+		hwAccelOptions:    HardwareAccelerationOptions{Enabled: false},
 		ctx:               ctx,
 		cancel:            cancel,
 	}
@@ -72,8 +118,39 @@ func (c *Controller) Start() error {
 	// Start metrics collector
 	go c.metrics.Start(c.ctx)
 
+	// Sync with Cilium configuration
+	if c.ciliumIntegration != nil {
+		go func() {
+			// Initial sync
+			if err := c.ciliumIntegration.SyncCiliumConfiguration(); err != nil {
+				fmt.Printf("Failed to sync with Cilium configuration: %v\n", err)
+			}
+
+			// Periodic sync
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					if err := c.ciliumIntegration.SyncCiliumConfiguration(); err != nil {
+						fmt.Printf("Failed to sync with Cilium configuration: %v\n", err)
+					}
+				case <-c.ctx.Done():
+					return
+				}
+			}
+		}()
+
+		// Load existing Cilium network policies
+		go func() {
+			if err := c.loadCiliumNetworkPolicies(); err != nil {
+				fmt.Printf("Failed to load Cilium network policies: %v\n", err)
+			}
+		}()
+	}
+
 	// In a real implementation, we would start watchers for CRDs here
-	// For now, we'll just log a message
 	fmt.Printf("eBPF Controller started\n")
 
 	return nil
@@ -91,6 +168,8 @@ func (c *Controller) Stop() error {
 }
 
 // ApplyEBPFProgramConfig applies an eBPF program configuration.
+// Deprecated: This method is being replaced by native Cilium network policies.
+// DO NOT USE: All code should use ApplyCiliumNetworkPolicy instead.
 func (c *Controller) ApplyEBPFProgramConfig(name string, config interface{}) error {
 	c.configsMu.Lock()
 	defer c.configsMu.Unlock()
@@ -133,6 +212,8 @@ func (c *Controller) ApplyEBPFProgramConfig(name string, config interface{}) err
 }
 
 // ApplyTrafficControlConfig applies a traffic control configuration.
+// Deprecated: This method is being replaced by native Cilium network policies.
+// DO NOT USE: All code should use ApplyCiliumNetworkPolicy instead.
 func (c *Controller) ApplyTrafficControlConfig(name string, config interface{}) error {
 	c.configsMu.Lock()
 	defer c.configsMu.Unlock()
@@ -184,6 +265,8 @@ func (c *Controller) ApplyTrafficControlConfig(name string, config interface{}) 
 }
 
 // ApplyNATConfig applies a NAT configuration.
+// Deprecated: This method is being replaced by native Cilium network policies.
+// DO NOT USE: All code should use ApplyCiliumNetworkPolicy instead.
 func (c *Controller) ApplyNATConfig(name string, config interface{}) error {
 	c.configsMu.Lock()
 	defer c.configsMu.Unlock()
@@ -335,6 +418,384 @@ func (c *Controller) UnregisterFromCilium(programName string) error {
 	// Unregister from Cilium
 	if err := c.ciliumIntegration.UnregisterFromCilium(programName); err != nil {
 		return fmt.Errorf("failed to unregister program from Cilium: %w", err)
+	}
+
+	return nil
+}
+
+// loadCiliumNetworkPolicies loads existing Cilium network policies.
+func (c *Controller) loadCiliumNetworkPolicies() error {
+	// Check if Cilium integration is available
+	if c.ciliumIntegration == nil {
+		return fmt.Errorf("cilium integration not available")
+	}
+
+	// Get the current policies from Cilium
+	policies, err := c.ciliumIntegration.GetCiliumNetworkPolicies(c.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get Cilium network policies: %w", err)
+	}
+
+	// Store the policies
+	c.configsMu.Lock()
+	defer c.configsMu.Unlock()
+
+	// Clear existing policies
+	c.ciliumPolicies = make(map[string]CiliumNetworkPolicy)
+
+	// Add the new policies
+	for _, policy := range policies {
+		policyName := policy.Metadata.Name
+		if policy.Metadata.Namespace != "" {
+			policyName = fmt.Sprintf("%s/%s", policy.Metadata.Namespace, policyName)
+		}
+		c.ciliumPolicies[policyName] = policy
+
+		// Check for hardware acceleration in policy options
+		if policy.Spec.Options != nil {
+			if _, hasXDP := policy.Spec.Options["xdp"]; hasXDP {
+				// Enable XDP acceleration
+				c.hwAccelOptions.Enabled = true
+				c.hwAccelOptions.XDPAccel = true
+			}
+
+			if _, hasXDPOffload := policy.Spec.Options["xdpOffload"]; hasXDPOffload {
+				// Enable XDP hardware offload
+				c.hwAccelOptions.Enabled = true
+				c.hwAccelOptions.XDPHWOffload = true
+			}
+
+			if _, hasSmartNIC := policy.Spec.Options["smartNIC"]; hasSmartNIC {
+				// Enable SmartNIC offload
+				c.hwAccelOptions.Enabled = true
+				c.hwAccelOptions.SmartNIC = true
+			}
+
+			if device, hasDPDK := policy.Spec.Options["dpdk"]; hasDPDK {
+				// Enable DPDK integration
+				c.hwAccelOptions.Enabled = true
+				c.hwAccelOptions.DPDKEnabled = true
+				if device != "" {
+					c.hwAccelOptions.OffloadDevice = device
+				}
+			}
+
+			if hwType, hasHWType := policy.Spec.Options["hardwareType"]; hasHWType {
+				// Set hardware type
+				c.hwAccelOptions.HardwareType = hwType
+			}
+		}
+	}
+
+	fmt.Printf("Loaded %d Cilium network policies\n", len(policies))
+
+	// Apply hardware acceleration changes if needed
+	if c.hwAccelOptions.Enabled {
+		fmt.Printf("Hardware acceleration enabled: XDP=%v, XDP-HW=%v, SmartNIC=%v, DPDK=%v\n",
+			c.hwAccelOptions.XDPAccel, c.hwAccelOptions.XDPHWOffload,
+			c.hwAccelOptions.SmartNIC, c.hwAccelOptions.DPDKEnabled)
+		if err := c.applyHardwareAccelerationOptions(); err != nil {
+			fmt.Printf("Failed to apply hardware acceleration options: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// ApplyCiliumNetworkPolicy applies a Cilium network policy.
+func (c *Controller) ApplyCiliumNetworkPolicy(name string, policy CiliumNetworkPolicy) error {
+	// Check if Cilium integration is available
+	if c.ciliumIntegration == nil {
+		return fmt.Errorf("cilium integration not available")
+	}
+
+	// Apply the policy via Cilium integration
+	if err := c.ciliumIntegration.ApplyCiliumNetworkPolicy(c.ctx, policy); err != nil {
+		return fmt.Errorf("failed to apply Cilium network policy: %w", err)
+	}
+
+	// Store the policy
+	c.configsMu.Lock()
+	defer c.configsMu.Unlock()
+
+	policyName := policy.Metadata.Name
+	if policy.Metadata.Namespace != "" {
+		policyName = fmt.Sprintf("%s/%s", policy.Metadata.Namespace, policyName)
+	}
+	c.ciliumPolicies[policyName] = policy
+
+	// Check for hardware acceleration options
+	if policy.Spec.Options != nil {
+		hardwareChanged := false
+
+		if _, hasXDP := policy.Spec.Options["xdp"]; hasXDP && !c.hwAccelOptions.XDPAccel {
+			c.hwAccelOptions.Enabled = true
+			c.hwAccelOptions.XDPAccel = true
+			hardwareChanged = true
+		}
+
+		if _, hasXDPOffload := policy.Spec.Options["xdpOffload"]; hasXDPOffload && !c.hwAccelOptions.XDPHWOffload {
+			c.hwAccelOptions.Enabled = true
+			c.hwAccelOptions.XDPHWOffload = true
+			hardwareChanged = true
+		}
+
+		if _, hasSmartNIC := policy.Spec.Options["smartNIC"]; hasSmartNIC && !c.hwAccelOptions.SmartNIC {
+			c.hwAccelOptions.Enabled = true
+			c.hwAccelOptions.SmartNIC = true
+			hardwareChanged = true
+		}
+
+		if device, hasDPDK := policy.Spec.Options["dpdk"]; hasDPDK && !c.hwAccelOptions.DPDKEnabled {
+			c.hwAccelOptions.Enabled = true
+			c.hwAccelOptions.DPDKEnabled = true
+			if device != "" {
+				c.hwAccelOptions.OffloadDevice = device
+			}
+			hardwareChanged = true
+		}
+
+		if hwType, hasHWType := policy.Spec.Options["hardwareType"]; hasHWType && c.hwAccelOptions.HardwareType != hwType {
+			c.hwAccelOptions.HardwareType = hwType
+			hardwareChanged = true
+		}
+
+		// Apply hardware acceleration changes if needed
+		if hardwareChanged {
+			fmt.Printf("Hardware acceleration options changed: XDP=%v, XDP-HW=%v, SmartNIC=%v, DPDK=%v\n",
+				c.hwAccelOptions.XDPAccel, c.hwAccelOptions.XDPHWOffload,
+				c.hwAccelOptions.SmartNIC, c.hwAccelOptions.DPDKEnabled)
+			if err := c.applyHardwareAccelerationOptions(); err != nil {
+				fmt.Printf("Failed to apply hardware acceleration options: %v\n", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetCiliumNetworkPolicy gets a Cilium network policy.
+func (c *Controller) GetCiliumNetworkPolicy(name string) (CiliumNetworkPolicy, error) {
+	c.configsMu.RLock()
+	defer c.configsMu.RUnlock()
+
+	// Check if the policy exists
+	policy, ok := c.ciliumPolicies[name]
+	if !ok {
+		return CiliumNetworkPolicy{}, fmt.Errorf("cilium network policy %s not found", name)
+	}
+
+	return policy, nil
+}
+
+// ListCiliumNetworkPolicies lists all Cilium network policies.
+func (c *Controller) ListCiliumNetworkPolicies() (map[string]CiliumNetworkPolicy, error) {
+	c.configsMu.RLock()
+	defer c.configsMu.RUnlock()
+
+	// Create a copy of the policies
+	policies := make(map[string]CiliumNetworkPolicy, len(c.ciliumPolicies))
+	for name, policy := range c.ciliumPolicies {
+		policies[name] = policy
+	}
+
+	return policies, nil
+}
+
+// DeleteCiliumNetworkPolicy deletes a Cilium network policy.
+func (c *Controller) DeleteCiliumNetworkPolicy(name string) error {
+	// Check if Cilium integration is available
+	if c.ciliumIntegration == nil {
+		return fmt.Errorf("cilium integration not available")
+	}
+
+	c.configsMu.Lock()
+	defer c.configsMu.Unlock()
+
+	// Check if the policy exists
+	if _, ok := c.ciliumPolicies[name]; !ok {
+		return fmt.Errorf("cilium network policy %s not found", name)
+	}
+
+	// Delete the policy
+	delete(c.ciliumPolicies, name)
+
+	// Note: In a real implementation, we would also delete the policy from Cilium
+	// This would require adding a DeleteCiliumNetworkPolicy method to the CiliumIntegration interface
+
+	return nil
+}
+
+// applyHardwareAccelerationOptions applies hardware acceleration options to all relevant programs.
+func (c *Controller) applyHardwareAccelerationOptions() error {
+	// This would apply hardware acceleration options to all relevant programs
+	// For example, for XDP programs with hardware offload enabled:
+	if c.hwAccelOptions.XDPHWOffload {
+		// List all XDP programs
+		programs, err := c.programManager.ListPrograms()
+		if err != nil {
+			return fmt.Errorf("failed to list programs: %w", err)
+		}
+
+		// Apply offload option to all XDP programs
+		for _, program := range programs {
+			if program.Type == "xdp" {
+				fmt.Printf("Enabling XDP hardware offload for program %s\n", program.Name)
+				// In a real implementation, we would modify the program's configuration
+				// and potentially reload it with hardware offload enabled
+			}
+		}
+	}
+
+	return nil
+}
+
+// SetHardwareAccelerationOptions sets hardware acceleration options.
+func (c *Controller) SetHardwareAccelerationOptions(options HardwareAccelerationOptions) error {
+	c.configsMu.Lock()
+	defer c.configsMu.Unlock()
+
+	// Store the options
+	c.hwAccelOptions = options
+
+	// Apply the options
+	if options.Enabled {
+		fmt.Printf("Setting hardware acceleration options: XDP=%v, XDP-HW=%v, SmartNIC=%v, DPDK=%v\n",
+			options.XDPAccel, options.XDPHWOffload, options.SmartNIC, options.DPDKEnabled)
+		if err := c.applyHardwareAccelerationOptions(); err != nil {
+			return fmt.Errorf("failed to apply hardware acceleration options: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetHardwareAccelerationOptions gets the current hardware acceleration options.
+func (c *Controller) GetHardwareAccelerationOptions() HardwareAccelerationOptions {
+	c.configsMu.RLock()
+	defer c.configsMu.RUnlock()
+
+	return c.hwAccelOptions
+}
+
+
+
+// startCiliumSync starts a goroutine to periodically sync with Cilium.
+func (c *Controller) startCiliumSync() {
+	ticker := time.NewTicker(30 * time.Second) // Sync every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.syncWithCilium(); err != nil {
+				fmt.Printf("Failed to sync with Cilium: %v\n", err)
+			}
+		}
+	}
+}
+
+// syncWithCilium synchronizes the controller state with Cilium.
+func (c *Controller) syncWithCilium() error {
+	// Sync Cilium configuration
+	if err := c.ciliumIntegration.SyncCiliumConfiguration(); err != nil {
+		return fmt.Errorf("failed to sync Cilium configuration: %w", err)
+	}
+
+	// Get the latest Cilium network policies
+	policies, err := c.ciliumIntegration.GetCiliumNetworkPolicies(c.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get Cilium network policies: %w", err)
+	}
+
+	c.configsMu.Lock()
+	defer c.configsMu.Unlock()
+
+	// Track new and modified policies
+	newPolicies := make(map[string]struct{})
+	hardwareChanged := false
+
+	// Process all policies
+	for _, policy := range policies {
+		policyName := policy.Metadata.Name
+		if policy.Metadata.Namespace != "" {
+			policyName = fmt.Sprintf("%s/%s", policy.Metadata.Namespace, policyName)
+		}
+
+		newPolicies[policyName] = struct{}{}
+
+		// Check if policy is new or modified
+		existingPolicy, exists := c.ciliumPolicies[policyName]
+		if !exists || !reflect.DeepEqual(existingPolicy, policy) {
+			// Update or add the policy
+			c.ciliumPolicies[policyName] = policy
+
+			// Check for hardware acceleration options
+			if policy.Spec.Options != nil {
+				oldXDP := c.hwAccelOptions.XDPAccel
+				oldXDPHW := c.hwAccelOptions.XDPHWOffload
+				oldSmartNIC := c.hwAccelOptions.SmartNIC
+				oldDPDK := c.hwAccelOptions.DPDKEnabled
+				oldHWType := c.hwAccelOptions.HardwareType
+
+				// Update hardware acceleration options as needed
+				if _, hasXDP := policy.Spec.Options["xdp"]; hasXDP && !c.hwAccelOptions.XDPAccel {
+					c.hwAccelOptions.Enabled = true
+					c.hwAccelOptions.XDPAccel = true
+				}
+
+				if _, hasXDPOffload := policy.Spec.Options["xdpOffload"]; hasXDPOffload && !c.hwAccelOptions.XDPHWOffload {
+					c.hwAccelOptions.Enabled = true
+					c.hwAccelOptions.XDPHWOffload = true
+				}
+
+				if _, hasSmartNIC := policy.Spec.Options["smartNIC"]; hasSmartNIC && !c.hwAccelOptions.SmartNIC {
+					c.hwAccelOptions.Enabled = true
+					c.hwAccelOptions.SmartNIC = true
+				}
+
+				if device, hasDPDK := policy.Spec.Options["dpdk"]; hasDPDK && !c.hwAccelOptions.DPDKEnabled {
+					c.hwAccelOptions.Enabled = true
+					c.hwAccelOptions.DPDKEnabled = true
+					if device != "" {
+						c.hwAccelOptions.OffloadDevice = device
+					}
+				}
+
+				if hwType, hasHWType := policy.Spec.Options["hardwareType"]; hasHWType && c.hwAccelOptions.HardwareType != hwType {
+					c.hwAccelOptions.HardwareType = hwType
+				}
+
+				// Check if any hardware options changed
+				if oldXDP != c.hwAccelOptions.XDPAccel ||
+					oldXDPHW != c.hwAccelOptions.XDPHWOffload ||
+					oldSmartNIC != c.hwAccelOptions.SmartNIC ||
+					oldDPDK != c.hwAccelOptions.DPDKEnabled ||
+					oldHWType != c.hwAccelOptions.HardwareType {
+					hardwareChanged = true
+				}
+			}
+		}
+	}
+
+	// Find and remove deleted policies
+	for name := range c.ciliumPolicies {
+		if _, exists := newPolicies[name]; !exists {
+			delete(c.ciliumPolicies, name)
+		}
+	}
+
+	// Apply hardware acceleration changes if needed
+	if hardwareChanged {
+		fmt.Printf("Hardware acceleration options changed: XDP=%v, XDP-HW=%v, SmartNIC=%v, DPDK=%v\n",
+			c.hwAccelOptions.XDPAccel, c.hwAccelOptions.XDPHWOffload,
+			c.hwAccelOptions.SmartNIC, c.hwAccelOptions.DPDKEnabled)
+		
+		if err := c.applyHardwareAccelerationOptions(); err != nil {
+			fmt.Printf("Failed to apply hardware acceleration options: %v\n", err)
+		}
 	}
 
 	return nil
