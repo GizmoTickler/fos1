@@ -52,8 +52,8 @@ func NewRoutingController(
 ) *RoutingController {
 	// Create a GVR for Route CRDs
 	gvr := schema.GroupVersionResource{
-		Group:    "network.fos1.io",
-		Version:  "v1alpha1",
+		Group:    "networking.fos1.io",
+		Version:  "v1",
 		Resource: "routes",
 	}
 	
@@ -196,7 +196,24 @@ func (c *RoutingController) reconcileRoute(key string) error {
 func (c *RoutingController) handleRouteDelete(key string) error {
 	// The Route has been deleted, so remove any Cilium configuration
 	
-	// In a real implementation, we would use RouteSync to remove the route from Cilium
+	// Parse the key to get namespace and name
+	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		return fmt.Errorf("invalid key %s: %w", key, err)
+	}
+	
+	// Create a RouteSync object to identify the route
+	routeSync := &cilium.RouteSync{
+		Namespace: namespace,
+		Name:      name,
+		Action:    cilium.RouteSyncActionDelete,
+	}
+	
+	// Synchronize with Cilium to delete the route
+	ctx := context.Background()
+	if err := c.routeSynchronizer.SyncRoute(ctx, routeSync); err != nil {
+		return fmt.Errorf("failed to delete route %s from Cilium: %w", key, err)
+	}
 	
 	klog.Infof("Route %s deleted", key)
 	return nil
@@ -288,6 +305,109 @@ func (c *RoutingController) handleRouteCreateOrUpdate(obj *unstructured.Unstruct
 	}
 	
 	klog.Infof("Successfully synchronized route %s with Cilium", destination)
+	return nil
+}
+
+// handleRouteCreateOrUpdate handles creation or update of a Route CRD
+func (c *RoutingController) handleRouteCreateOrUpdate(obj *unstructured.Unstructured) error {
+	// Get the namespace and name
+	namespace := obj.GetNamespace()
+	name := obj.GetName()
+	klog.Infof("Processing Route %s/%s", namespace, name)
+	
+	// Get the spec
+	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
+	if err != nil || !found {
+		return fmt.Errorf("spec not found in Route %s/%s: %w", namespace, name, err)
+	}
+	
+	// Extract route fields from the spec
+	destination, found, err := unstructured.NestedString(spec, "destination")
+	if err != nil || !found {
+		return fmt.Errorf("destination not found in Route %s/%s: %w", namespace, name, err)
+	}
+	
+	// Parse the destination CIDR
+	_, destNet, err := net.ParseCIDR(destination)
+	if err != nil {
+		return fmt.Errorf("invalid destination CIDR %s in Route %s/%s: %w", destination, namespace, name, err)
+	}
+	
+	// Get optional fields
+	gatewayStr, _, _ := unstructured.NestedString(spec, "gateway")
+	interfaceName, _, _ := unstructured.NestedString(spec, "interface")
+	metric, _, _ := unstructured.NestedInt64(spec, "metric")
+	table, _, _ := unstructured.NestedString(spec, "table")
+	vrf, _, _ := unstructured.NestedString(spec, "vrf")
+	routeType, _, _ := unstructured.NestedString(spec, "type")
+	
+	// Parse gateway IP if provided
+	var gateway net.IP
+	if gatewayStr != "" {
+		gateway = net.ParseIP(gatewayStr)
+		if gateway == nil {
+			return fmt.Errorf("invalid gateway IP %s in Route %s/%s", gatewayStr, namespace, name)
+		}
+	}
+	
+	// Determine table ID from name if provided
+	tableID := 254 // Main table by default
+	if table != "" {
+		switch table {
+		case "main":
+			tableID = 254
+		case "local":
+			tableID = 255
+		case "default":
+			tableID = 253
+		default:
+			// Try to parse as an integer
+			var id int
+			_, err := fmt.Sscanf(table, "%d", &id)
+			if err == nil && id > 0 && id < 256 {
+				tableID = id
+			} else {
+				return fmt.Errorf("invalid routing table %s in Route %s/%s", table, namespace, name)
+			}
+		}
+	}
+	
+	// Create a Route object
+	route := cilium.Route{
+		Destination: destNet,
+		Gateway:     gateway,
+		OutputIface: interfaceName,
+		Priority:    int(metric),
+		Table:       tableID,
+		Type:        "static",
+	}
+	
+	// Set the route type if specified
+	if routeType != "" {
+		switch routeType {
+		case "static", "dynamic", "policy":
+			route.Type = routeType
+		default:
+			klog.Warningf("Unknown route type %s in Route %s/%s, defaulting to 'static'", routeType, namespace, name)
+		}
+	}
+	
+	// Create a RouteSync object
+	routeSync := &cilium.RouteSync{
+		Namespace: namespace,
+		Name:      name,
+		Route:     route,
+		Action:    cilium.RouteSyncActionUpsert,
+		VRF:       vrf,
+	}
+	
+	// Synchronize with Cilium
+	ctx := context.Background()
+	if err := c.routeSynchronizer.SyncRoute(ctx, routeSync); err != nil {
+		return fmt.Errorf("failed to sync route %s/%s with Cilium: %w", namespace, name, err)
+	}
+	
+	klog.Infof("Route %s/%s synchronized with Cilium", namespace, name)
 	return nil
 }
 
