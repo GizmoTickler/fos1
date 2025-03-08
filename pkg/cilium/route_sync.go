@@ -200,8 +200,38 @@ func (s *RouteSynchronizer) getRoutesForVRF(vrfID int) ([]Route, error) {
 
 // addVRFRouteToCilium adds a VRF route to Cilium
 func (s *RouteSynchronizer) addVRFRouteToCilium(route Route, vrfID int) error {
-	// In a real implementation, this would add a route to Cilium with VRF context
+	// In a real implementation, this would use Cilium's API to add a VRF route
 	
 	// Placeholder implementation
 	return nil
+}
+
+// SyncRoute synchronizes a single route with Cilium
+func (s *RouteSynchronizer) SyncRoute(ctx context.Context, routeSync *RouteSync) error {
+	// Convert RouteSync to Route
+	_, destination, err := net.ParseCIDR(routeSync.Destination)
+	if err != nil {
+		return fmt.Errorf("invalid destination CIDR %s: %w", routeSync.Destination, err)
+	}
+	
+	route := Route{
+		Destination: destination,
+		Gateway:     routeSync.Gateway,
+		OutputIface: routeSync.Interface,
+		Priority:    routeSync.Metric,
+		Table:       routeSync.TableID,
+		Type:        "static",
+	}
+	
+	// If VRF is specified, apply to specific VRF
+	if routeSync.VRF != "" {
+		// Parse VRF ID from name
+		vrfID := 0 // Default to main table
+		// In a real implementation, this would look up the VRF ID from the name
+		
+		return s.addVRFRouteToCilium(route, vrfID)
+	}
+	
+	// Otherwise, add to main routing table
+	return s.addRouteToCilium(route)
 }

@@ -1,0 +1,11 @@
+apiVersion: "networking.fos1.io/v1"
+kind: NetworkInterface
+metadata:
+  name: test-interface
+  namespace: default
+spec:
+  name: eth0
+  type: physical
+  address: "192.168.1.1/24"
+  mtu: 1500
+  vlan: 10

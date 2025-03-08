@@ -3,25 +3,34 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
+
 	"github.com/varuntirumala1/fos1/pkg/cilium"
+	"github.com/varuntirumala1/fos1/pkg/cilium/controllers"
 )
 
 func main() {
+	// Configure logging
+	klog.InitFlags(nil)
+	defer klog.Flush()
+	
 	// Parse command line flags
 	apiEndpoint := flag.String("api-endpoint", "http://localhost:9234", "Cilium API endpoint")
+	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file for accessing k8s cluster")
 	k8sContext := flag.String("k8s-context", "", "Kubernetes context to use")
+	inCluster := flag.Bool("in-cluster", false, "Use in-cluster configuration (service account)")
+	pollInterval := flag.Duration("poll-interval", 30*time.Second, "Poll interval for route synchronization")
+	
 	flag.Parse()
-
-	// Create Cilium client
-	client := cilium.NewDefaultCiliumClient(*apiEndpoint, *k8sContext)
-	controller := cilium.NewNetworkController(client)
 
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -32,76 +41,130 @@ func main() {
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-signalCh
-		log.Printf("Received signal %v, shutting down", sig)
+		klog.InfoS("Received signal, shutting down", "signal", sig)
 		cancel()
 	}()
 
-	// Example: Configure NAT for a source network
+	// Create Kubernetes client
+	var config *rest.Config
+	var err error
+	
+	if *inCluster {
+		klog.InfoS("Using in-cluster configuration")
+		config, err = rest.InClusterConfig()
+	} else {
+		klog.InfoS("Using kubeconfig", "path", *kubeconfig, "context", *k8sContext)
+		configLoadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+		if *kubeconfig != "" {
+			configLoadingRules.ExplicitPath = *kubeconfig
+		}
+		
+		configOverrides := &clientcmd.ConfigOverrides{}
+		if *k8sContext != "" {
+			configOverrides.CurrentContext = *k8sContext
+		}
+		
+		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			configLoadingRules,
+			configOverrides,
+		)
+		
+		config, err = kubeConfig.ClientConfig()
+	}
+	
+	if err != nil {
+		klog.Fatalf("Failed to create Kubernetes client config: %v", err)
+	}
+	
+	// Create dynamic client for CRDs
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Failed to create Kubernetes dynamic client: %v", err)
+	}
+	
+	// Create Cilium client
+	klog.InfoS("Creating Cilium client", "apiEndpoint", *apiEndpoint)
+	ciliumClient := cilium.NewDefaultCiliumClient(*apiEndpoint, *k8sContext)
+	
+	// Create NetworkController
+	networkController := cilium.NewNetworkController(ciliumClient)
+	
+	// Create RouteSynchronizer
+	routeSynchronizer := cilium.NewRouteSynchronizer(ciliumClient, *pollInterval)
+	
+	// Create Controller Manager
+	klog.InfoS("Creating controller manager")
+	controllerManager := controllers.NewControllerManager(
+		dynamicClient,
+		ciliumClient,
+		routeSynchronizer,
+		networkController,
+	)
+	
+	// Initialize controllers
+	klog.InfoS("Initializing controllers")
+	controllerManager.Initialize()
+	
+	// Start controllers
+	klog.InfoS("Starting controllers")
+	if err := controllerManager.Start(ctx); err != nil {
+		klog.Fatalf("Failed to start controllers: %v", err)
+	}
+	
+	// Example of direct NetworkController usage
+	klog.InfoS("Configuring base network settings")
+	
+	// Configure NAT for a source network
 	sourceNetwork := "192.168.1.0/24"
 	outInterface := "eth0"
-	if err := controller.ConfigureNAT(ctx, sourceNetwork, outInterface, false); err != nil {
-		log.Fatalf("Failed to configure NAT: %v", err)
+	if err := networkController.ConfigureNAT(ctx, sourceNetwork, outInterface, false); err != nil {
+		klog.Warningf("Failed to configure NAT: %v", err)
+	} else {
+		klog.InfoS("Configured NAT", "sourceNetwork", sourceNetwork, "interface", outInterface)
 	}
-	log.Printf("Configured NAT for %s via %s", sourceNetwork, outInterface)
-
-	// Example: Configure NAT66 for an IPv6 network
+	
+	// Configure NAT66 for an IPv6 network
 	sourceNetworkV6 := "2001:db8::/64"
-	if err := controller.ConfigureNAT(ctx, sourceNetworkV6, outInterface, true); err != nil {
-		log.Fatalf("Failed to configure NAT66: %v", err)
+	if err := networkController.ConfigureNAT(ctx, sourceNetworkV6, outInterface, true); err != nil {
+		klog.Warningf("Failed to configure NAT66: %v", err)
+	} else {
+		klog.InfoS("Configured NAT66", "sourceNetwork", sourceNetworkV6, "interface", outInterface)
 	}
-	log.Printf("Configured NAT66 for %s via %s", sourceNetworkV6, outInterface)
-
-	// Example: Configure inter-VLAN routing
+	
+	// Configure inter-VLAN routing
 	vlans := []uint16{10, 20, 30}
-	if err := controller.ConfigureInterVLANRouting(ctx, vlans, false); err != nil {
-		log.Fatalf("Failed to configure inter-VLAN routing: %v", err)
+	if err := networkController.ConfigureInterVLANRouting(ctx, vlans, false); err != nil {
+		klog.Warningf("Failed to configure inter-VLAN routing: %v", err)
+	} else {
+		klog.InfoS("Configured inter-VLAN routing", "vlans", vlans)
 	}
-	log.Printf("Configured routing between VLANs: %v", vlans)
-
-	// Example: Add specific VLAN policy
-	fromVLAN := uint16(10)
-	toVLAN := uint16(20)
-	rules := []cilium.VLANRule{
-		{
-			Protocol: "tcp",
-			Port:     80,
-			Allow:    true,
-		},
-		{
-			Protocol: "tcp",
-			Port:     443,
-			Allow:    true,
-		},
-	}
-	if err := controller.AddVLANPolicy(ctx, fromVLAN, toVLAN, false, rules); err != nil {
-		log.Fatalf("Failed to add VLAN policy: %v", err)
-	}
-	log.Printf("Added policy for VLAN %d to VLAN %d", fromVLAN, toVLAN)
-
-	// Example: Set up DPI integration
+	
+	// Set up DPI integration
 	appPolicies := map[string]cilium.AppPolicy{
 		"http": {
 			Application: "http",
 			Action:      "allow",
 			Priority:    1,
-			DSCP:        0,
 		},
 		"ssh": {
 			Application: "ssh",
 			Action:      "allow",
 			Priority:    2,
-			DSCP:        0,
 		},
 	}
-	if err := controller.IntegrateDPI(ctx, appPolicies); err != nil {
-		log.Fatalf("Failed to integrate DPI: %v", err)
+	if err := networkController.IntegrateDPI(ctx, appPolicies); err != nil {
+		klog.Warningf("Failed to integrate DPI: %v", err)
+	} else {
+		klog.InfoS("Integrated DPI with policies")
 	}
-	log.Printf("Integrated DPI with policies for applications")
-
+	
 	// Run indefinitely until signal received
-	log.Println("Cilium controller running, press Ctrl+C to stop")
+	klog.InfoS("Cilium controller manager running", "status", "ready")
 	<-ctx.Done()
-	log.Println("Shutting down...")
-	time.Sleep(1 * time.Second) // Allow time for cleanup
-	log.Println("Cilium controller stopped")
+	
+	// Graceful shutdown
+	klog.InfoS("Shutting down controller manager")
+	controllerManager.Stop()
+	
+	klog.InfoS("Cilium controller stopped")
 }

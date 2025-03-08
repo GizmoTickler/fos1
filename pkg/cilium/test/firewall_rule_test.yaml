@@ -1,0 +1,14 @@
+apiVersion: "security.fos1.io/v1"
+kind: FirewallRule
+metadata:
+  name: test-rule
+  namespace: default
+spec:
+  fromZone: "LAN"
+  toZone: "WAN"
+  protocol: "tcp"
+  sourceIP: "192.168.1.0/24"
+  destIP: "0.0.0.0/0"
+  destPort: 80
+  action: "allow"
+  priority: 100

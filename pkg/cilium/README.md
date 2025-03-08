@@ -12,11 +12,22 @@ This package provides a unified network controller based on Cilium's eBPF capabi
 
 ## Components
 
+### Core Components
 - `NetworkController`: Main controller for managing all network functionality
 - `CiliumClient`: Interface for interacting with Cilium's API
 - `DefaultCiliumClient`: Implementation of the CiliumClient interface
+- `RouteSynchronizer`: Ensures routes are synchronized between kernel routing tables and Cilium's eBPF maps
+
+### Controllers
+- `NetworkInterfaceController`: Watches for NetworkInterface CRDs and translates them to Cilium configurations
+- `FirewallController`: Watches for FirewallRule CRDs and translates them to Cilium network policies
+- `RoutingController`: Watches for Route CRDs and translates them to Cilium route configurations
+- `DPIController`: Watches for DPIPolicy CRDs and translates them to Cilium DPI configurations
+- `ControllerManager`: Coordinates all controllers for seamless integration
 
 ## Usage
+
+### Basic NetworkController Usage
 
 ```go
 // Create Cilium client
@@ -49,6 +60,79 @@ err = controller.IntegrateDPI(ctx, map[string]cilium.AppPolicy{
         Priority:    1,
     },
 })
+```
+
+### Setting Up Controllers with Kubernetes CRDs
+
+```go
+// Create Kubernetes dynamic client
+config, err := rest.InClusterConfig()
+if err != nil {
+    // handle error
+}
+dynamicClient, err := dynamic.NewForConfig(config)
+if err != nil {
+    // handle error
+}
+
+// Create Cilium client
+ciliumClient := cilium.NewDefaultCiliumClient("http://localhost:9234", "")
+
+// Create NetworkController
+networkController := cilium.NewNetworkController(ciliumClient)
+
+// Create RouteSynchronizer
+routeSynchronizer := cilium.NewRouteSynchronizer(
+    ciliumClient,
+    30*time.Second, // Poll period
+)
+
+// Create ControllerManager
+manager := controllers.NewControllerManager(
+    dynamicClient,
+    ciliumClient,
+    routeSynchronizer,
+    networkController,
+)
+
+// Initialize controllers
+manager.Initialize()
+
+// Start controllers
+ctx := context.Background()
+err = manager.Start(ctx)
+if err != nil {
+    // handle error
+}
+
+// Later, when shutting down
+manager.Stop()
+```
+
+### Integration with VLAN Manager
+
+```go
+// Create VLAN manager with Cilium integration
+vlanManager := vlan.NewVLANManager()
+
+// Create VLAN config and event handler
+vlanConfig := &vlan.VLANControllerConfig{
+    // Standard VLAN config...
+    CiliumClient:       ciliumClient, // Pass the Cilium client
+    NetworkController:  networkController, // Pass the Cilium network controller
+}
+
+// Initialize VLAN controller with Cilium event handlers
+vlanController, err := vlan.NewVLANController(vlanConfig)
+if err != nil {
+    // handle error
+}
+
+// Start VLAN controller
+err = vlanController.Start(ctx)
+if err != nil {
+    // handle error
+}
 ```
 
 ## Migration from NFTables

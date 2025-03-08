@@ -1,0 +1,11 @@
+apiVersion: "security.fos1.io/v1"
+kind: DPIPolicy
+metadata:
+  name: test-dpi-policy
+  namespace: default
+spec:
+  application: "http"
+  action: "allow"
+  priority: 1
+  dscp: 0
+  log: true
