@@ -20,13 +20,13 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	networkv1 "github.com/fos/pkg/apis/network/v1"
-	clientset "github.com/fos/pkg/client/clientset/versioned"
-	informers "github.com/fos/pkg/client/informers/externalversions"
-	listers "github.com/fos/pkg/client/listers/network/v1"
-	"github.com/fos/pkg/dhcp/kea"
-	"github.com/fos/pkg/dhcp/types"
-	"github.com/fos/pkg/dns/manager"
+	networkv1 "github.com/varuntirumala1/fos1/pkg/apis/network/v1"
+	clientset "github.com/varuntirumala1/fos1/pkg/client/clientset/versioned"
+	informers "github.com/varuntirumala1/fos1/pkg/client/informers/externalversions"
+	listers "github.com/varuntirumala1/fos1/pkg/client/listers/network/v1"
+	"github.com/varuntirumala1/fos1/pkg/dhcp"
+	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
+	"github.com/varuntirumala1/fos1/pkg/dns/manager"
 )
 
 const (
@@ -65,7 +65,7 @@ type Controller struct {
 	recorder record.EventRecorder
 
 	// keaManager manages the Kea DHCP server configuration
-	keaManager *kea.Manager
+	keaManager *dhcp.KeaManager
 
 	// dnsConnector connects DHCP to DNS for updates
 	dnsConnector *DNSConnector
@@ -94,7 +94,10 @@ func NewController(
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: ControllerName})
 
 	// Create Kea manager
-	keaManager := kea.NewManager("/etc/kea", "kea-dhcp")
+	keaManager, err := dhcp.NewKeaManager("/etc/kea", "kea-dhcp")
+	if err != nil {
+		klog.Fatalf("Error creating Kea manager: %v", err)
+	}
 
 	// Create DNS connector
 	dnsConnector := NewDNSConnector(dnsManager)
@@ -344,7 +347,16 @@ func (c *Controller) syncDHCPv4Handler(key string) error {
 	}
 
 	// Update Kea configuration
-	err = c.keaManager.UpdateDHCPv4Subnet(vlan.Spec.ID, subnetConfig)
+	// Create Kea configuration for DHCPv4
+	keaConfig, err := c.keaManager.ConfigureFromDHCPv4(&types.DHCPv4Service{
+		Spec: *subnetConfig,
+	}, vlan.Spec.Subnet, vlan.Spec.Gateway)
+	if err != nil {
+		return err
+	}
+	
+	// Update the Kea configuration
+	err = c.keaManager.UpdateConfig(fmt.Sprintf("%d", vlan.Spec.ID), keaConfig)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("failed to update Kea DHCPv4 configuration for VLAN %d: %v", 
 			vlan.Spec.ID, err))
@@ -352,7 +364,7 @@ func (c *Controller) syncDHCPv4Handler(key string) error {
 	}
 
 	// Restart Kea service for this VLAN
-	err = c.keaManager.RestartDHCPv4Service(vlan.Spec.ID)
+	err = c.keaManager.RestartService(fmt.Sprintf("%d", vlan.Spec.ID))
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("failed to restart Kea DHCPv4 service for VLAN %d: %v", 
 			vlan.Spec.ID, err))
@@ -404,7 +416,16 @@ func (c *Controller) syncDHCPv6Handler(key string) error {
 	}
 
 	// Update Kea configuration
-	err = c.keaManager.UpdateDHCPv6Subnet(vlan.Spec.ID, subnetConfig)
+	// Create Kea configuration for DHCPv6
+	keaConfig, err := c.keaManager.ConfigureFromDHCPv6(&types.DHCPv6Service{
+		Spec: *subnetConfig,
+	}, vlan.Spec.Subnet6, vlan.Spec.Gateway6)
+	if err != nil {
+		return err
+	}
+	
+	// Update the Kea configuration
+	err = c.keaManager.UpdateConfig(fmt.Sprintf("%d", vlan.Spec.ID), keaConfig)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("failed to update Kea DHCPv6 configuration for VLAN %d: %v", 
 			vlan.Spec.ID, err))
@@ -412,7 +433,7 @@ func (c *Controller) syncDHCPv6Handler(key string) error {
 	}
 
 	// Restart Kea service for this VLAN
-	err = c.keaManager.RestartDHCPv6Service(vlan.Spec.ID)
+	err = c.keaManager.RestartService(fmt.Sprintf("%d", vlan.Spec.ID))
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("failed to restart Kea DHCPv6 service for VLAN %d: %v", 
 			vlan.Spec.ID, err))
