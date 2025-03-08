@@ -1,0 +1,162 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ebpfprograms.networking.fos1.io
+spec:
+  group: networking.fos1.io
+  names:
+    kind: EBPFProgram
+    listKind: EBPFProgramList
+    plural: ebpfprograms
+    singular: ebpfprogram
+    shortNames:
+      - ebpf
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - type
+              properties:
+                description:
+                  type: string
+                  description: "Description of the eBPF program"
+                type:
+                  type: string
+                  description: "Type of eBPF program (xdp, tc-ingress, tc-egress, sockops, cgroup)"
+                  enum:
+                    - xdp
+                    - tc-ingress
+                    - tc-egress
+                    - sockops
+                    - cgroup
+                interface:
+                  type: string
+                  description: "Network interface to attach the program to (if applicable)"
+                priority:
+                  type: integer
+                  description: "Program priority (used for tc programs)"
+                  default: 10
+                settings:
+                  type: object
+                  description: "Program-specific settings"
+                  properties:
+                    rateLimiting:
+                      type: object
+                      description: "Rate limiting configuration (for XDP programs)"
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        packetsPerSecond:
+                          type: integer
+                          default: 1000
+                    blacklist:
+                      type: object
+                      description: "Blacklist configuration (for XDP programs)"
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        ips:
+                          type: array
+                          items:
+                            type: string
+                            format: ipv4
+                    stateful:
+                      type: boolean
+                      description: "Enable stateful tracking (for XDP programs)"
+                      default: false
+                    trafficControl:
+                      type: object
+                      description: "Traffic control configuration (for TC programs)"
+                      properties:
+                        enableMarking:
+                          type: boolean
+                          default: false
+                        defaultMark:
+                          type: integer
+                          default: 0
+                        markMask:
+                          type: integer
+                          default: 0xFFFFFFFF
+                        enableQoS:
+                          type: boolean
+                          default: false
+                        enableDSCP:
+                          type: boolean
+                          default: false
+                    socketOps:
+                      type: object
+                      description: "Socket operations configuration (for sockops programs)"
+                      properties:
+                        enableMonitoring:
+                          type: boolean
+                          default: false
+                        enableRedirection:
+                          type: boolean
+                          default: false
+                        enableTracing:
+                          type: boolean
+                          default: false
+                    containerPolicy:
+                      type: object
+                      description: "Container policy configuration (for cgroup programs)"
+                      properties:
+                        enableAccounting:
+                          type: boolean
+                          default: false
+                        enableEgressControl:
+                          type: boolean
+                          default: false
+                        enableDeviceControl:
+                          type: boolean
+                          default: false
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: "State of the eBPF program (Pending, Active, Failed)"
+                  enum:
+                    - Pending
+                    - Active
+                    - Failed
+                reason:
+                  type: string
+                  description: "Reason for the current state"
+                attachedTo:
+                  type: string
+                  description: "Interface or hook the program is attached to"
+                metrics:
+                  type: object
+                  description: "Program metrics"
+                  x-kubernetes-preserve-unknown-fields: true
+                lastUpdated:
+                  type: string
+                  format: date-time
+                  description: "Last time the status was updated"
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Interface
+          type: string
+          jsonPath: .spec.interface
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

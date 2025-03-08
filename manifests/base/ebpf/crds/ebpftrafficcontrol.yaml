@@ -1,0 +1,237 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ebpftrafficcontrols.networking.fos1.io
+spec:
+  group: networking.fos1.io
+  names:
+    kind: EBPFTrafficControl
+    listKind: EBPFTrafficControlList
+    plural: ebpftrafficcontrols
+    singular: ebpftrafficcontrol
+    shortNames:
+      - etcl
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - interface
+                - direction
+              properties:
+                description:
+                  type: string
+                  description: "Description of the traffic control policy"
+                interface:
+                  type: string
+                  description: "Interface to apply the traffic control to"
+                direction:
+                  type: string
+                  description: "Direction of traffic to control (ingress or egress)"
+                  enum:
+                    - ingress
+                    - egress
+                queueingDiscipline:
+                  type: object
+                  description: "Queueing discipline configuration"
+                  properties:
+                    type:
+                      type: string
+                      description: "Type of queueing discipline"
+                      enum:
+                        - htb    # Hierarchical Token Bucket
+                        - tbf    # Token Bucket Filter
+                        - sfq    # Stochastic Fairness Queueing
+                        - fq_codel # Fair Queueing with Controlled Delay
+                        - hfsc   # Hierarchical Fair Service Curve
+                    rate:
+                      type: string
+                      description: "Rate limit (e.g., '10Mbit', '1Gbit')"
+                    burst:
+                      type: string
+                      description: "Burst size (e.g., '15kb')"
+                    latency:
+                      type: string
+                      description: "Target latency (e.g., '50ms')"
+                    quantum:
+                      type: integer
+                      description: "Quantum for SFQ"
+                filters:
+                  type: array
+                  description: "Traffic filters"
+                  items:
+                    type: object
+                    properties:
+                      description:
+                        type: string
+                      priority:
+                        type: integer
+                        description: "Filter priority (lower numbers have higher priority)"
+                      protocol:
+                        type: string
+                        description: "Protocol to match"
+                        enum:
+                          - ip
+                          - tcp
+                          - udp
+                          - icmp
+                          - all
+                      match:
+                        type: object
+                        description: "Match criteria"
+                        properties:
+                          srcIP:
+                            type: string
+                            format: cidr
+                          dstIP:
+                            type: string
+                            format: cidr
+                          srcPort:
+                            oneOf:
+                              - type: integer
+                                minimum: 1
+                                maximum: 65535
+                              - type: string
+                          dstPort:
+                            oneOf:
+                              - type: integer
+                                minimum: 1
+                                maximum: 65535
+                              - type: string
+                          dscp:
+                            type: integer
+                            minimum: 0
+                            maximum: 63
+                          mark:
+                            type: integer
+                      action:
+                        type: object
+                        description: "Action to take on matching traffic"
+                        properties:
+                          type:
+                            type: string
+                            enum:
+                              - pass
+                              - drop
+                              - mark
+                              - police
+                              - redirect
+                          mark:
+                            type: integer
+                            description: "Mark value if action type is 'mark'"
+                          police:
+                            type: object
+                            description: "Policing parameters if action type is 'police'"
+                            properties:
+                              rate:
+                                type: string
+                                description: "Rate limit (e.g., '5Mbit')"
+                              burst:
+                                type: string
+                                description: "Burst size (e.g., '10kb')"
+                              exceed:
+                                type: string
+                                enum:
+                                  - drop
+                                  - continue
+                                  - remark
+                          redirect:
+                            type: string
+                            description: "Interface to redirect to if action type is 'redirect'"
+                      classID:
+                        type: integer
+                        description: "Class ID for hierarchical queueing"
+                classes:
+                  type: array
+                  description: "Traffic classes for hierarchical queueing"
+                  items:
+                    type: object
+                    required:
+                      - id
+                    properties:
+                      id:
+                        type: integer
+                        description: "Class ID"
+                      rate:
+                        type: string
+                        description: "Guaranteed rate (e.g., '1Mbit')"
+                      ceiling:
+                        type: string
+                        description: "Maximum rate (e.g., '10Mbit')"
+                      priority:
+                        type: integer
+                        description: "Class priority (lower is higher priority)"
+                      burst:
+                        type: string
+                        description: "Burst size (e.g., '15kb')"
+                ebpfProgram:
+                  type: string
+                  description: "Reference to an EBPFProgram resource to use for advanced traffic control"
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                metrics:
+                  type: object
+                  properties:
+                    packets:
+                      type: integer
+                    bytes:
+                      type: integer
+                    drops:
+                      type: integer
+                    overlimits:
+                      type: integer
+                    queueLength:
+                      type: integer
+                    backlog:
+                      type: integer
+                  x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Interface
+          type: string
+          jsonPath: .spec.interface
+        - name: Direction
+          type: string
+          jsonPath: .spec.direction
+        - name: QDisc
+          type: string
+          jsonPath: .spec.queueingDiscipline.type
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

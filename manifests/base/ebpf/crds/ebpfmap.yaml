@@ -1,0 +1,127 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ebpfmaps.networking.fos1.io
+spec:
+  group: networking.fos1.io
+  names:
+    kind: EBPFMap
+    listKind: EBPFMapList
+    plural: ebpfmaps
+    singular: ebpfmap
+    shortNames:
+      - ebpfmap
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - type
+                - maxEntries
+              properties:
+                description:
+                  type: string
+                  description: "Description of the eBPF map"
+                type:
+                  type: string
+                  description: "Type of the BPF map"
+                  enum:
+                    - hash
+                    - array
+                    - lru_hash
+                    - lpm_trie
+                    - percpu_hash
+                    - percpu_array
+                    - stack
+                    - queue
+                    - ringbuf
+                    - perf_event_array
+                maxEntries:
+                  type: integer
+                  description: "Maximum number of entries in the map"
+                  minimum: 1
+                keySize:
+                  type: integer
+                  description: "Size of the key in bytes"
+                  minimum: 1
+                valueSize:
+                  type: integer
+                  description: "Size of the value in bytes"
+                  minimum: 1
+                pinPath:
+                  type: string
+                  description: "Path to pin the map in the bpffs"
+                flags:
+                  type: integer
+                  description: "Map flags (if needed)"
+                  default: 0
+                accessedBy:
+                  type: array
+                  description: "List of programs that can access this map"
+                  items:
+                    type: string
+                initData:
+                  type: array
+                  description: "Initial data to populate the map with"
+                  items:
+                    type: object
+                    properties:
+                      key:
+                        type: string
+                        description: "Key for the map entry (in hex format)"
+                      value:
+                        type: string
+                        description: "Value for the map entry (in hex format)"
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: "State of the eBPF map (Pending, Created, Failed)"
+                  enum:
+                    - Pending
+                    - Created
+                    - Failed
+                reason:
+                  type: string
+                  description: "Reason for the current state"
+                pinPath:
+                  type: string
+                  description: "Actual pin path if the map is pinned"
+                fd:
+                  type: integer
+                  description: "File descriptor of the map (internal use)"
+                entryCount:
+                  type: integer
+                  description: "Current number of entries in the map"
+                memoryUsage:
+                  type: integer
+                  description: "Estimated memory usage in bytes"
+                lastUpdated:
+                  type: string
+                  format: date-time
+                  description: "Last time the status was updated"
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Entries
+          type: integer
+          jsonPath: .status.entryCount
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

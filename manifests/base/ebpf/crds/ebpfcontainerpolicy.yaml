@@ -1,0 +1,349 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ebpfcontainerpolicies.networking.fos1.io
+spec:
+  group: networking.fos1.io
+  names:
+    kind: EBPFContainerPolicy
+    listKind: EBPFContainerPolicyList
+    plural: ebpfcontainerpolicies
+    singular: ebpfcontainerpolicy
+    shortNames:
+      - ecpol
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - selector
+              properties:
+                description:
+                  type: string
+                  description: "Description of the container policy"
+                selector:
+                  type: object
+                  description: "Selector to match containers/pods to apply the policy to"
+                  properties:
+                    podSelector:
+                      type: object
+                      description: "Match pods by label selector"
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - key
+                              - operator
+                            properties:
+                              key:
+                                type: string
+                              operator:
+                                type: string
+                                enum:
+                                  - In
+                                  - NotIn
+                                  - Exists
+                                  - DoesNotExist
+                              values:
+                                type: array
+                                items:
+                                  type: string
+                    namespaceSelector:
+                      type: object
+                      description: "Match pods in namespaces by label selector"
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - key
+                              - operator
+                            properties:
+                              key:
+                                type: string
+                              operator:
+                                type: string
+                                enum:
+                                  - In
+                                  - NotIn
+                                  - Exists
+                                  - DoesNotExist
+                              values:
+                                type: array
+                                items:
+                                  type: string
+                resourceLimits:
+                  type: object
+                  description: "Network resource limits for the containers"
+                  properties:
+                    enableAccounting:
+                      type: boolean
+                      description: "Enable resource accounting"
+                      default: true
+                    bandwidthLimits:
+                      type: object
+                      description: "Bandwidth limits"
+                      properties:
+                        ingressBitsPerSecond:
+                          type: integer
+                          description: "Ingress bandwidth limit in bits per second"
+                        egressBitsPerSecond:
+                          type: integer
+                          description: "Egress bandwidth limit in bits per second"
+                        burstBytes:
+                          type: integer
+                          description: "Allowed burst size in bytes"
+                    connectionLimits:
+                      type: object
+                      description: "Connection limits"
+                      properties:
+                        maxConnections:
+                          type: integer
+                          description: "Maximum number of concurrent connections"
+                        maxConnectionRate:
+                          type: integer
+                          description: "Maximum connection establishment rate per second"
+                networkControls:
+                  type: object
+                  description: "Network control settings"
+                  properties:
+                    enableEgressControl:
+                      type: boolean
+                      description: "Enable egress traffic control"
+                      default: false
+                    enableIngressControl:
+                      type: boolean
+                      description: "Enable ingress traffic control"
+                      default: false
+                    defaultEgressAction:
+                      type: string
+                      description: "Default action for egress traffic"
+                      enum:
+                        - allow
+                        - deny
+                      default: allow
+                    defaultIngressAction:
+                      type: string
+                      description: "Default action for ingress traffic"
+                      enum:
+                        - allow
+                        - deny
+                      default: allow
+                    egressRules:
+                      type: array
+                      description: "Egress rules"
+                      items:
+                        type: object
+                        properties:
+                          description:
+                            type: string
+                          ipBlock:
+                            type: object
+                            properties:
+                              cidr:
+                                type: string
+                                format: cidr
+                              except:
+                                type: array
+                                items:
+                                  type: string
+                                  format: cidr
+                          ports:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                protocol:
+                                  type: string
+                                  enum:
+                                    - TCP
+                                    - UDP
+                                port:
+                                  oneOf:
+                                    - type: integer
+                                      minimum: 1
+                                      maximum: 65535
+                                    - type: string
+                                endPort:
+                                  type: integer
+                                  minimum: 1
+                                  maximum: 65535
+                          action:
+                            type: string
+                            enum:
+                              - allow
+                              - deny
+                              - log
+                            default: allow
+                    ingressRules:
+                      type: array
+                      description: "Ingress rules"
+                      items:
+                        type: object
+                        properties:
+                          description:
+                            type: string
+                          ipBlock:
+                            type: object
+                            properties:
+                              cidr:
+                                type: string
+                                format: cidr
+                              except:
+                                type: array
+                                items:
+                                  type: string
+                                  format: cidr
+                          ports:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                protocol:
+                                  type: string
+                                  enum:
+                                    - TCP
+                                    - UDP
+                                port:
+                                  oneOf:
+                                    - type: integer
+                                      minimum: 1
+                                      maximum: 65535
+                                    - type: string
+                                endPort:
+                                  type: integer
+                                  minimum: 1
+                                  maximum: 65535
+                          action:
+                            type: string
+                            enum:
+                              - allow
+                              - deny
+                              - log
+                            default: allow
+                deviceControl:
+                  type: object
+                  description: "Device access control settings"
+                  properties:
+                    enableDeviceControl:
+                      type: boolean
+                      description: "Enable device access control"
+                      default: false
+                    defaultDeviceAction:
+                      type: string
+                      description: "Default action for device access"
+                      enum:
+                        - allow
+                        - deny
+                      default: deny
+                    allowedDevices:
+                      type: array
+                      description: "List of allowed devices"
+                      items:
+                        type: object
+                        properties:
+                          deviceType:
+                            type: string
+                            enum:
+                              - char
+                              - block
+                            description: "Device type (char or block)"
+                          major:
+                            type: integer
+                            description: "Device major number"
+                          minor:
+                            type: integer
+                            description: "Device minor number"
+                          description:
+                            type: string
+                priority:
+                  type: integer
+                  description: "Policy priority (lower values have higher priority)"
+                  default: 1000
+                ebpfProgram:
+                  type: string
+                  description: "Reference to an EBPFProgram resource to use for advanced container control"
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                appliedTo:
+                  type: array
+                  description: "List of pods the policy is applied to"
+                  items:
+                    type: object
+                    properties:
+                      podName:
+                        type: string
+                      namespace:
+                        type: string
+                      cgroupId:
+                        type: string
+                metrics:
+                  type: object
+                  properties:
+                    bytesIn:
+                      type: integer
+                    bytesOut:
+                      type: integer
+                    connections:
+                      type: integer
+                    blocked:
+                      type: integer
+                  x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Priority
+          type: integer
+          jsonPath: .spec.priority
+        - name: AppliedTo
+          type: integer
+          jsonPath: .status.appliedTo.length
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

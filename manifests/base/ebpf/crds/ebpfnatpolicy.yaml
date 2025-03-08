@@ -1,0 +1,149 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ebpfnatpolicies.networking.fos1.io
+spec:
+  group: networking.fos1.io
+  names:
+    kind: EBPFNATPolicy
+    listKind: EBPFNATPolicyList
+    plural: ebpfnatpolicies
+    singular: ebpfnatpolicy
+    shortNames:
+      - enat
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - type
+              properties:
+                description:
+                  type: string
+                  description: "Description of the NAT policy"
+                type:
+                  type: string
+                  description: "Type of NAT policy"
+                  enum:
+                    - snat
+                    - dnat
+                    - masquerade
+                    - full
+                interface:
+                  type: string
+                  description: "Interface to apply the NAT policy to"
+                externalIP:
+                  type: string
+                  description: "External IP address for SNAT/DNAT"
+                  format: ipv4
+                sourceAddresses:
+                  type: array
+                  description: "Source addresses for SNAT/Masquerade"
+                  items:
+                    type: string
+                    format: cidr
+                portMappings:
+                  type: array
+                  description: "Port mappings for DNAT"
+                  items:
+                    type: object
+                    required:
+                      - protocol
+                      - externalPort
+                      - internalIP
+                      - internalPort
+                    properties:
+                      protocol:
+                        type: string
+                        enum:
+                          - tcp
+                          - udp
+                      externalPort:
+                        type: integer
+                        minimum: 1
+                        maximum: 65535
+                      internalIP:
+                        type: string
+                        format: ipv4
+                      internalPort:
+                        type: integer
+                        minimum: 1
+                        maximum: 65535
+                      description:
+                        type: string
+                enableTracking:
+                  type: boolean
+                  description: "Enable connection tracking"
+                  default: true
+                priority:
+                  type: integer
+                  description: "Priority of the NAT policy (lower is higher priority)"
+                  default: 100
+                ebpfProgram:
+                  type: string
+                  description: "Reference to an EBPFProgram resource to use for NAT"
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                activeConnections:
+                  type: integer
+                  description: "Number of active connections"
+                metrics:
+                  type: object
+                  properties:
+                    packets:
+                      type: integer
+                    bytes:
+                      type: integer
+                    translations:
+                      type: integer
+                  x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Interface
+          type: string
+          jsonPath: .spec.interface
+        - name: ExternalIP
+          type: string
+          jsonPath: .spec.externalIP
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

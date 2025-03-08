@@ -1,0 +1,192 @@
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFProgram
+metadata:
+  name: xdp-packet-filter
+  namespace: default
+spec:
+  description: "XDP program for packet filtering and DDoS protection"
+  type: xdp
+  interface: eth0
+  settings:
+    rateLimiting:
+      enabled: true
+      packetsPerSecond: 10000
+    blacklist:
+      enabled: true
+      ips:
+        - "192.168.1.100"
+        - "10.10.10.0/24"
+    stateful: true
+---
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFMap
+metadata:
+  name: blacklist-map
+  namespace: default
+spec:
+  description: "Map for storing blacklisted IP addresses"
+  type: lpm_trie
+  maxEntries: 1024
+  keySize: 8  # IPv4 prefix in trie format
+  valueSize: 4  # Action value
+  pinPath: "/sys/fs/bpf/blacklist"
+  accessedBy:
+    - "xdp-packet-filter"
+---
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFNetworkPolicy
+metadata:
+  name: api-server-protection
+  namespace: default
+spec:
+  description: "Network policy to protect API server"
+  policyType: filtering
+  priority: 100
+  selector:
+    podSelector:
+      matchLabels:
+        app: api-server
+  ingress:
+    - description: "Allow incoming HTTPS traffic"
+      ports:
+        - protocol: TCP
+          port: 443
+      action: allow
+    - description: "Log and rate limit incoming API requests"
+      ports:
+        - protocol: TCP
+          port: 8080
+      action: allow
+      rateLimit:
+        bitsPerSecond: 1000000  # 1Mbps
+        burstSize: 32768  # 32KB burst
+  egress:
+    - description: "Allow outgoing DB traffic"
+      to:
+        - ipBlock:
+            cidr: "10.0.0.0/8"
+      ports:
+        - protocol: TCP
+          port: 5432
+      action: allow
+    - description: "Default deny all other outgoing traffic"
+      action: deny
+---
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFTrafficControl
+metadata:
+  name: egress-quality-of-service
+  namespace: default
+spec:
+  description: "QoS policy for egress traffic"
+  interface: eth0
+  direction: egress
+  queueingDiscipline:
+    type: htb
+    rate: "1Gbit"
+    burst: "15kb"
+  filters:
+    - description: "Prioritize VoIP traffic"
+      priority: 10
+      protocol: udp
+      match:
+        dstPort: "5060-5080"
+      action:
+        type: mark
+        mark: 46  # DSCP EF (Expedited Forwarding)
+      classID: 10
+    - description: "Limit video streaming"
+      priority: 20
+      match:
+        dstPort: 443
+      action:
+        type: police
+        police:
+          rate: "5Mbit"
+          burst: "50kb"
+          exceed: "drop"
+  classes:
+    - id: 10
+      rate: "100Mbit"
+      priority: 1
+      burst: "15kb"
+    - id: 20
+      rate: "10Mbit"
+      priority: 2
+      burst: "50kb"
+---
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFNATPolicy
+metadata:
+  name: outbound-nat
+  namespace: default
+spec:
+  description: "NAT policy for outbound traffic"
+  type: masquerade
+  interface: eth0
+  sourceAddresses:
+    - "10.0.0.0/8"
+  enableTracking: true
+---
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFNATPolicy
+metadata:
+  name: web-server-dnat
+  namespace: default
+spec:
+  description: "DNAT policy for web servers"
+  type: dnat
+  interface: eth0
+  externalIP: "203.0.113.10"
+  portMappings:
+    - protocol: tcp
+      externalPort: 80
+      internalIP: "10.0.0.10"
+      internalPort: 8080
+      description: "HTTP traffic to web server"
+    - protocol: tcp
+      externalPort: 443
+      internalIP: "10.0.0.10"
+      internalPort: 8443
+      description: "HTTPS traffic to web server"
+---
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFContainerPolicy
+metadata:
+  name: database-network-policy
+  namespace: default
+spec:
+  description: "Network policy for database containers"
+  selector:
+    podSelector:
+      matchLabels:
+        app: database
+  resourceLimits:
+    enableAccounting: true
+    bandwidthLimits:
+      egressBitsPerSecond: 100000000  # 100Mbps
+      ingressBitsPerSecond: 200000000  # 200Mbps
+    connectionLimits:
+      maxConnections: 100
+  networkControls:
+    enableEgressControl: true
+    enableIngressControl: true
+    defaultEgressAction: deny
+    defaultIngressAction: deny
+    ingressRules:
+      - description: "Allow database client connections"
+        ports:
+          - protocol: TCP
+            port: 5432
+        action: allow
+    egressRules:
+      - description: "Allow DNS lookups"
+        ports:
+          - protocol: UDP
+            port: 53
+        action: allow
+      - description: "Allow NTP"
+        ports:
+          - protocol: UDP
+            port: 123
+        action: allow

@@ -1,0 +1,384 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ebpfnetworkpolicies.networking.fos1.io
+spec:
+  group: networking.fos1.io
+  names:
+    kind: EBPFNetworkPolicy
+    listKind: EBPFNetworkPolicyList
+    plural: ebpfnetworkpolicies
+    singular: ebpfnetworkpolicy
+    shortNames:
+      - enpol
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - policyType
+              properties:
+                description:
+                  type: string
+                  description: "Description of the network policy"
+                policyType:
+                  type: string
+                  description: "Type of policy (filtering, routing, nat)"
+                  enum:
+                    - filtering
+                    - routing
+                    - nat
+                    - qos
+                selector:
+                  type: object
+                  description: "Selector to match resources this policy applies to"
+                  properties:
+                    podSelector:
+                      type: object
+                      description: "Match pods by label selector"
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - key
+                              - operator
+                            properties:
+                              key:
+                                type: string
+                              operator:
+                                type: string
+                                enum:
+                                  - In
+                                  - NotIn
+                                  - Exists
+                                  - DoesNotExist
+                              values:
+                                type: array
+                                items:
+                                  type: string
+                    namespaceSelector:
+                      type: object
+                      description: "Match pods in namespaces by label selector"
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - key
+                              - operator
+                            properties:
+                              key:
+                                type: string
+                              operator:
+                                type: string
+                                enum:
+                                  - In
+                                  - NotIn
+                                  - Exists
+                                  - DoesNotExist
+                              values:
+                                type: array
+                                items:
+                                  type: string
+                    nodeSelector:
+                      type: object
+                      description: "Match nodes by label selector"
+                      properties:
+                        matchLabels:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        matchExpressions:
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - key
+                              - operator
+                            properties:
+                              key:
+                                type: string
+                              operator:
+                                type: string
+                                enum:
+                                  - In
+                                  - NotIn
+                                  - Exists
+                                  - DoesNotExist
+                              values:
+                                type: array
+                                items:
+                                  type: string
+                priority:
+                  type: integer
+                  description: "Policy priority (lower values have higher priority)"
+                  default: 1000
+                egress:
+                  type: array
+                  description: "Egress rules for outbound traffic"
+                  items:
+                    type: object
+                    properties:
+                      description:
+                        type: string
+                      to:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            ipBlock:
+                              type: object
+                              properties:
+                                cidr:
+                                  type: string
+                                  format: cidr
+                                except:
+                                  type: array
+                                  items:
+                                    type: string
+                                    format: cidr
+                            podSelector:
+                              type: object
+                              properties:
+                                matchLabels:
+                                  type: object
+                                  additionalProperties:
+                                    type: string
+                            namespaceSelector:
+                              type: object
+                              properties:
+                                matchLabels:
+                                  type: object
+                                  additionalProperties:
+                                    type: string
+                      ports:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            protocol:
+                              type: string
+                              enum:
+                                - TCP
+                                - UDP
+                                - ICMP
+                            port:
+                              oneOf:
+                                - type: integer
+                                  minimum: 1
+                                  maximum: 65535
+                                - type: string
+                            endPort:
+                              type: integer
+                              minimum: 1
+                              maximum: 65535
+                      action:
+                        type: string
+                        enum:
+                          - allow
+                          - deny
+                          - log
+                          - mark
+                        default: allow
+                      mark:
+                        type: integer
+                        description: "DSCP mark for QoS (0-63) if action is mark"
+                      rateLimit:
+                        type: object
+                        properties:
+                          bitsPerSecond:
+                            type: integer
+                          burstSize:
+                            type: integer
+                ingress:
+                  type: array
+                  description: "Ingress rules for inbound traffic"
+                  items:
+                    type: object
+                    properties:
+                      description:
+                        type: string
+                      from:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            ipBlock:
+                              type: object
+                              properties:
+                                cidr:
+                                  type: string
+                                  format: cidr
+                                except:
+                                  type: array
+                                  items:
+                                    type: string
+                                    format: cidr
+                            podSelector:
+                              type: object
+                              properties:
+                                matchLabels:
+                                  type: object
+                                  additionalProperties:
+                                    type: string
+                            namespaceSelector:
+                              type: object
+                              properties:
+                                matchLabels:
+                                  type: object
+                                  additionalProperties:
+                                    type: string
+                      ports:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            protocol:
+                              type: string
+                              enum:
+                                - TCP
+                                - UDP
+                                - ICMP
+                            port:
+                              oneOf:
+                                - type: integer
+                                  minimum: 1
+                                  maximum: 65535
+                                - type: string
+                            endPort:
+                              type: integer
+                              minimum: 1
+                              maximum: 65535
+                      action:
+                        type: string
+                        enum:
+                          - allow
+                          - deny
+                          - log
+                          - mark
+                        default: allow
+                      mark:
+                        type: integer
+                        description: "DSCP mark for QoS (0-63) if action is mark"
+                      rateLimit:
+                        type: object
+                        properties:
+                          bitsPerSecond:
+                            type: integer
+                          burstSize:
+                            type: integer
+                nat:
+                  type: object
+                  description: "NAT configuration if policy type is nat"
+                  properties:
+                    type:
+                      type: string
+                      enum:
+                        - snat
+                        - dnat
+                        - masquerade
+                    externalIP:
+                      type: string
+                      format: ipv4
+                    portMappings:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - protocol
+                          - externalPort
+                        properties:
+                          protocol:
+                            type: string
+                            enum:
+                              - TCP
+                              - UDP
+                          externalPort:
+                            type: integer
+                            minimum: 1
+                            maximum: 65535
+                          internalIP:
+                            type: string
+                            format: ipv4
+                          internalPort:
+                            type: integer
+                            minimum: 1
+                            maximum: 65535
+                stateful:
+                  type: boolean
+                  description: "Whether the policy should be stateful"
+                  default: true
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                metrics:
+                  type: object
+                  properties:
+                    matches:
+                      type: integer
+                    drops:
+                      type: integer
+                    allows:
+                      type: integer
+                    packets:
+                      type: integer
+                    bytes:
+                      type: integer
+                  x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.policyType
+        - name: Priority
+          type: integer
+          jsonPath: .spec.priority
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
