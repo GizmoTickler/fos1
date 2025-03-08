@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -362,4 +364,159 @@ func (m *Manager) Status() (*DNSStatus, error) {
 	}
 	
 	return status, nil
+}
+
+// AddRecord adds a DNS record to the appropriate zone
+func (m *Manager) AddRecord(name, recordType, value string, ttl uint32) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	
+	// Determine the zone for this record
+	zone, err := m.findZoneForRecord(name)
+	if err != nil {
+		return fmt.Errorf("failed to find zone for record %s: %w", name, err)
+	}
+	
+	// Create the record
+	record := &DNSRecord{
+		Name:    name,
+		Type:    recordType,
+		Value:   value,
+		TTL:     int32(ttl),
+		Dynamic: true,
+	}
+	
+	// Add to CoreDNS
+	if m.coreDNSController != nil {
+		if err := m.coreDNSController.AddRecord(zone.Domain, record); err != nil {
+			return fmt.Errorf("failed to add record to CoreDNS: %w", err)
+		}
+	}
+	
+	// Update zone in-memory cache
+	for i, existingRecord := range zone.Records {
+		if existingRecord.Name == record.Name && existingRecord.Type == record.Type {
+			// Replace existing record
+			zone.Records[i] = record
+			return nil
+		}
+	}
+	
+	// Add new record
+	zone.Records = append(zone.Records, record)
+	return nil
+}
+
+// RemoveRecord removes a DNS record from the appropriate zone
+func (m *Manager) RemoveRecord(name, recordType, value string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	
+	// Determine the zone for this record
+	zone, err := m.findZoneForRecord(name)
+	if err != nil {
+		return fmt.Errorf("failed to find zone for record %s: %w", name, err)
+	}
+	
+	// Remove from CoreDNS
+	if m.coreDNSController != nil {
+		if err := m.coreDNSController.RemoveRecord(zone.Domain, name, recordType, value); err != nil {
+			return fmt.Errorf("failed to remove record from CoreDNS: %w", err)
+		}
+	}
+	
+	// Update zone in-memory cache
+	for i, record := range zone.Records {
+		if record.Name == name && record.Type == recordType && record.Value == value {
+			// Remove the record
+			zone.Records = append(zone.Records[:i], zone.Records[i+1:]...)
+			break
+		}
+	}
+	
+	return nil
+}
+
+// AddReverseRecord adds a reverse (PTR) DNS record
+func (m *Manager) AddReverseRecord(ip, target string, ttl uint32) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	
+	// Convert IP to reverse lookup format
+	reverseIP, zone, err := m.convertToReverseLookup(ip)
+	if err != nil {
+		return fmt.Errorf("failed to convert IP %s to reverse lookup: %w", ip, err)
+	}
+	
+	// Create the PTR record
+	record := &DNSRecord{
+		Name:    reverseIP,
+		Type:    "PTR",
+		Value:   target,
+		TTL:     int32(ttl),
+		Dynamic: true,
+	}
+	
+	// Add to CoreDNS
+	if m.coreDNSController != nil {
+		if err := m.coreDNSController.AddPTRRecord(zone, record); err != nil {
+			return fmt.Errorf("failed to add PTR record to CoreDNS: %w", err)
+		}
+	}
+	
+	return nil
+}
+
+// RemoveReverseRecord removes a reverse (PTR) DNS record
+func (m *Manager) RemoveReverseRecord(ip string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	
+	// Convert IP to reverse lookup format
+	reverseIP, zone, err := m.convertToReverseLookup(ip)
+	if err != nil {
+		return fmt.Errorf("failed to convert IP %s to reverse lookup: %w", ip, err)
+	}
+	
+	// Remove from CoreDNS
+	if m.coreDNSController != nil {
+		if err := m.coreDNSController.RemovePTRRecord(zone, reverseIP); err != nil {
+			return fmt.Errorf("failed to remove PTR record from CoreDNS: %w", err)
+		}
+	}
+	
+	return nil
+}
+
+// findZoneForRecord finds the DNS zone for a given record name
+func (m *Manager) findZoneForRecord(name string) (*DNSZone, error) {
+	// Implementation depends on how zones are stored
+	// For now, we'll use a placeholder implementation that just returns a default zone
+	defaultZone := &DNSZone{
+		Name:   "default",
+		Domain: "local",
+		TTL:    3600,
+		Records: []*DNSRecord{},
+	}
+	
+	return defaultZone, nil
+}
+
+// convertToReverseLookup converts an IP address to reverse lookup format
+func (m *Manager) convertToReverseLookup(ip string) (string, string, error) {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return "", "", fmt.Errorf("invalid IP address: %s", ip)
+	}
+	
+	if parsedIP.To4() != nil {
+		// IPv4 address
+		octs := strings.Split(ip, ".")
+		reversedOcts := []string{octs[3], octs[2], octs[1], octs[0]}
+		reverseIP := strings.Join(reversedOcts, ".")
+		return reverseIP, "in-addr.arpa", nil
+	} else {
+		// IPv6 address
+		return reverseIPv6(parsedIP), "ip6.arpa", nil
+	}
 }
