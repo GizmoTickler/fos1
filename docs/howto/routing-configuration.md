@@ -1,646 +1,287 @@
 # Routing Configuration Guide
 
-This guide explains how to configure various routing features in the Kubernetes-based Router/Firewall system, including static routes, dynamic routing protocols, policy-based routing, and failover mechanisms.
+This guide provides comprehensive information on configuring routing in the Cilium-based networking system. It covers the creation and management of routes, Virtual Routing and Forwarding (VRF) instances, and policy-based routing.
 
 ## Table of Contents
 
-1. [Basic Concepts](#basic-concepts)
-2. [Static Routing](#static-routing)
-3. [NAT and NAT66 Configuration](#nat-and-nat66-configuration)
-4. [Inter-VLAN Routing](#inter-vlan-routing)
-5. [Dynamic Routing with FRRouting](#dynamic-routing-with-frrouting)
-   - [BGP Configuration](#bgp-configuration)
-   - [OSPF Configuration](#ospf-configuration)
-   - [Route Redistribution](#route-redistribution)
-   - [BFD Configuration](#bfd-configuration)
-6. [Policy-Based Routing](#policy-based-routing)
-7. [Multi-WAN Configuration](#multi-wan-configuration)
-   - [Load Balancing](#load-balancing)
-   - [Failover Configuration](#failover-configuration)
-8. [Traffic Engineering](#traffic-engineering)
-9. [Examples](#examples)
+- [Route Configuration](#route-configuration)
+  - [Route CRD Specification](#route-crd-specification)
+  - [Creating Routes](#creating-routes)
+  - [Updating Routes](#updating-routes)
+  - [Deleting Routes](#deleting-routes)
+- [VRF Configuration](#vrf-configuration)
+  - [VRF Basics](#vrf-basics)
+  - [Creating VRFs](#creating-vrfs)
+  - [Adding Routes to VRFs](#adding-routes-to-vrfs)
+  - [Deleting VRFs](#deleting-vrfs)
+- [Policy-Based Routing](#policy-based-routing)
+  - [Creating Policy Rules](#creating-policy-rules)
+  - [Routing Tables](#routing-tables)
+  - [Deleting Policy Rules](#deleting-policy-rules)
+- [Integration with Cilium](#integration-with-cilium)
+  - [eBPF Maps](#ebpf-maps)
+  - [Route Synchronization](#route-synchronization)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Debugging Tools](#debugging-tools)
 
-## Basic Concepts
+## Route Configuration
 
-The routing configuration in this system is managed through several Kubernetes Custom Resources (CRs) and implemented using a unified Cilium-based network stack:
+Routes are defined using Kubernetes Custom Resource Definitions (CRDs). The routing controller watches for changes to Route CRDs and synchronizes them with Cilium's eBPF maps.
 
-- **Subnet CR**: Defines basic static routing and NAT configuration
-- **FRRouteConfig CR**: Configures dynamic routing protocols
-- **RoutingPolicy CR**: Defines policy-based routing rules
-- **MultiwanConfig CR**: Configures multiple WAN uplinks with load balancing and failover
+### Route CRD Specification
 
-All routing functions are implemented using Cilium's eBPF capabilities, providing high-performance packet processing at the kernel level.
-
-## Static Routing
-
-Static routes are configured through the `Subnet` CR:
+A Route CRD is defined with the following specification:
 
 ```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: Subnet
+apiVersion: networking.cilium.io/v1alpha1
+kind: Route
 metadata:
-  name: lan-subnet
+  name: example-route
+  namespace: default
 spec:
-  name: LAN
-  network: 192.168.1.0/24
-  interface: eth1
-  routing:
-    defaultGateway: 192.168.1.254  # Optional external gateway
-    defaultGatewayIpv6: 2001:db8:1::254  # Optional IPv6 gateway
-    staticRoutes:
-      - destination: 10.10.10.0/24
-        nextHop: 192.168.1.10
-        metric: 100
-      - destination: 10.20.20.0/24
-        nextHop: 192.168.1.20
-        metric: 200
+  destination: "10.0.0.0/24"  # Required: The destination CIDR
+  gateway: "192.168.1.1"      # Optional: The next-hop gateway IP
+  interface: "eth0"           # Optional: The output interface
+  metric: 100                 # Optional: The route's priority/metric (default: 100)
+  table: "main"               # Optional: The routing table (default: main table)
+  vrf: "red"                  # Optional: The VRF name
+  type: "static"              # Optional: Route type (static, dynamic, policy)
 ```
 
-For IPv6 static routes:
+### Creating Routes
 
-```yaml
-routing:
-  staticRoutesIpv6:
-    - destination: 2001:db8:2::/64
-      nextHop: 2001:db8:1::10
-      metric: 100
+To create a route, apply a Route CRD manifest:
+
+```bash
+kubectl apply -f route.yaml
 ```
 
-## NAT and NAT66 Configuration
+The routing controller will detect the new Route CRD and synchronize it with Cilium.
 
-NAT for IPv4 and NAT66 for IPv6 are implemented using Cilium's eBPF-based NAT capabilities:
+### Updating Routes
+
+To update a route, modify your Route CRD manifest and apply it:
+
+```bash
+kubectl apply -f updated-route.yaml
+```
+
+The routing controller will detect the changes and update the route accordingly.
+
+### Deleting Routes
+
+To delete a route, delete the Route CRD:
+
+```bash
+kubectl delete route example-route -n default
+```
+
+The routing controller will detect the deletion and remove the route from Cilium.
+
+## VRF Configuration
+
+Virtual Routing and Forwarding (VRF) instances provide network virtualization by creating multiple routing tables that can coexist on the same physical infrastructure.
+
+### VRF Basics
+
+A VRF consists of:
+- A unique identifier (ID)
+- A name for easier reference
+- A set of routing tables
+- A set of network interfaces
+
+Each VRF maintains its own routing table, allowing for overlapping IP address spaces across different VRFs.
+
+### Creating VRFs
+
+VRFs can be created using the Router API:
+
+```go
+vrfID, err := router.AddVRF("red", []int{100}, []string{"eth1"})
+if err != nil {
+    // Handle error
+}
+```
+
+Alternatively, you can create VRFs using a VRF CRD:
 
 ```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: Subnet
+apiVersion: networking.cilium.io/v1alpha1
+kind: VRF
 metadata:
-  name: vlan20-subnet
+  name: red
+  namespace: default
 spec:
-  name: VLAN20
-  network: 192.168.20.0/24
-  interface: vlan20
-  routing:
-    nat: true  # Enable Cilium NAT for IPv4
-    natOutbound: true  # Enable outbound NAT only
-    natMasquerade: true  # Enable IP masquerading
+  tables:
+    - 100
+  interfaces:
+    - eth1
 ```
 
-For IPv6 NAT66:
+### Adding Routes to VRFs
+
+Routes can be added to a specific VRF by setting the `vrf` field in the Route CRD:
 
 ```yaml
-routing:
-  nat66: true  # Enable Cilium NAT66 for IPv6
-  nat66Outbound: true  # Enable outbound NAT66 only
-  nat66Masquerade: true  # Enable IPv6 masquerading
-```
-
-To create port forwards (destination NAT):
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: PortForward
+apiVersion: networking.cilium.io/v1alpha1
+kind: Route
 metadata:
-  name: web-server
+  name: vrf-route
+  namespace: default
 spec:
-  description: "Web Server Port Forward"
-  protocol: tcp
-  externalInterface: eth0  # WAN interface
-  externalPort: 80
-  internalAddress: 192.168.1.100
-  internalPort: 80
-  enabled: true
+  destination: "10.1.0.0/24"
+  gateway: "192.168.1.2"
+  interface: "eth1"
+  vrf: "red"
+  table: "100"
 ```
 
-## Inter-VLAN Routing
+### Deleting VRFs
 
-Inter-VLAN routing is automatically enabled for all VLANs by default. To restrict traffic between VLANs, use Cilium network policies:
+To delete a VRF using the Router API:
 
-```yaml
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: restrict-vlan-access
-spec:
-  description: "Allow only HTTP/HTTPS from IoT VLAN to Server VLAN"
-  endpointSelector:
-    matchLabels:
-      vlan: server
-  ingress:
-  - fromEndpoints:
-    - matchLabels:
-        vlan: iot
-    toPorts:
-    - ports:
-      - port: "80"
-        protocol: TCP
-      - port: "443"
-        protocol: TCP
+```go
+err := router.DeleteVRF(vrfID)
+if err != nil {
+    // Handle error
+}
 ```
 
-## Dynamic Routing with FRRouting
+Or by deleting the VRF CRD:
 
-Dynamic routing is implemented using FRRouting (FRR) and configured through the `FRRouteConfig` CR.
-
-### BGP Configuration
-
-To configure BGP:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: FRRouteConfig
-metadata:
-  name: bgp-config
-spec:
-  bgp:
-    enabled: true
-    asn: 65000  # Local Autonomous System Number
-    routerId: 192.168.1.1
-    neighbors:
-      - address: 192.168.100.2
-        remoteAsn: 65001
-        description: "Upstream ISP"
-        keepalive: 30
-        holdTime: 90
-        passwordSecret: bgp-password-secret
-        bfd: true
-      - address: 192.168.200.2
-        remoteAsn: 65002
-        description: "Peer Router"
-        bfd: true
-    networks:
-      - 192.168.0.0/16
-      - 10.0.0.0/8
-    redistribution:
-      - protocol: connected
-      - protocol: static
-      - protocol: ospf
-        metric: 100
-```
-
-### OSPF Configuration
-
-To configure OSPF:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: FRRouteConfig
-metadata:
-  name: ospf-config
-spec:
-  ospf:
-    enabled: true
-    routerId: 192.168.1.1
-    areas:
-      - areaId: 0
-        interfaces:
-          - name: eth1
-            networkType: broadcast
-            priority: 100
-            cost: 10
-          - name: vlan10
-            networkType: broadcast
-            priority: 50
-            cost: 20
-      - areaId: 1
-        interfaces:
-          - name: vlan20
-            networkType: broadcast
-            priority: 50
-            cost: 20
-        stubArea: true
-    redistribution:
-      - protocol: connected
-      - protocol: static
-      - protocol: bgp
-        metric: 100
-```
-
-### Route Redistribution
-
-Route redistribution is configured in the `FRRouteConfig` CR under each routing protocol section:
-
-```yaml
-redistribution:
-  - protocol: connected  # Redistribute directly connected routes
-  - protocol: static     # Redistribute static routes
-  - protocol: bgp        # Redistribute BGP routes
-    metric: 100          # Set metric for redistributed routes
-    routeMap: filter-bgp # Apply route-map to filter routes
-```
-
-To define filter policies:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: RouteMap
-metadata:
-  name: filter-bgp
-spec:
-  name: FILTER-BGP
-  entries:
-    - sequence: 10
-      action: permit
-      match:
-        prefix: 10.0.0.0/8
-      set:
-        metric: 200
-    - sequence: 20
-      action: deny
-      match:
-        prefix: 192.168.0.0/16
-```
-
-### BFD Configuration
-
-Bidirectional Forwarding Detection (BFD) provides fast failure detection for dynamic routing:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: BFDConfig
-metadata:
-  name: bfd-config
-spec:
-  enabled: true
-  intervals:
-    minTx: 300
-    minRx: 300
-    multiplier: 3
-  peers:
-    - address: 192.168.100.2
-      interface: eth0
-    - address: 192.168.200.2
-      interface: eth0
+```bash
+kubectl delete vrf red -n default
 ```
 
 ## Policy-Based Routing
 
-Policy-based routing allows routing decisions based on more than just the destination address:
+Policy-Based Routing (PBR) allows routing decisions based on criteria other than the destination address, such as source address, incoming interface, or other packet attributes.
 
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: RoutingPolicy
-metadata:
-  name: guest-routing
-spec:
-  description: "Route Guest traffic through secondary ISP"
-  sourceVlan: guest
-  sourceNetwork: 192.168.30.0/24
-  interface: eth1  # Secondary ISP interface
-  table: 200       # Routing table ID
-  priority: 100    # Rule priority
+### Creating Policy Rules
+
+Policy rules can be created using the Router API:
+
+```go
+rule := PolicyRule{
+    Priority:       100,
+    Table:          100,
+    SourceIP:       sourceNet,  // *net.IPNet
+    DestinationIP:  destNet,    // *net.IPNet
+    InputInterface: "eth1",
+}
+err := router.AddPolicyRule(rule)
+if err != nil {
+    // Handle error
+}
 ```
 
-For application-aware routing with DPI:
+Alternatively, you can create policy rules using a PolicyRule CRD:
 
 ```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: RoutingPolicy
+apiVersion: networking.cilium.io/v1alpha1
+kind: PolicyRule
 metadata:
-  name: streaming-routing
+  name: example-rule
+  namespace: default
 spec:
-  description: "Route streaming apps through high-bandwidth ISP"
-  applications:
-    - netflix
-    - youtube
-    - hulu
-  interface: eth1  # High-bandwidth ISP interface
-  table: 300
-  priority: 50
-```
-
-## Multi-WAN Configuration
-
-### Load Balancing
-
-To configure load balancing across multiple WAN links:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: MultiWanConfig
-metadata:
-  name: multiwan-config
-spec:
-  enabled: true
-  interfaces:
-    - name: eth0
-      weight: 100
-      priority: 10
-      description: "Primary ISP"
-      trackTarget: 8.8.8.8
-      trackMethod: ping
-      trackInterval: 5
-      trackTimeout: 2
-      trackThreshold: 3
-    - name: eth1
-      weight: 50
-      priority: 20
-      description: "Secondary ISP"
-      trackTarget: 1.1.1.1
-      trackMethod: ping
-      trackInterval: 5
-      trackTimeout: 2
-      trackThreshold: 3
-  loadBalance: true  # Enable load balancing
-  loadBalanceMethod: weighted  # Options: weighted, round-robin, random
-```
-
-### Failover Configuration
-
-For failover configuration:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: MultiWanConfig
-metadata:
-  name: failover-config
-spec:
-  enabled: true
-  interfaces:
-    - name: eth0
-      priority: 10  # Lower priority = higher preference
-      description: "Primary fiber ISP"
-      trackTarget: 8.8.8.8
-      trackMethod: ping
-      trackInterval: 5
-      trackTimeout: 2
-      trackThreshold: 3
-    - name: eth1
-      priority: 20
-      description: "Backup LTE connection"
-      trackTarget: 1.1.1.1
-      trackMethod: ping
-      trackInterval: 5
-      trackTimeout: 2
-      trackThreshold: 3
-  loadBalance: false  # Disable load balancing for pure failover
-  failbackThreshold: 5  # Number of successful checks before failing back to primary
-```
-
-## Traffic Engineering
-
-For advanced traffic engineering with DSCP marking:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: TrafficPolicy
-metadata:
-  name: voip-traffic
-spec:
-  description: "VoIP Traffic Priority"
-  match:
-    applications:
-      - voip
-      - sip
-      - rtp
-    protocols:
-      - udp
-    ports:
-      - 5060-5061
-      - 10000-20000
-  action:
-    dscp: 46  # Expedited Forwarding
-    priority: high
-    queue: 1
-    outInterface: eth0  # Force traffic out specific interface
-```
-
-## Examples
-
-### Example 1: Small Business with Dual-WAN
-
-This example shows a business network with two internet connections, VLANs, and policy-based routing:
-
-1. Configure the WAN interfaces:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: NetworkInterface
-metadata:
-  name: primary-wan
-spec:
-  name: eth0
-  type: physical
-  dhcp: true
----
-apiVersion: network.fos1.io/v1alpha1
-kind: NetworkInterface
-metadata:
-  name: backup-wan
-spec:
-  name: eth1
-  type: physical
-  dhcp: true
-```
-
-2. Set up Multi-WAN for failover:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: MultiWanConfig
-metadata:
-  name: business-wan
-spec:
-  enabled: true
-  interfaces:
-    - name: eth0
-      priority: 10
-      description: "Primary Fiber Connection"
-      trackTarget: 8.8.8.8
-    - name: eth1
-      priority: 20
-      description: "Backup Cable Connection"
-      trackTarget: 1.1.1.1
-  loadBalance: false
-```
-
-3. Configure VLANs and policy-based routing:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: NetworkInterface
-metadata:
-  name: staff-vlan
-spec:
-  name: vlan10
-  type: vlan
-  parent: eth2
-  vlanId: 10
-  addresses:
-    - 10.10.10.1/24
----
-apiVersion: network.fos1.io/v1alpha1
-kind: NetworkInterface
-metadata:
-  name: guest-vlan
-spec:
-  name: vlan20
-  type: vlan
-  parent: eth2
-  vlanId: 20
-  addresses:
-    - 10.20.20.1/24
-```
-
-4. Create subnets with routing configuration:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: Subnet
-metadata:
-  name: staff-subnet
-spec:
-  name: Staff
-  network: 10.10.10.0/24
-  interface: vlan10
-  dhcp:
-    enabled: true
-  routing:
-    nat: true
----
-apiVersion: network.fos1.io/v1alpha1
-kind: Subnet
-metadata:
-  name: guest-subnet
-spec:
-  name: Guest
-  network: 10.20.20.0/24
-  interface: vlan20
-  dhcp:
-    enabled: true
-  routing:
-    nat: true
-```
-
-5. Add policy-based routing for guest network:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: RoutingPolicy
-metadata:
-  name: guest-backup-wan
-spec:
-  description: "Route guest traffic through backup WAN"
-  sourceVlan: vlan20
-  sourceNetwork: 10.20.20.0/24
-  interface: eth1
-  table: 200
   priority: 100
-```
-
-### Example 2: Home Network with Application-Aware Routing
-
-1. Configure application-based routing policies:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: RoutingPolicy
-metadata:
-  name: streaming-policy
-spec:
-  description: "Route streaming through high-bandwidth connection"
-  applications:
-    - netflix
-    - youtube
-    - hulu
-    - plex
-  interface: eth0
   table: 100
-  priority: 50
----
-apiVersion: network.fos1.io/v1alpha1
-kind: RoutingPolicy
-metadata:
-  name: gaming-policy
-spec:
-  description: "Route gaming through low-latency connection"
-  applications:
-    - steam
-    - battle.net
-    - ea_origin
-    - epic_games
-  interface: eth1
-  table: 200
-  priority: 50
----
-apiVersion: network.fos1.io/v1alpha1
-kind: RoutingPolicy
-metadata:
-  name: voip-policy
-spec:
-  description: "Route VoIP through most reliable connection"
-  applications:
-    - zoom
-    - teams
-    - skype
-    - voip
-  interface: eth0
-  table: 300
-  priority: 30  # Higher priority (lower number)
+  sourceIP: "192.168.1.0/24"
+  destinationIP: "10.0.0.0/24"
+  inputInterface: "eth1"
 ```
 
-2. Configure traffic policy with QoS for VoIP:
+### Routing Tables
 
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: TrafficPolicy
-metadata:
-  name: voip-priority
-spec:
-  description: "Prioritize VoIP traffic"
-  match:
-    applications:
-      - zoom
-      - teams
-      - skype
-      - voip
-  action:
-    dscp: 46  # Expedited Forwarding
-    priority: high
-    queue: 1
+Each policy rule refers to a routing table. The system supports multiple routing tables, including:
+
+- `main` (table ID 254): The default routing table
+- `local` (table ID 255): Reserved for local routes
+- Custom tables (table IDs 1-252): Available for user-defined routes
+
+### Deleting Policy Rules
+
+To delete a policy rule using the Router API:
+
+```go
+err := router.DeletePolicyRule(priority)
+if err != nil {
+    // Handle error
+}
 ```
 
-### Example 3: BGP Peering with Upstream Provider
+Or by deleting the PolicyRule CRD:
 
-1. Configure BGP with an upstream provider:
-
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: FRRouteConfig
-metadata:
-  name: upstream-bgp
-spec:
-  bgp:
-    enabled: true
-    asn: 65000  # Your ASN
-    routerId: 203.0.113.1
-    neighbors:
-      - address: 203.0.113.2
-        remoteAsn: 64496  # ISP ASN
-        description: "Upstream ISP"
-        keepalive: 30
-        holdTime: 90
-        bfd: true
-    networks:
-      - 192.168.0.0/16  # Your internal networks
-    redistribution:
-      - protocol: connected
-      - protocol: static
+```bash
+kubectl delete policyrule example-rule -n default
 ```
 
-2. Configure BFD for fast failover:
+## Integration with Cilium
 
-```yaml
-apiVersion: network.fos1.io/v1alpha1
-kind: BFDConfig
-metadata:
-  name: upstream-bfd
-spec:
-  enabled: true
-  intervals:
-    minTx: 300
-    minRx: 300
-    multiplier: 3
-  peers:
-    - address: 203.0.113.2
-      interface: eth0
-```
+### eBPF Maps
+
+Cilium uses eBPF maps to implement routing functionality. The routing controller synchronizes routes with these eBPF maps.
+
+The key eBPF maps for routing include:
+- `cilium_lxc`: Maps endpoints to their IP addresses
+- `cilium_lb4_services_v2`: IPv4 load balancing services
+- `cilium_lb6_services_v2`: IPv6 load balancing services
+- `cilium_ipcache`: IP address to identity mapping
+
+### Route Synchronization
+
+The route synchronizer ensures that routes are properly synchronized between kernel routing tables and Cilium's eBPF maps. This synchronization happens:
+
+- When routes are created, updated, or deleted through the Route CRDs
+- Periodically to ensure consistency
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Routes not taking effect:**
+   - Check that the Route CRD is correctly defined
+   - Verify that the destination CIDR is valid
+   - Check for conflicting routes in the same VRF
+
+2. **VRF issues:**
+   - Ensure that the VRF exists
+   - Verify that the interfaces are correctly assigned to the VRF
+   - Check that the routing tables are properly configured
+
+3. **Policy-based routing not working:**
+   - Verify the priority of the policy rule
+   - Check that the routing table referenced by the rule exists
+   - Ensure that the source and destination IP addresses are correctly specified
+
+### Debugging Tools
+
+Use these commands to debug routing issues:
+
+1. **Check CRDs:**
+   ```bash
+   kubectl get routes -A
+   kubectl get vrfs -A
+   kubectl get policyrules -A
+   ```
+
+2. **Describe a specific resource:**
+   ```bash
+   kubectl describe route example-route -n default
+   ```
+
+3. **Check Cilium status:**
+   ```bash
+   cilium status
+   ```
+
+4. **Check Cilium eBPF maps:**
+   ```bash
+   cilium bpf routes list
+   ```
+
+5. **Check controller logs:**
+   ```bash
+   kubectl logs -n kube-system -l app=cilium -c cilium-agent
+   ```
