@@ -35,49 +35,10 @@ struct {
     __type(value, struct tc_config);
 } config_map SEC(".maps");
 
-// Traffic class structure
-struct traffic_class {
-    __u32 priority;         // Class priority
-    __u32 mark;             // Mark to apply
-    __u32 rate_limit_bps;   // Rate limit in bytes per second
-    __u32 ceiling_bps;      // Ceiling in bytes per second
-};
-
-// Define map for traffic classes
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 64);
-    __type(key, __u32);     // Class ID
-    __type(value, struct traffic_class);
-} classes_map SEC(".maps");
-
-// Filter rule structure
-struct filter_rule {
-    __u32 priority;         // Rule priority
-    __u32 class_id;         // Target class ID
-    __u32 src_ip;           // Source IP (0 = any)
-    __u32 dst_ip;           // Destination IP (0 = any)
-    __u16 src_port;         // Source port (0 = any)
-    __u16 dst_port;         // Destination port (0 = any)
-    __u8 protocol;          // Protocol (0 = any)
-    __u8 action;            // Action: 0 = pass, 1 = drop, 2 = mark
-};
-
-// Define map for filter rules
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
-    __type(key, __u32);     // Rule ID
-    __type(value, struct filter_rule);
-} rules_map SEC(".maps");
-
-// Define map for rate limiting
-struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1024);
-    __type(key, __u32);    // Class ID or IP
-    __type(value, __u64);  // Bytes + timestamp
-} rate_map SEC(".maps");
+// Use common traffic class definitions from cilium_common.h
+DECLARE_TRAFFIC_CLASS_MAP;
+DECLARE_FILTER_RULES_MAP;
+DECLARE_RATE_LIMIT_MAP;
 
 // Cilium integration maps - using common definitions from cilium_common.h
 
@@ -125,39 +86,8 @@ static __always_inline int match_rule(struct filter_rule *rule, struct iphdr *ip
 
 // Apply rate limiting for a class
 static __always_inline int apply_rate_limit(struct traffic_class *class, __u32 class_id, __u32 pkt_len) {
-    if (!class->rate_limit_bps)
-        return TC_ACT_OK; // No rate limiting
-    
-    __u64 now = bpf_ktime_get_ns();
-    __u64 *last = bpf_map_lookup_elem(&rate_map, &class_id);
-    __u64 val = now;
-    
-    if (last) {
-        // Check if within rate limit window (1 second)
-        __u64 bytes = (*last & 0xFFFFFFFF) + pkt_len;
-        __u64 ts = *last >> 32;
-        
-        if (now - ts < 1000000000) { // Within 1 second
-            // Convert bytes per second to bits per nanosecond for precise comparison
-            __u64 rate_bits_ns = class->rate_limit_bps * 8ULL;
-            __u64 elapsed_ns = now - ts;
-            __u64 allowed_bits = (rate_bits_ns * elapsed_ns) / 1000000000ULL;
-            
-            if ((bytes * 8) > allowed_bits)
-                return TC_ACT_SHOT; // Exceeds rate limit
-            
-            val = (ts << 32) | bytes;
-        } else {
-            // Reset counter for new interval
-            val = (now << 32) | pkt_len;
-        }
-    } else {
-        // First packet in this class
-        val = (now << 32) | pkt_len;
-    }
-    
-    bpf_map_update_elem(&rate_map, &class_id, &val, BPF_ANY);
-    return TC_ACT_OK;
+    int ret = apply_traffic_class_rate_limit(class, class_id, pkt_len, &rate_map);
+    return ret ? TC_ACT_SHOT : TC_ACT_OK;
 }
 
 // Forward declarations for Cilium integration

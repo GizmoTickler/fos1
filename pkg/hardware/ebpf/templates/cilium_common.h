@@ -173,6 +173,54 @@ struct { \
     __type(value, __u8); \
 } ipv6_state_map SEC(".maps")
 
+// Traffic class structure for QoS and rate limiting
+struct traffic_class {
+    __u32 priority;         // Class priority
+    __u32 mark;             // Mark to apply
+    __u32 rate_limit_bps;   // Rate limit in bytes per second
+    __u32 ceiling_bps;      // Ceiling in bytes per second
+    __u8 dscp;              // DSCP value to set (used in egress)
+};
+
+// Map macro for traffic classes
+#define DECLARE_TRAFFIC_CLASS_MAP \
+struct { \
+    __uint(type, BPF_MAP_TYPE_HASH); \
+    __uint(max_entries, 64); \
+    __type(key, __u32);     /* Class ID */ \
+    __type(value, struct traffic_class); \
+} classes_map SEC(".maps")
+
+// Filter rule structure for traffic classification
+struct filter_rule {
+    __u32 priority;         // Rule priority
+    __u32 class_id;         // Target class ID
+    __u32 src_ip;           // Source IP (0 = any)
+    __u32 dst_ip;           // Destination IP (0 = any)
+    __u16 src_port;         // Source port (0 = any)
+    __u16 dst_port;         // Destination port (0 = any)
+    __u8 protocol;          // Protocol (0 = any)
+    __u8 action;            // Action: 0 = pass, 1 = drop, 2 = mark
+};
+
+// Map macro for filter rules
+#define DECLARE_FILTER_RULES_MAP \
+struct { \
+    __uint(type, BPF_MAP_TYPE_HASH); \
+    __uint(max_entries, 1024); \
+    __type(key, __u32);     /* Rule ID */ \
+    __type(value, struct filter_rule); \
+} rules_map SEC(".maps")
+
+// Map macro for rate limiting
+#define DECLARE_RATE_LIMIT_MAP \
+struct { \
+    __uint(type, BPF_MAP_TYPE_LRU_HASH); \
+    __uint(max_entries, 1024); \
+    __type(key, __u32);    /* Class ID or IP */ \
+    __type(value, __u64);  /* Bytes + timestamp */ \
+} rate_map SEC(".maps")
+
 // Configuration map structure
 struct config {
     __u32 rate_limit;         // Packets per second threshold
@@ -315,27 +363,39 @@ static __always_inline int check_ipv6_rate_limit(struct ipv6_addr *addr, struct 
 // This provides a generic implementation that can be customized in each template
 // Return values should map to program-specific actions (e.g., XDP_DROP, TC_ACT_SHOT)
 static __always_inline int cilium_check_policy(void *ctx, __u32 src_ip, __u32 dst_ip, __u8 proto, __u16 src_port, __u16 dst_port) {
-    // Look up the source IP in Cilium's identity cache
-    struct cilium_identity *identity = bpf_map_lookup_elem(&cilium_ipcache, &src_ip);
-    if (!identity) {
-        // No identity found, typically would pass (handle in program-specific code)
-        return 0; // Generic PASS value
-    }
+    // Check source and destination identities
+    struct cilium_identity *src_identity = bpf_map_lookup_elem(&cilium_ipcache, &src_ip);
+    struct cilium_identity *dst_identity = bpf_map_lookup_elem(&cilium_ipcache, &dst_ip);
     
-    // Look up if there's a policy verdict for this identity
-    struct cilium_policy_verdict *verdict = bpf_map_lookup_elem(&cilium_policy_map, &identity->id);
-    if (verdict) {
-        // If we have a policy verdict, use it
-        if (verdict->verdict == 1) {
-            return 1; // Generic DROP value
-        } else if (verdict->verdict == 2 && verdict->redirect_port) {
-            // Redirect case - handle in program-specific code
-            return 2; // Generic REDIRECT value 
+    // Apply identity-based rules if identities are found
+    if (src_identity && dst_identity) {
+        // Block connections from non-local to local identities
+        if (src_identity->id >= 32768 && dst_identity->id < 32768) {
+            return 1; // DROP
+        }
+        
+        // Check policy verdict based on source identity
+        struct cilium_policy_verdict *verdict = bpf_map_lookup_elem(&cilium_policy_map, &src_identity->id);
+        if (verdict && verdict->has_policy) {
+            if (verdict->verdict == 1) {
+                return 1; // DROP
+            } else if (verdict->verdict == 2 && verdict->redirect_port) {
+                return 2; // REDIRECT
+            }
+        }
+        
+        // Check policy verdict based on destination identity
+        verdict = bpf_map_lookup_elem(&cilium_policy_map, &dst_identity->id);
+        if (verdict && verdict->has_policy) {
+            if (verdict->verdict == 1) {
+                return 1; // DROP
+            } else if (verdict->verdict == 2 && verdict->redirect_port) {
+                return 2; // REDIRECT
+            }
         }
     }
     
-    // If we get here, let the rest of the policy processing continue
-    return 0; // Generic PASS value
+    return 0; // PASS
 }
 
 // IPv6 policy check
@@ -344,27 +404,39 @@ static __always_inline int cilium_check_policy(void *ctx, __u32 src_ip, __u32 ds
 // Return values should map to program-specific actions (e.g., XDP_DROP, TC_ACT_SHOT)
 static __always_inline int cilium_check_policy_v6(void *ctx, struct ipv6_addr *src_ip, struct ipv6_addr *dst_ip, 
                                                __u8 proto, __u16 src_port, __u16 dst_port) {
-    // Look up the source IP in Cilium's IPv6 identity cache
-    struct cilium_identity *identity = bpf_map_lookup_elem(&cilium_ipcache6, src_ip);
-    if (!identity) {
-        // No identity found, typically would pass (handle in program-specific code)
-        return 0; // Generic PASS value
-    }
+    // Check source and destination identities
+    struct cilium_identity *src_identity = bpf_map_lookup_elem(&cilium_ipcache6, src_ip);
+    struct cilium_identity *dst_identity = bpf_map_lookup_elem(&cilium_ipcache6, dst_ip);
     
-    // Look up if there's a policy verdict for this identity - same policy map as IPv4
-    struct cilium_policy_verdict *verdict = bpf_map_lookup_elem(&cilium_policy_map, &identity->id);
-    if (verdict) {
-        // If we have a policy verdict, use it
-        if (verdict->verdict == 1) {
-            return 1; // Generic DROP value
-        } else if (verdict->verdict == 2 && verdict->redirect_port) {
-            // Redirect case - handle in program-specific code
-            return 2; // Generic REDIRECT value 
+    // Apply identity-based rules if identities are found
+    if (src_identity && dst_identity) {
+        // Block connections from non-local to local identities
+        if (src_identity->id >= 32768 && dst_identity->id < 32768) {
+            return 1; // DROP
+        }
+        
+        // Check policy verdict based on source identity
+        struct cilium_policy_verdict *verdict = bpf_map_lookup_elem(&cilium_policy_map, &src_identity->id);
+        if (verdict && verdict->has_policy) {
+            if (verdict->verdict == 1) {
+                return 1; // DROP
+            } else if (verdict->verdict == 2 && verdict->redirect_port) {
+                return 2; // REDIRECT
+            }
+        }
+        
+        // Check policy verdict based on destination identity
+        verdict = bpf_map_lookup_elem(&cilium_policy_map, &dst_identity->id);
+        if (verdict && verdict->has_policy) {
+            if (verdict->verdict == 1) {
+                return 1; // DROP
+            } else if (verdict->verdict == 2 && verdict->redirect_port) {
+                return 2; // REDIRECT
+            }
         }
     }
     
-    // If we get here, let the rest of the policy processing continue
-    return 0; // Generic PASS value
+    return 0; // PASS
 }
 
 /* Helper function to create IPv4 flow key for stateful tracking */
@@ -417,6 +489,112 @@ static __always_inline int extract_udp_ports(void *data, void *data_end, struct 
     *dst_port = bpf_ntohs((*udph)->dest);
     
     return 1; // Success
+}
+
+/* Helper function to extract IP header information */
+static __always_inline int extract_ip_info(struct __sk_buff *skb, struct ip_info *info) {
+    void *data = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+    struct ethhdr *eth = data;
+    
+    // Validate packet size
+    if (data + sizeof(*eth) > data_end)
+        return -1;
+    
+    // Check IP version
+    switch (bpf_ntohs(eth->h_proto)) {
+        case ETH_P_IP: {
+            struct iphdr *iph = (struct iphdr *)(eth + 1);
+            if ((void *)(iph + 1) > data_end)
+                return -1;
+            
+            info->version = 4;
+            info->protocol = iph->protocol;
+            info->src.v4 = iph->saddr;
+            info->dst.v4 = iph->daddr;
+            
+            // Extract ports for TCP/UDP
+            void *l4_header = (void *)iph + (iph->ihl * 4);
+            if (l4_header > data_end)
+                return -1;
+            
+            if (iph->protocol == IPPROTO_TCP) {
+                struct tcphdr *tcph;
+                if (!extract_tcp_ports(l4_header, data_end, &tcph, &info->src_port, &info->dst_port))
+                    return -1;
+            } else if (iph->protocol == IPPROTO_UDP) {
+                struct udphdr *udph;
+                if (!extract_udp_ports(l4_header, data_end, &udph, &info->src_port, &info->dst_port))
+                    return -1;
+            }
+            return 0;
+        }
+        case ETH_P_IPV6: {
+            struct ipv6hdr *ip6h = (struct ipv6hdr *)(eth + 1);
+            if ((void *)(ip6h + 1) > data_end)
+                return -1;
+            
+            info->version = 6;
+            info->protocol = ip6h->nexthdr;
+            __builtin_memcpy(&info->src.v6, &ip6h->saddr, sizeof(struct ipv6_addr));
+            __builtin_memcpy(&info->dst.v6, &ip6h->daddr, sizeof(struct ipv6_addr));
+            
+            // Extract ports for TCP/UDP
+            void *l4_header = (void *)ip6h + sizeof(struct ipv6hdr);
+            if (l4_header > data_end)
+                return -1;
+            
+            if (ip6h->nexthdr == IPPROTO_TCP) {
+                struct tcphdr *tcph;
+                if (!extract_tcp_ports(l4_header, data_end, &tcph, &info->src_port, &info->dst_port))
+                    return -1;
+            } else if (ip6h->nexthdr == IPPROTO_UDP) {
+                struct udphdr *udph;
+                if (!extract_udp_ports(l4_header, data_end, &udph, &info->src_port, &info->dst_port))
+                    return -1;
+            }
+            return 0;
+        }
+        default:
+            return -1; // Unsupported protocol
+    }
+}
+
+// Common rate limiting function for traffic classes
+static __always_inline int apply_traffic_class_rate_limit(struct traffic_class *class, __u32 class_id, __u32 pkt_len, struct bpf_map_def *rate_map) {
+    if (!class->rate_limit_bps)
+        return 0; // No rate limiting, return success (0)
+    
+    __u64 now = bpf_ktime_get_ns();
+    __u64 *last = bpf_map_lookup_elem(rate_map, &class_id);
+    __u64 val = now;
+    
+    if (last) {
+        // Check if within rate limit window (1 second)
+        __u64 bytes = (*last & 0xFFFFFFFF) + pkt_len;
+        __u64 ts = *last >> 32;
+        
+        if (now - ts < 1000000000) { // Within 1 second
+            // Convert bytes per second to bits per nanosecond for precise comparison
+            __u64 rate_bits_ns = class->rate_limit_bps * 8ULL;
+            __u64 elapsed_ns = now - ts;
+            __u64 allowed_bits = (rate_bits_ns * elapsed_ns) / 1000000000ULL;
+            
+            if ((bytes * 8) > allowed_bits)
+                return 1; // Rate limit exceeded
+            
+            val = (ts << 32) | bytes;
+        } else {
+            // Reset counter for new interval
+            val = (now << 32) | pkt_len;
+        }
+    } else {
+        // First packet in this class
+        val = (now << 32) | pkt_len;
+    }
+    
+    bpf_map_update_elem(rate_map, &class_id, &val, BPF_ANY);
+    return 0; // Success
 }
 
 #endif // CILIUM_INTEGRATION

@@ -3,25 +3,19 @@
 // Compatible with Cilium Network Policies
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
-#include <linux/in.h>
 #include <linux/tcp.h>
 #include <linux/socket.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_endian.h>
 
-// Include common Cilium definitions
+// Include common definitions
+#include "common.h"
 #include "cilium_common.h"
 
 // Socket operations configuration structure
 struct sockops_config {
-    __u8 enable_monitoring;   // Enable socket monitoring
-    __u8 enable_redirection;  // Enable socket redirection
-    __u8 enable_tracing;      // Enable socket tracing
-    __u8 enable_app_gateway;  // Enable application-layer gateway
-    __u8 default_action;      // Default action: 0 = pass, 1 = drop
-    __u8 cilium_integration;  // Enable Cilium integration
-    __u8 hw_offload;          // Enable hardware offload optimizations
-    __u16 cilium_policy_index; // Reference to Cilium policy to apply
+    struct monitoring_config base;  // Common monitoring configuration
+    __u8 enable_redirection;       // Enable socket redirection
+    __u8 enable_app_gateway;       // Enable application-layer gateway
+    __u8 default_action;           // Default action: 0 = pass, 1 = drop
 };
 
 // Define map for configuration
@@ -34,22 +28,7 @@ struct {
 
 // Socket connection structure
 struct sock_key {
-    union {
-        // IPv4 addresses
-        struct {
-            __u32 sip4;      // Source IPv4
-            __u32 dip4;      // Destination IPv4
-        };
-        // IPv6 addresses
-        struct {
-            struct ipv6_addr sip6;  // Source IPv6
-            struct ipv6_addr dip6;  // Destination IPv6
-        };
-    };
-    __u16 sport;             // Source port
-    __u16 dport;             // Destination port
-    __u8 family;             // Address family (1 = IPv4, 2 = IPv6)
-    __u8 protocol;           // Protocol
+    struct ip_info info;     // Common IP info structure
 } __attribute__((packed));
 
 // Socket policy structure
@@ -84,26 +63,7 @@ DECLARE_CILIUM_IPCACHE;
 // This map can be shared with Cilium to use its identity-based policies
 DECLARE_CILIUM_IPV6CACHE;
 
-// Connection event structure for monitoring
-struct conn_event {
-    __u64 timestamp;         // Event timestamp
-    __u32 pid;               // Process ID
-    union {
-        struct {
-            __u32 sip4;      // Source IPv4
-            __u32 dip4;      // Destination IPv4
-        };
-        struct {
-            struct ipv6_addr sip6;  // Source IPv6
-            struct ipv6_addr dip6;  // Destination IPv6
-        };
-    };
-    __u16 sport;             // Source port
-    __u16 dport;             // Destination port
-    __u8 protocol;           // Protocol
-    __u8 type;               // Event type
-    __u8 family;             // Address family (1 = IPv4, 2 = IPv6)
-};
+
 
 // Define map for connection events
 struct {
@@ -114,30 +74,30 @@ struct {
 
 // Parse IPv4 addresses from socket operations context
 static __always_inline void extract_key4_from_ops(struct bpf_sock_ops *ops, struct sock_key *key) {
-    key->sip4 = ops->local_ip4;
-    key->dip4 = ops->remote_ip4;
-    key->sport = ops->local_port;
-    key->dport = bpf_ntohl(ops->remote_port);
-    key->family = 1; // AF_INET
-    key->protocol = ops->protocol;
+    key->info.src.v4 = ops->local_ip4;
+    key->info.dst.v4 = ops->remote_ip4;
+    key->info.src_port = ops->local_port;
+    key->info.dst_port = bpf_ntohl(ops->remote_port);
+    key->info.version = 4;
+    key->info.protocol = ops->protocol;
 }
 
 // Parse IPv6 addresses from socket operations context
 static __always_inline void extract_key6_from_ops(struct bpf_sock_ops *ops, struct sock_key *key) {
     // Copy local IPv6 address (source)
     for (int i = 0; i < 4; i++) {
-        key->sip6.addr[i] = ops->local_ip6[i];
+        key->info.src.v6.in6_u.u6_addr32[i] = ops->local_ip6[i];
     }
     
     // Copy remote IPv6 address (destination)
     for (int i = 0; i < 4; i++) {
-        key->dip6.addr[i] = ops->remote_ip6[i];
+        key->info.dst.v6.in6_u.u6_addr32[i] = ops->remote_ip6[i];
     }
     
-    key->sport = ops->local_port;
-    key->dport = bpf_ntohl(ops->remote_port);
-    key->family = 2; // AF_INET6
-    key->protocol = ops->protocol;
+    key->info.src_port = ops->local_port;
+    key->info.dst_port = bpf_ntohl(ops->remote_port);
+    key->info.version = 6;
+    key->info.protocol = ops->protocol;
 }
 
 // Record a connection event to the events map
@@ -155,14 +115,14 @@ static __always_inline void record_event(struct bpf_sock_ops *ops, __u8 event_ty
     if (ops->family == AF_INET) {
         event.sip4 = ops->local_ip4;
         event.dip4 = ops->remote_ip4;
-        event.family = 1; // IPv4
+        event.family = 4; // IPv4
     } else if (ops->family == AF_INET6) {
         // Copy IPv6 addresses
         for (int i = 0; i < 4; i++) {
-            event.sip6.addr[i] = ops->local_ip6[i];
-            event.dip6.addr[i] = ops->remote_ip6[i];
+            event.sip6.in6_u.u6_addr32[i] = ops->local_ip6[i];
+            event.dip6.in6_u.u6_addr32[i] = ops->remote_ip6[i];
         }
-        event.family = 2; // IPv6
+        event.family = 6; // IPv6
     }
     
     bpf_perf_event_output(ops, &events, BPF_F_CURRENT_CPU, &event, sizeof(event));
@@ -175,8 +135,20 @@ static __always_inline int check_policy(struct sock_key *key) {
     __u32 policy_id = 0;
     struct sock_policy *policy = bpf_map_lookup_elem(&policy_map, &policy_id);
     
-    if (policy) {
-        return policy->action;
+    if (!policy)
+        return 0; // Default to allow
+    
+    // Check if policy matches the connection
+    if (key->info.version == 4) {
+        // IPv4 policy check
+        if (policy->redirect_ip == key->info.dst.v4) {
+            return policy->action;
+        }
+    } else {
+        // IPv6 policy check
+        if (compare_ipv6((struct in6_addr *)&policy->redirect_ip, &key->info.dst.v6)) {
+            return policy->action;
+        }
     }
     
     return 0; // Default to allow
@@ -185,18 +157,18 @@ static __always_inline int check_policy(struct sock_key *key) {
 // Check Cilium-based identity policy for IPv4 using common implementation
 static __always_inline int check_cilium_policy_v4(struct sock_key *key, struct sockops_config *cfg) {
     // Skip if Cilium integration is not enabled
-    if (!cfg->cilium_integration || cfg->cilium_policy_index <= 0) {
+    if (!cfg->base.cilium_integration || cfg->base.cilium_policy_index <= 0) {
         return cfg->default_action;
     }
     
     // Use the common cilium_check_policy helper to determine if the connection is allowed
     int verdict = cilium_check_policy(
-        NULL,           // No specific context needed for this
-        key->sip4,      // Source IP
-        key->dip4,      // Destination IP
-        key->protocol,  // Protocol
-        key->sport,     // Source port
-        key->dport      // Destination port
+        NULL,                       // No specific context needed for this
+        key->info.src.v4,           // Source IP
+        key->info.dst.v4,           // Destination IP
+        key->info.protocol,         // Protocol
+        key->info.src_port,         // Source port
+        key->info.dst_port          // Destination port
     );
     
     // Map the generic policy verdict to sockops-specific actions
@@ -215,18 +187,18 @@ static __always_inline int check_cilium_policy_v4(struct sock_key *key, struct s
 // Check Cilium-based identity policy for IPv6 using common implementation
 static __always_inline int check_cilium_policy_v6(struct sock_key *key, struct sockops_config *cfg) {
     // Skip if Cilium integration is not enabled
-    if (!cfg->cilium_integration || cfg->cilium_policy_index <= 0) {
+    if (!cfg->base.cilium_integration || cfg->base.cilium_policy_index <= 0) {
         return cfg->default_action;
     }
     
     // Use the common cilium_check_policy_v6 helper to determine if the connection is allowed
     int verdict = cilium_check_policy_v6(
-        NULL,           // No specific context needed for this
-        &key->sip6,     // Source IPv6 address
-        &key->dip6,     // Destination IPv6 address
-        key->protocol,  // Protocol
-        key->sport,     // Source port
-        key->dport      // Destination port
+        NULL,                       // No specific context needed for this
+        &key->info.src.v6,          // Source IPv6 address
+        &key->info.dst.v6,          // Destination IPv6 address
+        key->info.protocol,         // Protocol
+        key->info.src_port,         // Source port
+        key->info.dst_port          // Destination port
     );
     
     // Map the generic policy verdict to sockops-specific actions
@@ -244,9 +216,9 @@ static __always_inline int check_cilium_policy_v6(struct sock_key *key, struct s
 
 // Check Cilium-based identity policy - dispatches to IPv4/IPv6 implementation
 static __always_inline int check_cilium_policy(struct sock_key *key, struct sockops_config *cfg) {
-    if (key->family == 1) { // IPv4
+    if (key->info.version == 4) { // IPv4
         return check_cilium_policy_v4(key, cfg);
-    } else if (key->family == 2) { // IPv6
+    } else if (key->info.version == 6) { // IPv6
         return check_cilium_policy_v6(key, cfg);
     }
     
@@ -264,7 +236,7 @@ int bpf_sockops(struct bpf_sock_ops *skops) {
         return 0; // No config, do nothing
         
     // Hardware offload optimizations using common macros
-    if (cfg->hw_offload) {
+    if (cfg->base.hw_offload) {
         // Use the appropriate hardware offload macro based on NIC type
         X540_OFFLOAD_SUPPORTED("sockops");
         X550_OFFLOAD_SUPPORTED("sockops");
@@ -282,30 +254,36 @@ int bpf_sockops(struct bpf_sock_ops *skops) {
     if (skops->family != AF_INET && skops->family != AF_INET6)
         return 0;
     
+    // Extract connection key based on address family
+    if (skops->family == AF_INET) {
+        extract_key4_from_ops(skops, &sock_key);
+    } else {
+        extract_key6_from_ops(skops, &sock_key);
+    }
+    
     // Handle socket operations based on the operation type
     switch (skops->op) {
         case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
-        case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
-            // Connection established
-            if (skops->family == AF_INET) {
-                extract_key4_from_ops(skops, &sock_key);
-            } else if (skops->family == AF_INET6) {
-                extract_key6_from_ops(skops, &sock_key);
-            }
-            
-            // Store connection info
-            __u64 val = bpf_ktime_get_ns();
-            bpf_map_update_elem(&sockets_map, &sock_key, &val, BPF_ANY);
-            
+        case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB: {
             // Check Cilium policy first if enabled
             int action = 0;
-            if (cfg->cilium_integration) {
+            if (cfg->base.cilium_integration) {
                 action = check_cilium_policy(&sock_key, cfg);
+                
+                // Record policy decision if monitoring is enabled
+                if (cfg->base.enable_monitoring && action == 1) {
+                    record_event(skops, 3); // 3 = denied by Cilium policy
+                }
             }
             
             // If Cilium allowed or not enabled, check local policy
-            if (action == 0 && !cfg->cilium_integration) {
+            if (action == 0) {
                 action = check_policy(&sock_key);
+                
+                // Record policy decision if monitoring is enabled
+                if (cfg->base.enable_monitoring && action == 1) {
+                    record_event(skops, 4); // 4 = denied by local policy
+                }
             }
             
             if (action == 1) {
@@ -313,43 +291,93 @@ int bpf_sockops(struct bpf_sock_ops *skops) {
                 bpf_sock_ops_cb_flags_set(skops, BPF_SOCK_OPS_RST_CB_FLAG);
                 return 1;
             }
-            else if (action == 2 && cfg->enable_redirection) {
-                // Redirect connection - not directly supported in sockops
-                // Would require integration with socket redirect BPF programs
+            
+            // Store connection info with metadata
+            __u64 val = bpf_ktime_get_ns();
+            if (sock_key.info.version == 6) {
+                val |= (1ULL << 63); // Set IPv6 flag in high bit
+            }
+            if (action == 2) {
+                val |= (1ULL << 62); // Set redirect flag
             }
             
-            // Record event if monitoring is enabled
-            if (cfg->enable_monitoring) {
+            bpf_map_update_elem(&sockets_map, &sock_key, &val, BPF_ANY);
+            
+            // Record connection event if monitoring is enabled
+            if (cfg->base.enable_monitoring) {
                 record_event(skops, 1); // 1 = established
             }
             
             break;
+        }
             
-        case BPF_SOCK_OPS_CONNECTION_TIMEOUT_CB:
+        case BPF_SOCK_OPS_CONNECTION_TIMEOUT_CB: {
             // Connection timeout
-            if (cfg->enable_monitoring) {
-                extract_key4_from_ops(skops, &sock_key);
-                record_event(skops, 2); // 2 = timeout
+            if (cfg->base.enable_monitoring) {
+                record_event(skops, 8); // 8 = timeout
             }
-            break;
             
-        case BPF_SOCK_OPS_STATE_CB:
-            // State change
-            if (cfg->enable_monitoring && skops->args[1] == BPF_TCP_CLOSE) {
-                extract_key4_from_ops(skops, &sock_key);
-                record_event(skops, 3); // 3 = closed
+            // Clean up connection tracking
+            bpf_map_delete_elem(&sockets_map, &sock_key);
+            break;
+        }
+            
+        case BPF_SOCK_OPS_STATE_CB: {
+            // Connection state change
+            __u32 old_state = skops->args[1];
+            __u32 new_state = skops->args[2];
+            
+            // Handle connection closure states
+            if (new_state == BPF_TCP_CLOSE ||
+                new_state == BPF_TCP_CLOSE_WAIT ||
+                new_state == BPF_TCP_FIN_WAIT1 ||
+                new_state == BPF_TCP_FIN_WAIT2) {
                 
-                // Remove from connections map
+                // Record event if monitoring is enabled
+                if (cfg->base.enable_monitoring) {
+                    record_event(skops, 2); // 2 = closed
+                }
+                
+                // Remove from tracking map
+                bpf_map_delete_elem(&sockets_map, &sock_key);
+            }
+            // Handle retransmission events for congestion monitoring
+            else if (new_state == BPF_TCP_RETRANS) {
+                if (cfg->base.enable_monitoring) {
+                    record_event(skops, 5); // 5 = retransmission
+                }
+            }
+            // Handle connection reset
+            else if (new_state == BPF_TCP_RESET) {
+                if (cfg->base.enable_monitoring) {
+                    record_event(skops, 9); // 9 = reset
+                }
                 bpf_map_delete_elem(&sockets_map, &sock_key);
             }
             break;
+        }
+            
+        case BPF_SOCK_OPS_TCP_CONNECT_CB: {
+            // New outgoing connection attempt
+            if (cfg->enable_monitoring) {
+                record_event(skops, 6); // 6 = connection attempt
+            }
+            break;
+        }
+            
+        case BPF_SOCK_OPS_TCP_LISTEN_CB: {
+            // New listening socket
+            if (cfg->enable_monitoring) {
+                record_event(skops, 7); // 7 = listen started
+            }
+            break;
+        }
     }
     
     return 0;
 }
 
-// TCP congestion control overrides could be added here
-// This is a placeholder for TCP CC optimizations
+// TCP congestion control handler
 SEC("sockops")
 int bpf_tcp_cc(struct bpf_sock_ops *skops) {
     // Get configuration
@@ -358,9 +386,71 @@ int bpf_tcp_cc(struct bpf_sock_ops *skops) {
     if (!cfg)
         return 0; // No config, do nothing
     
-    if (skops->op == BPF_SOCK_OPS_TCP_CONNECT_CB) {
-        // Set initial congestion control parameters
-        // Example: can customize the congestion control algorithm
+    // Extract connection key for tracking
+    struct sock_key sock_key = {};
+    if (skops->family == AF_INET) {
+        extract_key4_from_ops(skops, &sock_key);
+    } else if (skops->family == AF_INET6) {
+        extract_key6_from_ops(skops, &sock_key);
+    } else {
+        return 0; // Unknown family
+    }
+    
+    switch (skops->op) {
+        case BPF_SOCK_OPS_INIT: {
+            // Initialize congestion control parameters
+            // Set initial window size based on IP version
+            __u32 init_cwnd = (sock_key.info.version == 6) ? 10 : 8;
+            bpf_setsockopt(skops, SOL_TCP, TCP_INIT_CWND, &init_cwnd, sizeof(init_cwnd));
+            
+            // Enable TCP timestamps for better RTT measurements
+            __u32 ts_enabled = 1;
+            bpf_setsockopt(skops, SOL_TCP, TCP_TIMESTAMPS, &ts_enabled, sizeof(ts_enabled));
+            break;
+        }
+        
+        case BPF_SOCK_OPS_RTT_CB: {
+            // RTT update callback
+            if (cfg->base.enable_monitoring) {
+                // Record RTT event with the new RTT value
+                record_event(skops, 10); // 10 = RTT update
+            }
+            break;
+        }
+        
+        case BPF_SOCK_OPS_DUPACK_CB: {
+            // Duplicate ACK received
+            if (cfg->base.enable_monitoring) {
+                record_event(skops, 11); // 11 = duplicate ACK
+            }
+            break;
+        }
+        
+        case BPF_SOCK_OPS_RTO_CB: {
+            // RTO timer expired
+            if (cfg->base.enable_monitoring) {
+                record_event(skops, 12); // 12 = RTO timeout
+            }
+            break;
+        }
+        
+        case BPF_SOCK_OPS_STATE_CB: {
+            // State change in congestion control
+            __u32 old_state = skops->args[1];
+            __u32 new_state = skops->args[2];
+            
+            if (new_state == TCP_CA_Recovery || new_state == TCP_CA_Loss) {
+                // Connection is experiencing congestion
+                if (cfg->base.enable_monitoring) {
+                    record_event(skops, 13); // 13 = congestion event
+                }
+            }
+            break;
+        }
+    }
+    
+    return 0;
+}
         // bpf_setsockopt(skops, SOL_TCP, TCP_CONGESTION, "bbr", 3);
     }
     
@@ -370,8 +460,42 @@ int bpf_tcp_cc(struct bpf_sock_ops *skops) {
 // Define Cilium integration hooks
 SEC("cilium_sockops")
 int cilium_sockops(struct bpf_sock_ops *skops) {
-    // This function would be called by Cilium's datapath when using integration
-    // For now, we just pass operations to our own handler
+    // Get configuration
+    __u32 key = 0;
+    struct sockops_config *cfg = bpf_map_lookup_elem(&config_map, &key);
+    if (!cfg || !cfg->base.cilium_integration)
+        return 0; // No config or Cilium not enabled
+    
+    // Extract connection key for policy checks
+    struct sock_key sock_key = {};
+    if (skops->family == AF_INET) {
+        extract_key4_from_ops(skops, &sock_key);
+    } else if (skops->family == AF_INET6) {
+        extract_key6_from_ops(skops, &sock_key);
+    } else {
+        return 0; // Unknown family
+    }
+    
+    // Check Cilium policy
+    int verdict = check_cilium_policy(&sock_key, cfg);
+    
+    if (verdict == 1) { // DROP
+        // Record denied connection if monitoring is enabled
+        if (cfg->base.enable_monitoring) {
+            record_event(skops, 3); // 3 = denied by Cilium policy
+        }
+        return 1; // Deny connection
+    } else if (verdict == 2) { // REDIRECT
+        // Store redirection flag in connection metadata
+        __u64 val = bpf_ktime_get_ns();
+        val |= (1ULL << 62); // Set redirect flag
+        if (sock_key.info.version == 6) {
+            val |= (1ULL << 63); // Set IPv6 flag
+        }
+        bpf_map_update_elem(&sockets_map, &sock_key, &val, BPF_ANY);
+    }
+    
+    // Pass to regular sockops handler for additional processing
     return bpf_sockops(skops);
 }
 

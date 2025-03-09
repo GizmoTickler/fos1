@@ -4,7 +4,9 @@
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/in.h>
+#include <linux/in6.h>
 #include <linux/ip.h>
+#include <linux/ipv6.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <bpf/bpf_helpers.h>
@@ -33,12 +35,29 @@ struct {
     __type(value, struct cgroup_config);
 } config_map SEC(".maps");
 
+// IP address union for IPv4/IPv6
+union ip_addr {
+    __u32 v4;
+    struct in6_addr v6;
+};
+
+// Generic IP header info structure
+struct ip_info {
+    union ip_addr src;
+    union ip_addr dst;
+    __u8 version;
+    __u8 protocol;
+    __u16 src_port;
+    __u16 dst_port;
+};
+
 // Container policy structure
 struct container_policy {
     __u32 cgroup_id;         // CGroup ID
     __u32 max_bandwidth;     // Maximum bandwidth in bytes/sec
     __u32 max_connections;   // Maximum number of connections
     __u8 action;             // Action: 0 = allow, 1 = deny
+    __u8 ip_version;         // IP version: 4 or 6
 };
 
 // Define map for container policies
@@ -138,39 +157,95 @@ static __always_inline int update_accounting(struct __sk_buff *skb, int egress) 
     return 1; // Continue processing
 }
 
-// Check Cilium cgroup-identity mappings
-static __always_inline int check_cilium_cgroup_policy(struct __sk_buff *skb, int egress, struct cgroup_config *cfg) {
-    // Skip if Cilium integration is not enabled
-    if (!cfg->cilium_integration || !cfg->cilium_policy_index) {
-        return -1; // Not a match, continue with regular policy
-    }
-    
-    // Get cgroup ID
-    __u64 cgroup_id = bpf_skb_cgroup_id(skb);
-    if (!cgroup_id) {
-        return -1; // Can't determine cgroup
-    }
-    
-    // Extract IP addresses for identity lookups
+// Extract IP header information
+static __always_inline int extract_ip_info(struct __sk_buff *skb, struct ip_info *info) {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     struct ethhdr *eth = data;
     
     // Validate packet size
-    if (data + sizeof(*eth) > data_end) {
-        return -1; // Malformed packet
-    }
+    if (data + sizeof(*eth) > data_end)
+        return -1;
     
-    // Check if IP packet
-    if (eth->h_proto != bpf_htons(ETH_P_IP)) {
-        return -1; // Non-IP packet
+    // Check IP version
+    switch (bpf_ntohs(eth->h_proto)) {
+        case ETH_P_IP: {
+            struct iphdr *iph = (struct iphdr *)(eth + 1);
+            if ((void *)(iph + 1) > data_end)
+                return -1;
+            
+            info->version = 4;
+            info->protocol = iph->protocol;
+            info->src.v4 = iph->saddr;
+            info->dst.v4 = iph->daddr;
+            
+            // Extract ports for TCP/UDP
+            if (iph->protocol == IPPROTO_TCP || iph->protocol == IPPROTO_UDP) {
+                if (iph->protocol == IPPROTO_TCP) {
+                    struct tcphdr *tcp = (struct tcphdr *)((void *)iph + sizeof(*iph));
+                    if ((void *)(tcp + 1) > data_end)
+                        return -1;
+                    info->src_port = tcp->source;
+                    info->dst_port = tcp->dest;
+                } else {
+                    struct udphdr *udp = (struct udphdr *)((void *)iph + sizeof(*iph));
+                    if ((void *)(udp + 1) > data_end)
+                        return -1;
+                    info->src_port = udp->source;
+                    info->dst_port = udp->dest;
+                }
+            }
+            break;
+        }
+        case ETH_P_IPV6: {
+            struct ipv6hdr *ip6h = (struct ipv6hdr *)(eth + 1);
+            if ((void *)(ip6h + 1) > data_end)
+                return -1;
+            
+            info->version = 6;
+            info->protocol = ip6h->nexthdr;
+            __builtin_memcpy(&info->src.v6, &ip6h->saddr, sizeof(struct in6_addr));
+            __builtin_memcpy(&info->dst.v6, &ip6h->daddr, sizeof(struct in6_addr));
+            
+            // Extract ports for TCP/UDP
+            if (ip6h->nexthdr == IPPROTO_TCP || ip6h->nexthdr == IPPROTO_UDP) {
+                if (ip6h->nexthdr == IPPROTO_TCP) {
+                    struct tcphdr *tcp = (struct tcphdr *)((void *)ip6h + sizeof(*ip6h));
+                    if ((void *)(tcp + 1) > data_end)
+                        return -1;
+                    info->src_port = tcp->source;
+                    info->dst_port = tcp->dest;
+                } else {
+                    struct udphdr *udp = (struct udphdr *)((void *)ip6h + sizeof(*ip6h));
+                    if ((void *)(udp + 1) > data_end)
+                        return -1;
+                    info->src_port = udp->source;
+                    info->dst_port = udp->dest;
+                }
+            }
+            break;
+        }
+        default:
+            return -1;
     }
+    return 0;
+}
+
+// Check Cilium cgroup-identity mappings
+static __always_inline int check_cilium_cgroup_policy(struct __sk_buff *skb, int egress, struct cgroup_config *cfg) {
+    // Skip if Cilium integration is not enabled
+    if (!cfg->cilium_integration || !cfg->cilium_policy_index)
+        return -1; // Not a match, continue with regular policy
     
-    // Parse IP header
-    struct iphdr *iph = (struct iphdr *)(eth + 1);
-    if ((void *)(iph + 1) > data_end) {
-        return -1; // Malformed packet
-    }
+    // Get cgroup ID
+    __u64 cgroup_id = bpf_skb_cgroup_id(skb);
+    if (!cgroup_id)
+        return -1; // Can't determine cgroup
+    
+    // Extract IP information
+    struct ip_info ip_info = {};
+    if (extract_ip_info(skb, &ip_info) < 0)
+        return -1; // Failed to extract IP info
     
     // Look up policy by index
     __u32 policy_key = cfg->cilium_policy_index;
@@ -181,8 +256,8 @@ static __always_inline int check_cilium_cgroup_policy(struct __sk_buff *skb, int
         (policy->direction == 2 || (egress && policy->direction == 1) || (!egress && policy->direction == 0))) {
         
         // Process source/destination based on traffic direction
-        __u32 src_ip = egress ? iph->saddr : iph->daddr;
-        __u32 dst_ip = egress ? iph->daddr : iph->saddr;
+        union ip_addr *src_ip = egress ? &ip_info.src : &ip_info.dst;
+        union ip_addr *dst_ip = egress ? &ip_info.dst : &ip_info.src;
         
         // For egress traffic, record source identity based on cgroup
         if (egress && policy->identity > 0) {
@@ -190,7 +265,10 @@ static __always_inline int check_cilium_cgroup_policy(struct __sk_buff *skb, int
                 .id = policy->identity,
                 .reserved = 0
             };
-            bpf_map_update_elem(&cilium_ipcache, &iph->saddr, &identity, BPF_ANY);
+            if (ip_info.version == 4) {
+                bpf_map_update_elem(&cilium_ipcache, &src_ip->v4, &identity, BPF_ANY);
+            } else {
+                bpf_map_update_elem(&cilium_ipcache, &src_ip->v6, &identity, BPF_ANY);
             
             // After setting identity, we can use the common policy check
             // to determine if this traffic is allowed based on additional rules
@@ -216,16 +294,33 @@ static __always_inline int check_cilium_cgroup_policy(struct __sk_buff *skb, int
     return -1; // No Cilium policy match
 }
 
+// Compare IPv6 addresses
+static __always_inline int compare_ipv6(struct in6_addr *a, struct in6_addr *b) {
+    return (a->s6_addr32[0] == b->s6_addr32[0] &&
+            a->s6_addr32[1] == b->s6_addr32[1] &&
+            a->s6_addr32[2] == b->s6_addr32[2] &&
+            a->s6_addr32[3] == b->s6_addr32[3]);
+}
+
 // Check if a connection is allowed based on container policy
 static __always_inline int check_connection_policy(struct __sk_buff *skb) {
     __u64 cgroup_id = bpf_skb_cgroup_id(skb);
     if (!cgroup_id)
         return 1; // Allow if can't determine cgroup
     
+    // Extract IP information
+    struct ip_info ip_info = {};
+    if (extract_ip_info(skb, &ip_info) < 0)
+        return 1; // Allow if can't extract IP info
+    
     // Check for policy
     struct container_policy *policy = bpf_map_lookup_elem(&cgroup_policies_map, &cgroup_id);
     if (!policy)
         return 1; // No policy, allow
+    
+    // Check IP version if specified in policy
+    if (policy->ip_version != 0 && policy->ip_version != ip_info.version)
+        return 0; // Deny if version mismatch
     
     // Check for connection limits
     if (policy->max_connections > 0) {
@@ -264,6 +359,10 @@ int cgroup_egress(struct __sk_buff *skb) {
     if (!cfg)
         return 1; // No config, allow packet
         
+    // Extract IP information early
+    struct ip_info ip_info = {};
+    int ip_res = extract_ip_info(skb, &ip_info);
+    
     // Hardware offload optimizations using common macros
     if (cfg->hw_offload) {
         // Use the appropriate hardware offload macro based on NIC type
@@ -296,28 +395,32 @@ int cgroup_egress(struct __sk_buff *skb) {
     }
     
     // Apply egress control if enabled
-    if (cfg->enable_egress_ctrl) {
-        // Parse Ethernet header
-        void *data = (void *)(long)skb->data;
-        void *data_end = (void *)(long)skb->data_end;
-        struct ethhdr *eth = data;
-        
-        // Check packet size
-        if (data + sizeof(*eth) > data_end)
-            return 1; // Allow malformed packet (let kernel handle it)
-        
-        // Check if IP packet
-        if (eth->h_proto != bpf_htons(ETH_P_IP))
-            return 1; // Non-IP packet, allow
-        
-        // Parse IP header
-        struct iphdr *iph = (struct iphdr *)(eth + 1);
-        if ((void *)(iph + 1) > data_end)
-            return 1; // Allow malformed packet
-        
-        // Example: Block specific destination (e.g., block access to 1.2.3.4)
-        if (iph->daddr == 0x04030201) // 1.2.3.4 in network byte order
-            return 0; // Deny
+    if (cfg->enable_egress_ctrl && ip_res == 0) {
+        // Get cgroup ID for policy lookup
+        __u64 cgroup_id = bpf_skb_cgroup_id(skb);
+        if (!cgroup_id)
+            return 1; // Allow if can't determine cgroup
+            
+        // Look up policy
+        struct container_policy *policy = bpf_map_lookup_elem(&cgroup_policies_map, &cgroup_id);
+        if (policy) {
+            // Check IP version matches policy
+            if (policy->ip_version != 0 && policy->ip_version != ip_info.version)
+                return 0; // Deny if version mismatch
+                
+            // Apply policy based on IP version
+            if (ip_info.version == 4) {
+                // IPv4-specific rules
+                if (ip_info.dst.v4 == 0x04030201) // Example: Block 1.2.3.4
+                    return 0;
+            } else if (ip_info.version == 6) {
+                // IPv6-specific rules
+                struct in6_addr blocked_v6 = {}; // Example: Block specific IPv6
+                blocked_v6.s6_addr32[0] = 0x20010db8;
+                if (compare_ipv6(&ip_info.dst.v6, &blocked_v6))
+                    return 0;
+            }
+        }
     }
     
     // Default action
@@ -332,7 +435,11 @@ int cgroup_ingress(struct __sk_buff *skb) {
     struct cgroup_config *cfg = bpf_map_lookup_elem(&config_map, &key);
     if (!cfg)
         return 1; // No config, allow packet
-        
+    
+    // Extract IP information early
+    struct ip_info ip_info = {};
+    int ip_res = extract_ip_info(skb, &ip_info);
+    
     // Hardware offload optimizations for ingress
     if (cfg->hw_offload) {
         // Similar to egress, but tuned for ingress traffic on X540/X550/I225 NICs
@@ -358,10 +465,32 @@ int cgroup_ingress(struct __sk_buff *skb) {
     }
     
     // Apply container policies if enabled
-    if (cfg->enable_container_pol) {
-        int action = check_connection_policy(skb);
-        if (!action)
-            return 0; // Deny
+    if (cfg->enable_container_pol && ip_res == 0) {
+        __u64 cgroup_id = bpf_skb_cgroup_id(skb);
+        if (cgroup_id) {
+            struct container_policy *policy = bpf_map_lookup_elem(&cgroup_policies_map, &cgroup_id);
+            if (policy) {
+                // Check IP version matches policy
+                if (policy->ip_version != 0 && policy->ip_version != ip_info.version)
+                    return 0; // Deny if version mismatch
+                
+                // Apply specific ingress rules based on IP version
+                if (ip_info.version == 4) {
+                    // IPv4-specific ingress rules
+                    if (ip_info.src.v4 == 0x04030201) // Example: Block traffic from 1.2.3.4
+                        return 0;
+                } else if (ip_info.version == 6) {
+                    // IPv6-specific ingress rules
+                    struct in6_addr blocked_v6 = {}; // Example: Block specific IPv6
+                    blocked_v6.s6_addr32[0] = 0x20010db8;
+                    if (compare_ipv6(&ip_info.src.v6, &blocked_v6))
+                        return 0;
+                }
+                
+                // Check connection policy
+                return check_connection_policy(skb);
+            }
+        }
     }
     
     // Default action

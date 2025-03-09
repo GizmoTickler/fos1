@@ -4,27 +4,28 @@
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
-#include <linux/in.h>
+#include <linux/ipv6.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/icmp.h>
+#include <linux/icmpv6.h>
 #include <linux/pkt_cls.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_endian.h>
 
-// Include common Cilium definitions
+// Include common definitions
+#include "common.h"
 #include "cilium_common.h"
 
 // NAT Configuration structure
 struct nat_config {
-    __u32 external_ip;     // External IP address for SNAT/DNAT
-    __u8 nat_type;         // 0 = SNAT, 1 = DNAT, 2 = Both
-    __u8 enable_masquerade; // Enable masquerading (use interface address)
-    __u8 enable_portmap;   // Enable port mapping
-    __u8 enable_tracking;  // Enable connection tracking
-    __u8 default_action;   // Default action: 0 = pass, 1 = drop
-    __u8 cilium_integration; // Enable Cilium integration
-    __u8 hw_offload;        // Enable hardware offload optimizations
+    union ip_addr external_ip;  // External IP address for SNAT/DNAT
+    __u8 nat_type;              // 0 = SNAT, 1 = DNAT, 2 = Both
+    __u8 enable_masquerade;     // Enable masquerading (use interface address)
+    __u8 enable_portmap;        // Enable port mapping
+    __u8 enable_tracking;       // Enable connection tracking
+    __u8 default_action;        // Default action: 0 = pass, 1 = drop
+    __u8 cilium_integration;    // Enable Cilium integration
+    __u8 hw_offload;           // Enable hardware offload optimizations
+    __u8 ip_version;           // IP version: 4 or 6
     __u16 cilium_policy_index; // Reference to Cilium policy to apply
 };
 
@@ -38,11 +39,12 @@ struct {
 
 // NAT Translation Entry structure
 struct nat_entry {
-    __u32 internal_ip;     // Internal IP
-    __u32 external_ip;     // External IP
-    __u16 internal_port;   // Internal port
-    __u16 external_port;   // External port
-    __u8 protocol;         // Protocol
+    union ip_addr internal_ip;  // Internal IP
+    union ip_addr external_ip;  // External IP
+    __u16 internal_port;       // Internal port
+    __u16 external_port;       // External port
+    __u8 protocol;             // Protocol
+    __u8 ip_version;           // IP version: 4 or 6
 };
 
 // Define map for NAT translation entries
@@ -55,10 +57,11 @@ struct {
 
 // Port Mapping Entry structure
 struct port_mapping {
-    __u32 internal_ip;     // Internal IP
-    __u16 internal_port;   // Internal port
-    __u16 external_port;   // External port
-    __u8 protocol;         // Protocol
+    union ip_addr internal_ip;  // Internal IP
+    __u16 internal_port;       // Internal port
+    __u16 external_port;       // External port
+    __u8 protocol;             // Protocol
+    __u8 ip_version;           // IP version: 4 or 6
 };
 
 // Define map for port mappings
@@ -91,9 +94,10 @@ DECLARE_CILIUM_IPCACHE;
 struct cilium_nat_policy {
     __u32 from_identity;    // Source identity
     __u32 to_identity;      // Destination identity
-    __u32 nat_target_ip;    // NAT target IP
+    union ip_addr nat_target_ip;  // NAT target IP (v4 or v6)
     __u16 nat_target_port;  // NAT target port
     __u8 protocol;          // Protocol
+    __u8 ip_version;        // IP version: 4 or 6
 };
 
 // Define map for Cilium NAT policies
@@ -104,14 +108,100 @@ struct {
     __type(value, struct cilium_nat_policy);
 } cilium_nat_map SEC(".maps");
 
+// Extract IP header information
+static __always_inline int extract_ip_info(struct __sk_buff *skb, struct ip_info *info) {
+    void *data = (void *)(long)skb->data;
+    void *data_end = (void *)(long)skb->data_end;
+    struct ethhdr *eth = data;
+    
+    // Validate packet size
+    if (data + sizeof(*eth) > data_end)
+        return -1;
+    
+    // Check IP version
+    switch (bpf_ntohs(eth->h_proto)) {
+        case ETH_P_IP: {
+            struct iphdr *iph = (struct iphdr *)(eth + 1);
+            if ((void *)(iph + 1) > data_end)
+                return -1;
+            
+            info->version = 4;
+            info->protocol = iph->protocol;
+            info->src.v4 = iph->saddr;
+            info->dst.v4 = iph->daddr;
+            
+            // Extract ports for TCP/UDP
+            if (iph->protocol == IPPROTO_TCP || iph->protocol == IPPROTO_UDP) {
+                if (iph->protocol == IPPROTO_TCP) {
+                    struct tcphdr *tcp = (struct tcphdr *)((void *)iph + sizeof(*iph));
+                    if ((void *)(tcp + 1) > data_end)
+                        return -1;
+                    info->src_port = tcp->source;
+                    info->dst_port = tcp->dest;
+                } else {
+                    struct udphdr *udp = (struct udphdr *)((void *)iph + sizeof(*iph));
+                    if ((void *)(udp + 1) > data_end)
+                        return -1;
+                    info->src_port = udp->source;
+                    info->dst_port = udp->dest;
+                }
+            }
+            break;
+        }
+        case ETH_P_IPV6: {
+            struct ipv6hdr *ip6h = (struct ipv6hdr *)(eth + 1);
+            if ((void *)(ip6h + 1) > data_end)
+                return -1;
+            
+            info->version = 6;
+            info->protocol = ip6h->nexthdr;
+            __builtin_memcpy(&info->src.v6, &ip6h->saddr, sizeof(struct in6_addr));
+            __builtin_memcpy(&info->dst.v6, &ip6h->daddr, sizeof(struct in6_addr));
+            
+            // Extract ports for TCP/UDP
+            if (ip6h->nexthdr == IPPROTO_TCP || ip6h->nexthdr == IPPROTO_UDP) {
+                if (ip6h->nexthdr == IPPROTO_TCP) {
+                    struct tcphdr *tcp = (struct tcphdr *)((void *)ip6h + sizeof(*ip6h));
+                    if ((void *)(tcp + 1) > data_end)
+                        return -1;
+                    info->src_port = tcp->source;
+                    info->dst_port = tcp->dest;
+                } else {
+                    struct udphdr *udp = (struct udphdr *)((void *)ip6h + sizeof(*ip6h));
+                    if ((void *)(udp + 1) > data_end)
+                        return -1;
+                    info->src_port = udp->source;
+                    info->dst_port = udp->dest;
+                }
+            }
+            break;
+        }
+        default:
+            return -1;
+    }
+    return 0;
+}
+
 // Helper function for checksum calculation
 static __always_inline void update_checksum(struct __sk_buff *skb, __u16 old_val, __u16 new_val, __u16 checksum_offset) {
     bpf_l4_csum_replace(skb, checksum_offset, old_val, new_val, sizeof(new_val));
 }
 
+// Helper function for IPv6 checksum calculation
+static __always_inline void update_ipv6_checksum(struct __sk_buff *skb, struct in6_addr *old_addr,
+                                                struct in6_addr *new_addr, __u16 checksum_offset) {
+    // Update checksum for each 16-bit segment of the IPv6 address
+    for (int i = 0; i < 8; i++) {
+        __u16 old_val = *((__u16 *)old_addr + i);
+        __u16 new_val = *((__u16 *)new_addr + i);
+        if (old_val != new_val) {
+            bpf_l4_csum_replace(skb, checksum_offset, old_val, new_val, sizeof(new_val));
+        }
+    }
+}
+
 // Check Cilium identity-based NAT policies
-static __always_inline int check_cilium_nat_policy(struct __sk_buff *skb, struct iphdr *iph, 
-                                          __u16 src_port, __u16 dst_port,
+static __always_inline int check_cilium_nat_policy(struct __sk_buff *skb, struct ip_info *info,
                                           struct nat_config *cfg) {
     // Skip if Cilium integration is not enabled
     if (!cfg->cilium_integration || !cfg->cilium_policy_index) {
@@ -119,14 +209,27 @@ static __always_inline int check_cilium_nat_policy(struct __sk_buff *skb, struct
     }
     
     // Use the common cilium_check_policy helper to determine if the connection is allowed
-    int verdict = cilium_check_policy(
-        skb,            // Context
-        iph->saddr,      // Source IP
-        iph->daddr,      // Destination IP
-        iph->protocol,   // Protocol
-        src_port,        // Source port
-        dst_port         // Destination port
-    );
+    int verdict;
+    if (info->version == 4) {
+        verdict = cilium_check_policy(
+            skb,            // Context
+            info->src.v4,    // Source IP
+            info->dst.v4,    // Destination IP
+            info->protocol,  // Protocol
+            info->src_port,  // Source port
+            info->dst_port   // Destination port
+        );
+    } else {
+        // TODO: Update when Cilium adds native IPv6 policy check
+        verdict = cilium_check_policy6(
+            skb,                // Context
+            &info->src.v6,      // Source IPv6
+            &info->dst.v6,      // Destination IPv6
+            info->protocol,     // Protocol
+            info->src_port,     // Source port
+            info->dst_port      // Destination port
+        );
+    }
     
     // If the policy check indicates DROP, don't perform NAT
     if (verdict == 1) { // DROP
@@ -138,13 +241,23 @@ static __always_inline int check_cilium_nat_policy(struct __sk_buff *skb, struct
     struct cilium_nat_policy *policy = bpf_map_lookup_elem(&cilium_nat_map, &policy_key);
     
     if (policy) {
-        struct cilium_identity *src_identity = bpf_map_lookup_elem(&cilium_ipcache, &iph->saddr);
-        struct cilium_identity *dst_identity = bpf_map_lookup_elem(&cilium_ipcache, &iph->daddr);
+        // Skip if IP version doesn't match policy
+        if (policy->ip_version != 0 && policy->ip_version != info->version)
+            return 0;
+        
+        struct cilium_identity *src_identity, *dst_identity;
+        if (info->version == 4) {
+            src_identity = bpf_map_lookup_elem(&cilium_ipcache, &info->src.v4);
+            dst_identity = bpf_map_lookup_elem(&cilium_ipcache, &info->dst.v4);
+        } else {
+            src_identity = bpf_map_lookup_elem(&cilium_ipcache6, &info->src.v6);
+            dst_identity = bpf_map_lookup_elem(&cilium_ipcache6, &info->dst.v6);
+        }
         
         if (src_identity && dst_identity && 
             (policy->from_identity == 0 || policy->from_identity == src_identity->id) &&
             (policy->to_identity == 0 || policy->to_identity == dst_identity->id) &&
-            (policy->protocol == 0 || policy->protocol == iph->protocol)) {
+            (policy->protocol == 0 || policy->protocol == info->protocol)) {
             
             // This connection matches the Cilium NAT policy
             return 1; // Indicates a Cilium policy match occurred
@@ -154,37 +267,79 @@ static __always_inline int check_cilium_nat_policy(struct __sk_buff *skb, struct
     return 0; // No Cilium policy match, use regular NAT
 }
 
+// Compare IPv6 addresses
+static __always_inline int compare_ipv6(struct in6_addr *a, struct in6_addr *b) {
+    return (a->s6_addr32[0] == b->s6_addr32[0] &&
+            a->s6_addr32[1] == b->s6_addr32[1] &&
+            a->s6_addr32[2] == b->s6_addr32[2] &&
+            a->s6_addr32[3] == b->s6_addr32[3]);
+}
+
 // Helper function to calculate connection tuple hash for TCP/UDP
-static __always_inline __u64 conn_hash(struct iphdr *iph, __u16 src_port, __u16 dst_port, int reverse) {
-    if (reverse) {
-        return (((__u64)iph->daddr << 32) | ((__u64)iph->saddr)) ^
-               (((__u64)dst_port << 32) | ((__u64)src_port)) ^
-               ((__u64)iph->protocol << 56);
+static __always_inline __u64 conn_hash(struct ip_info *info, int reverse) {
+    __u64 addr_hash;
+    if (info->version == 4) {
+        if (reverse) {
+            addr_hash = (((__u64)info->dst.v4 << 32) | ((__u64)info->src.v4));
+        } else {
+            addr_hash = (((__u64)info->src.v4 << 32) | ((__u64)info->dst.v4));
+        }
     } else {
-        return (((__u64)iph->saddr << 32) | ((__u64)iph->daddr)) ^
-               (((__u64)src_port << 32) | ((__u64)dst_port)) ^
-               ((__u64)iph->protocol << 56);
+        // For IPv6, use all 4 32-bit segments
+        if (reverse) {
+            addr_hash = ((__u64)info->dst.v6.s6_addr32[0] << 32 | (__u64)info->dst.v6.s6_addr32[1]) ^
+                        ((__u64)info->dst.v6.s6_addr32[2] << 32 | (__u64)info->dst.v6.s6_addr32[3]) ^
+                        ((__u64)info->src.v6.s6_addr32[0] << 32 | (__u64)info->src.v6.s6_addr32[1]) ^
+                        ((__u64)info->src.v6.s6_addr32[2] << 32 | (__u64)info->src.v6.s6_addr32[3]);
+        } else {
+            addr_hash = ((__u64)info->src.v6.s6_addr32[0] << 32 | (__u64)info->src.v6.s6_addr32[1]) ^
+                        ((__u64)info->src.v6.s6_addr32[2] << 32 | (__u64)info->src.v6.s6_addr32[3]) ^
+                        ((__u64)info->dst.v6.s6_addr32[0] << 32 | (__u64)info->dst.v6.s6_addr32[1]) ^
+                        ((__u64)info->dst.v6.s6_addr32[2] << 32 | (__u64)info->dst.v6.s6_addr32[3]);
+        }
+    }
+    
+    // Add ports and protocol to hash
+    if (reverse) {
+        return addr_hash ^ (((__u64)info->dst_port << 32) | ((__u64)info->src_port)) ^
+               ((__u64)info->protocol << 56);
+    } else {
+        return addr_hash ^ (((__u64)info->src_port << 32) | ((__u64)info->dst_port)) ^
+               ((__u64)info->protocol << 56);
     }
 }
 
-// Helper function to calculate connection tuple hash for ICMP
-static __always_inline __u64 icmp_hash(struct iphdr *iph, __u16 id, int reverse) {
-    if (reverse) {
-        return (((__u64)iph->daddr << 32) | ((__u64)iph->saddr)) ^
-               ((__u64)id << 32) ^
-               ((__u64)iph->protocol << 56);
+// Helper function to calculate connection tuple hash for ICMP/ICMPv6
+static __always_inline __u64 icmp_hash(struct ip_info *info, __u16 id, int reverse) {
+    __u64 addr_hash;
+    if (info->version == 4) {
+        if (reverse) {
+            addr_hash = (((__u64)info->dst.v4 << 32) | ((__u64)info->src.v4));
+        } else {
+            addr_hash = (((__u64)info->src.v4 << 32) | ((__u64)info->dst.v4));
+        }
     } else {
-        return (((__u64)iph->saddr << 32) | ((__u64)iph->daddr)) ^
-               ((__u64)id << 32) ^
-               ((__u64)iph->protocol << 56);
+        // For IPv6, use all 4 32-bit segments
+        if (reverse) {
+            addr_hash = ((__u64)info->dst.v6.s6_addr32[0] << 32 | (__u64)info->dst.v6.s6_addr32[1]) ^
+                        ((__u64)info->dst.v6.s6_addr32[2] << 32 | (__u64)info->dst.v6.s6_addr32[3]) ^
+                        ((__u64)info->src.v6.s6_addr32[0] << 32 | (__u64)info->src.v6.s6_addr32[1]) ^
+                        ((__u64)info->src.v6.s6_addr32[2] << 32 | (__u64)info->src.v6.s6_addr32[3]);
+        } else {
+            addr_hash = ((__u64)info->src.v6.s6_addr32[0] << 32 | (__u64)info->src.v6.s6_addr32[1]) ^
+                        ((__u64)info->src.v6.s6_addr32[2] << 32 | (__u64)info->src.v6.s6_addr32[3]) ^
+                        ((__u64)info->dst.v6.s6_addr32[0] << 32 | (__u64)info->dst.v6.s6_addr32[1]) ^
+                        ((__u64)info->dst.v6.s6_addr32[2] << 32 | (__u64)info->dst.v6.s6_addr32[3]);
+        }
     }
+    
+    return addr_hash ^ ((__u64)id << 32) ^ ((__u64)info->protocol << 56);
 }
 
-// SNAT for TCP/UDP
-static __always_inline int do_snat(struct __sk_buff *skb, struct iphdr *iph, __u16 *src_port, __u16 *dst_port,
-                           __u16 l4_off, __u16 csum_off, struct nat_config *cfg) {
+// SNAT for TCP/UDP/ICMP
+static __always_inline int do_snat(struct __sk_buff *skb, struct ip_info *info, __u16 l4_off, __u16 csum_off, struct nat_config *cfg) {
     // Create hash for the connection
-    __u64 hash = conn_hash(iph, *src_port, *dst_port, 0);
+    __u64 hash = conn_hash(info, 0);
     
     // Check if this is an established connection
     struct nat_entry *entry = bpf_map_lookup_elem(&translations_map, &hash);
@@ -197,6 +352,27 @@ static __always_inline int do_snat(struct __sk_buff *skb, struct iphdr *iph, __u
             };
             bpf_map_update_elem(&conntrack_map, &hash, &track, BPF_ANY);
         }
+        
+        // Apply existing translation
+        if (info->version == 4) {
+            // Update IPv4 source address
+            bpf_l3_csum_replace(skb, l4_off - 8, info->src.v4, entry->external_ip.v4, 4);
+            info->src.v4 = entry->external_ip.v4;
+        } else {
+            // Update IPv6 source address
+            update_ipv6_checksum(skb, &info->src.v6, &entry->external_ip.v6, csum_off);
+            __builtin_memcpy(&info->src.v6, &entry->external_ip.v6, sizeof(struct in6_addr));
+        }
+        
+        // Update source port if needed
+        if (info->protocol == IPPROTO_TCP || info->protocol == IPPROTO_UDP) {
+            if (info->src_port != entry->external_port) {
+                update_checksum(skb, info->src_port, entry->external_port, csum_off);
+                info->src_port = entry->external_port;
+            }
+        }
+        
+        return 0;
     } else {
         // New connection, create NAT entry
         struct nat_entry new_entry = {
@@ -344,126 +520,96 @@ int tc_nat(struct __sk_buff *skb) {
         I225_OFFLOAD_SUPPORTED("nat");
     }
     
-    // Parse Ethernet header
-    struct ethhdr eth;
-    if (bpf_skb_load_bytes(skb, 0, &eth, sizeof(eth)) < 0)
-        return TC_ACT_OK; // Can't parse Ethernet header
+    // Extract IP information using our generic parser
+    struct ip_info info = {};
+    if (extract_ip_info(skb, &info) < 0)
+        return TC_ACT_OK; // Can't parse packet
     
-    // Check for IPv4 packet
-    if (eth.h_proto != bpf_htons(ETH_P_IP))
-        return TC_ACT_OK; // Non-IPv4 packets pass
+    // Skip if IP version doesn't match configuration
+    if (cfg->ip_version != 0 && cfg->ip_version != info.version)
+        return TC_ACT_OK;
     
-    // Parse IP header
-    struct iphdr iph;
-    if (bpf_skb_load_bytes(skb, sizeof(eth), &iph, sizeof(iph)) < 0)
-        return TC_ACT_OK; // Can't parse IP header
+    // Calculate L4 header offset based on IP version
+    __u16 l4_offset = sizeof(struct ethhdr);
+    l4_offset += (info.version == 4) ? sizeof(struct iphdr) : sizeof(struct ipv6hdr);
+    __u16 csum_offset = 0;
     
-    // Calculate IP header length
-    __u32 ip_header_size = iph.ihl << 2;
-    __u16 l4_offset = sizeof(eth) + ip_header_size;
-    
-    // Handle TCP
-    if (iph.protocol == IPPROTO_TCP) {
-        struct tcphdr tcp;
-        if (bpf_skb_load_bytes(skb, l4_offset, &tcp, sizeof(tcp)) < 0)
-            return TC_ACT_OK; // Can't parse TCP header
-        
-        __u16 src_port = tcp.source;
-        __u16 dst_port = tcp.dest;
-        __u16 csum_offset = l4_offset + offsetof(struct tcphdr, check);
-        
-        // Perform SNAT or DNAT based on configuration
-        if (cfg->nat_type == 0 || cfg->nat_type == 2) {
-            // SNAT for outgoing packets (internal -> external)
-            return do_snat(skb, &iph, &src_port, &dst_port, l4_offset, csum_offset, cfg);
-        } else if (cfg->nat_type == 1 || cfg->nat_type == 2) {
-            // DNAT for incoming packets (external -> internal)
-            return do_dnat(skb, &iph, &src_port, &dst_port, l4_offset, csum_offset, cfg);
+    // Handle TCP/UDP packets
+    if (info.protocol == IPPROTO_TCP || info.protocol == IPPROTO_UDP) {
+        // Set checksum offset based on protocol
+        if (info.protocol == IPPROTO_TCP) {
+            csum_offset = l4_offset + offsetof(struct tcphdr, check);
+        } else {
+            csum_offset = l4_offset + offsetof(struct udphdr, check);
         }
-    }
-    // Handle UDP
-    else if (iph.protocol == IPPROTO_UDP) {
-        struct udphdr udp;
-        if (bpf_skb_load_bytes(skb, l4_offset, &udp, sizeof(udp)) < 0)
-            return TC_ACT_OK; // Can't parse UDP header
         
-        __u16 src_port = udp.source;
-        __u16 dst_port = udp.dest;
-        __u16 csum_offset = l4_offset + offsetof(struct udphdr, check);
-        
-        // Perform SNAT or DNAT based on configuration
-        if (cfg->nat_type == 0 || cfg->nat_type == 2) {
-            // SNAT for outgoing packets (internal -> external)
-            return do_snat(skb, &iph, &src_port, &dst_port, l4_offset, csum_offset, cfg);
-        } else if (cfg->nat_type == 1 || cfg->nat_type == 2) {
-            // DNAT for incoming packets (external -> internal)
-            return do_dnat(skb, &iph, &src_port, &dst_port, l4_offset, csum_offset, cfg);
-        }
-    }
-    // Handle ICMP
-    else if (iph.protocol == IPPROTO_ICMP) {
-        // For ICMP, NAT implementations would handle special cases for ICMP errors
-        // This is a simplified implementation focusing on ICMP Echo/Reply
-        struct icmphdr icmp;
-        if (bpf_skb_load_bytes(skb, l4_offset, &icmp, sizeof(icmp)) < 0)
-            return TC_ACT_OK; // Can't parse ICMP header
-        
-        // Only handle Echo and Reply types
-        if (icmp.type != ICMP_ECHO && icmp.type != ICMP_ECHOREPLY)
-            return TC_ACT_OK;
-        
-        // Use identifier as a port equivalent
-        __u16 id = icmp.un.echo.id;
-        __u64 hash;
-        
-        if (icmp.type == ICMP_ECHO && (cfg->nat_type == 0 || cfg->nat_type == 2)) {
-            // SNAT for outgoing ICMP Echo
-            hash = icmp_hash(&iph, id, 0);
-            
-            // Check if this is an established connection
-            struct nat_entry *entry = bpf_map_lookup_elem(&translations_map, &hash);
-            if (!entry) {
-                // New connection, create NAT entry
-                struct nat_entry new_entry = {
-                    .internal_ip = iph->saddr,
-                    .external_ip = cfg->external_ip,
-                    .internal_port = id,
-                    .external_port = id,
-                    .protocol = iph->protocol
-                };
-                
-                // Create a new translation entry
-                bpf_map_update_elem(&translations_map, &hash, &new_entry, BPF_ANY);
-                
-                // Create reverse mapping for incoming packets
-                __u64 rev_hash = icmp_hash(&iph, id, 1);
-                bpf_map_update_elem(&translations_map, &rev_hash, &new_entry, BPF_ANY);
-                
-                entry = &new_entry;
+        // Check Cilium policies if enabled
+        if (cfg->cilium_integration) {
+            // TODO: Update Cilium policy check for IPv6
+            if (info.version == 4) {
+                int verdict = check_cilium_nat_policy(skb, (struct iphdr *)((void *)(long)skb->data + sizeof(struct ethhdr)),
+                                                    info.src_port, info.dst_port, cfg);
+                if (verdict < 0)
+                    return TC_ACT_SHOT; // Drop packet based on policy
             }
-            
-            // Apply SNAT - change source IP
-            __u32 old_addr = iph->saddr;
-            iph->saddr = entry->external_ip;
-            bpf_l3_csum_replace(skb, offsetof(struct iphdr, check), old_addr, entry->external_ip, 4);
-            
-            // Update ICMP checksum
-            bpf_l4_csum_replace(skb, l4_offset + offsetof(struct icmphdr, checksum), 0, 0, BPF_F_MARK_MANGLED_0);
         }
-        else if (icmp.type == ICMP_ECHOREPLY && (cfg->nat_type == 1 || cfg->nat_type == 2)) {
-            // DNAT for incoming ICMP Echo Reply
-            hash = icmp_hash(&iph, id, 0);
+        
+        // Perform NAT based on direction
+        if (cfg->nat_type == 0 || cfg->nat_type == 2) { // SNAT or Both
+            if (do_snat(skb, &info, l4_offset, csum_offset, cfg) < 0)
+                return TC_ACT_SHOT;
+        }
+        if (cfg->nat_type == 1 || cfg->nat_type == 2) { // DNAT or Both
+            if (do_dnat(skb, &info, l4_offset, csum_offset, cfg) < 0)
+                return TC_ACT_SHOT;
+        }
+    }
+    // Handle ICMP/ICMPv6 packets
+    else if ((info.version == 4 && info.protocol == IPPROTO_ICMP) ||
+             (info.version == 6 && info.protocol == IPPROTO_ICMPV6)) {
+        __u16 icmp_id;
+        __u8 icmp_type;
+        
+        // Parse ICMP/ICMPv6 header
+        if (info.version == 4) {
+            struct icmphdr icmp;
+            if (bpf_skb_load_bytes(skb, l4_offset, &icmp, sizeof(icmp)) < 0)
+                return TC_ACT_OK;
             
-            // Look for an existing translation
-            struct nat_entry *entry = bpf_map_lookup_elem(&translations_map, &hash);
-            if (entry) {
-                // Apply existing DNAT translation
-                __u32 old_addr = iph->daddr;
-                iph->daddr = entry->internal_ip;
-                bpf_l3_csum_replace(skb, offsetof(struct iphdr, check), old_addr, entry->internal_ip, 4);
-                
-                // Update ICMP checksum
-                bpf_l4_csum_replace(skb, l4_offset + offsetof(struct icmphdr, checksum), 0, 0, BPF_F_MARK_MANGLED_0);
+            // Only handle Echo and Reply types
+            if (icmp.type != ICMP_ECHO && icmp.type != ICMP_ECHOREPLY)
+                return TC_ACT_OK;
+            
+            icmp_id = icmp.un.echo.id;
+            icmp_type = icmp.type;
+        } else {
+            struct icmp6hdr icmp6;
+            if (bpf_skb_load_bytes(skb, l4_offset, &icmp6, sizeof(icmp6)) < 0)
+                return TC_ACT_OK;
+            
+            // Only handle Echo and Reply types
+            if (icmp6.icmp6_type != ICMPV6_ECHO_REQUEST && icmp6.icmp6_type != ICMPV6_ECHO_REPLY)
+                return TC_ACT_OK;
+            
+            icmp_id = icmp6.icmp6_dataun.u_echo.identifier;
+            icmp_type = icmp6.icmp6_type;
+        }
+        
+        // Handle ICMP NAT based on direction
+        __u64 hash = icmp_hash(&info, icmp_id, 0);
+        
+        if ((info.version == 4 && icmp_type == ICMP_ECHO) ||
+            (info.version == 6 && icmp_type == ICMPV6_ECHO_REQUEST)) {
+            // SNAT for outgoing ICMP Echo
+            if (cfg->nat_type == 0 || cfg->nat_type == 2) {
+                if (do_snat(skb, &info, l4_offset, l4_offset + offsetof(struct icmphdr, checksum), cfg) < 0)
+                    return TC_ACT_SHOT;
+            }
+        } else {
+            // DNAT for incoming ICMP Echo Reply
+            if (cfg->nat_type == 1 || cfg->nat_type == 2) {
+                if (do_dnat(skb, &info, l4_offset, l4_offset + offsetof(struct icmphdr, checksum), cfg) < 0)
+                    return TC_ACT_SHOT;
             }
         }
     }
@@ -472,13 +618,58 @@ int tc_nat(struct __sk_buff *skb) {
     return cfg->default_action ? TC_ACT_SHOT : TC_ACT_OK;
 }
 
-// Define Cilium tail call program to enable integration with Cilium's datapath
+// Define Cilium tail call programs to enable integration with Cilium's datapath
 SEC("cilium_nat")
 int cilium_nat(struct __sk_buff *skb) {
-    // This function would be called by Cilium's datapath when using integration
-    // In a real implementation, this would likely call a Cilium function or tail call
-    // For now, we just pass packets to our own NAT handler
+    // Extract IP information
+    struct ip_info info = {};
+    if (extract_ip_info(skb, &info) < 0)
+        return TC_ACT_OK; // Can't parse packet
+    
+    // Get configuration
+    __u32 key = 0;
+    struct nat_config *cfg = bpf_map_lookup_elem(&config_map, &key);
+    if (!cfg)
+        return TC_ACT_OK; // No config, pass the packet
+    
+    // Check Cilium policies
+    if (cfg->cilium_integration) {
+        int verdict = check_cilium_nat_policy(skb, &info, cfg);
+        if (verdict < 0)
+            return TC_ACT_SHOT; // Drop packet based on policy
+        
+        // If policy matched, apply NAT based on direction
+        if (verdict == 1) {
+            __u16 l4_offset = sizeof(struct ethhdr);
+            l4_offset += (info.version == 4) ? sizeof(struct iphdr) : sizeof(struct ipv6hdr);
+            __u16 csum_offset = 0;
+            
+            if (info.protocol == IPPROTO_TCP) {
+                csum_offset = l4_offset + offsetof(struct tcphdr, check);
+            } else if (info.protocol == IPPROTO_UDP) {
+                csum_offset = l4_offset + offsetof(struct udphdr, check);
+            }
+            
+            // Apply NAT based on policy direction
+            if (cfg->nat_type == 0 || cfg->nat_type == 2) { // SNAT or Both
+                if (do_snat(skb, &info, l4_offset, csum_offset, cfg) < 0)
+                    return TC_ACT_SHOT;
+            }
+            if (cfg->nat_type == 1 || cfg->nat_type == 2) { // DNAT or Both
+                if (do_dnat(skb, &info, l4_offset, csum_offset, cfg) < 0)
+                    return TC_ACT_SHOT;
+            }
+        }
+    }
+    
+    // Pass packet to regular NAT handler
     return tc_nat(skb);
+}
+
+// Define IPv6-specific Cilium tail call
+SEC("cilium_nat6")
+int cilium_nat6(struct __sk_buff *skb) {
+    return cilium_nat(skb); // Use the same handler for both IPv4 and IPv6
 }
 
 char _license[] SEC("license") = "GPL";
