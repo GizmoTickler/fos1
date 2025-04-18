@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-controller
+  namespace: security
+  labels:
+    app: auth-controller
+    component: security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-controller
+  template:
+    metadata:
+      labels:
+        app: auth-controller
+        component: security
+    spec:
+      serviceAccountName: auth-controller
+      containers:
+      - name: controller
+        image: fos1/auth-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--v=2"
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        ports:
+        - name: metrics
+          containerPort: 8080
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/auth
+        - name: logs
+          mountPath: /var/log/auth
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: auth-controller
+  namespace: security
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: auth-controller
+rules:
+- apiGroups: ["security.fos1.io"]
+  resources: ["authproviders", "authconfigs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["security.fos1.io"]
+  resources: ["authproviders/status", "authconfigs/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "services", "pods", "events"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: auth-controller
+subjects:
+- kind: ServiceAccount
+  name: auth-controller
+  namespace: security
+roleRef:
+  kind: ClusterRole
+  name: auth-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-controller
+  namespace: security
+  labels:
+    app: auth-controller
+    component: security
+spec:
+  selector:
+    app: auth-controller
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+  type: ClusterIP

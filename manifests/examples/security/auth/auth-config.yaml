@@ -1,0 +1,18 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: AuthConfig
+metadata:
+  name: auth-config
+  namespace: security
+spec:
+  defaultProvider: local
+  tokenExpiration: 86400
+  refreshTokenExpiration: 604800
+  enableAuditLogging: true
+  auditLogPath: /var/log/auth/audit.log
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi

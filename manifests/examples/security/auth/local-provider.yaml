@@ -1,0 +1,28 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: AuthProvider
+metadata:
+  name: local
+  namespace: security
+spec:
+  type: local
+  enabled: true
+  priority: 0
+  local:
+    passwordPolicy:
+      minLength: 8
+      requireUppercase: true
+      requireLowercase: true
+      requireNumbers: true
+      requireSpecial: true
+      maxAge: 90
+      historyCount: 5
+    mfaEnabled: false
+    mfaMethods:
+      - totp
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

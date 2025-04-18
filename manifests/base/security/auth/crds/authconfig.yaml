@@ -1,0 +1,129 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: authconfigs.security.fos1.io
+spec:
+  group: security.fos1.io
+  names:
+    kind: AuthConfig
+    listKind: AuthConfigList
+    plural: authconfigs
+    singular: authconfig
+    shortNames:
+      - authc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - defaultProvider
+              properties:
+                defaultProvider:
+                  type: string
+                  description: "Default authentication provider"
+                tokenExpiration:
+                  type: integer
+                  description: "Token expiration time in seconds"
+                  minimum: 60
+                  default: 86400
+                refreshTokenExpiration:
+                  type: integer
+                  description: "Refresh token expiration time in seconds"
+                  minimum: 60
+                  default: 604800
+                enableAuditLogging:
+                  type: boolean
+                  description: "Whether to enable audit logging"
+                  default: true
+                auditLogPath:
+                  type: string
+                  description: "Path to the audit log file"
+                  default: "/var/log/auth/audit.log"
+                resources:
+                  type: object
+                  description: "Resource requirements"
+                  properties:
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+m|[0-9]+(\.[0-9]+)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(e[0-9]+)?|[0-9]+(\.[0-9]+)?(e[0-9]+)?[EPTGMK]i?)$'
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+m|[0-9]+(\.[0-9]+)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(e[0-9]+)?|[0-9]+(\.[0-9]+)?(e[0-9]+)?[EPTGMK]i?)$'
+                nodeSelector:
+                  type: object
+                  description: "Node selector for deployment"
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: "Current phase of the configuration"
+                  enum: ["Pending", "Running", "Failed"]
+                conditions:
+                  type: array
+                  description: "Current conditions of the configuration"
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        description: "Type of the condition"
+                      status:
+                        type: string
+                        description: "Status of the condition"
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                        description: "Reason for the condition"
+                      message:
+                        type: string
+                        description: "Message for the condition"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: "Last time the condition transitioned"
+                providerCount:
+                  type: integer
+                  description: "Number of providers"
+                userCount:
+                  type: integer
+                  description: "Number of users"
+                groupCount:
+                  type: integer
+                  description: "Number of groups"
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Default Provider
+          type: string
+          jsonPath: .spec.defaultProvider
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

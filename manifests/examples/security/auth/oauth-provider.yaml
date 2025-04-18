@@ -1,0 +1,35 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: AuthProvider
+metadata:
+  name: oauth
+  namespace: security
+spec:
+  type: oauth
+  enabled: true
+  priority: 2
+  oauth:
+    providerType: google
+    clientID: your-client-id
+    clientSecret: your-client-secret
+    authorizationURL: https://accounts.google.com/o/oauth2/auth
+    tokenURL: https://oauth2.googleapis.com/token
+    userInfoURL: https://openidconnect.googleapis.com/v1/userinfo
+    redirectURL: https://auth.example.com/callback
+    scopes:
+      - openid
+      - profile
+      - email
+    userIDAttribute: sub
+    userAttributes:
+      sub: username
+      email: email
+      given_name: firstName
+      family_name: lastName
+      name: displayName
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

@@ -1,0 +1,33 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: AuthProvider
+metadata:
+  name: ldap
+  namespace: security
+spec:
+  type: ldap
+  enabled: true
+  priority: 1
+  ldap:
+    url: ldap://ldap.example.com:389
+    bindDN: cn=admin,dc=example,dc=com
+    bindPassword: password
+    userBaseDN: ou=users,dc=example,dc=com
+    userFilter: (uid=%s)
+    groupBaseDN: ou=groups,dc=example,dc=com
+    groupFilter: (objectClass=groupOfNames)
+    groupMemberAttribute: member
+    userAttributes:
+      uid: username
+      mail: email
+      givenName: firstName
+      sn: lastName
+      displayName: displayName
+    startTLS: true
+    insecureSkipVerify: false
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
