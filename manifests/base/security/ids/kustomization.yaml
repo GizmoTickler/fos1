@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: security
+
+resources:
+  - crds/suricata.yaml
+  - crds/zeek.yaml
+  - crds/eventcorrelation.yaml
+  - ids-controller.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: fos1
+  app.kubernetes.io/component: security
+  app.kubernetes.io/managed-by: kustomize

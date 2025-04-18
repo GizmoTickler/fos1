@@ -1,0 +1,193 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: zeekinstances.security.fos1.io
+spec:
+  group: security.fos1.io
+  names:
+    kind: ZeekInstance
+    listKind: ZeekInstanceList
+    plural: zeekinstances
+    singular: zeekinstance
+    shortNames:
+      - zeek
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - interfaces
+              properties:
+                interfaces:
+                  type: array
+                  description: "Network interfaces to monitor"
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        type: string
+                        description: "Name of the interface"
+                      promiscuous:
+                        type: boolean
+                        description: "Whether to use promiscuous mode"
+                        default: true
+                      bpfFilter:
+                        type: string
+                        description: "BPF filter for the interface"
+                scripts:
+                  type: array
+                  description: "Zeek scripts to load"
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        type: string
+                        description: "Name of the script"
+                      path:
+                        type: string
+                        description: "Path to the script"
+                      enabled:
+                        type: boolean
+                        description: "Whether the script is enabled"
+                        default: true
+                      config:
+                        type: object
+                        description: "Configuration for the script"
+                        additionalProperties:
+                          type: string
+                clusterMode:
+                  type: boolean
+                  description: "Whether to use cluster mode"
+                  default: false
+                nodeName:
+                  type: string
+                  description: "Name of the node in cluster mode"
+                logRotationInterval:
+                  type: string
+                  description: "Interval for log rotation (e.g., 1h, 1d)"
+                  default: "1h"
+                resources:
+                  type: object
+                  description: "Resource requirements"
+                  properties:
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+m|[0-9]+(\.[0-9]+)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(e[0-9]+)?|[0-9]+(\.[0-9]+)?(e[0-9]+)?[EPTGMK]i?)$'
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+m|[0-9]+(\.[0-9]+)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(e[0-9]+)?|[0-9]+(\.[0-9]+)?(e[0-9]+)?[EPTGMK]i?)$'
+                logLevel:
+                  type: string
+                  description: "Log level"
+                  enum: ["error", "warning", "notice", "info", "debug"]
+                  default: "info"
+                hostNetwork:
+                  type: boolean
+                  description: "Whether to use host network"
+                  default: true
+                nodeSelector:
+                  type: object
+                  description: "Node selector for deployment"
+                  additionalProperties:
+                    type: string
+                threadCount:
+                  type: integer
+                  description: "Number of threads to use"
+                  minimum: 1
+                  default: 1
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: "Current phase of the instance"
+                  enum: ["Pending", "Running", "Failed"]
+                conditions:
+                  type: array
+                  description: "Current conditions of the instance"
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        description: "Type of the condition"
+                      status:
+                        type: string
+                        description: "Status of the condition"
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                        description: "Reason for the condition"
+                      message:
+                        type: string
+                        description: "Message for the condition"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: "Last time the condition transitioned"
+                uptime:
+                  type: string
+                  description: "Uptime of the instance"
+                lastRestart:
+                  type: string
+                  format: date-time
+                  description: "Time of the last restart"
+                eventsGenerated:
+                  type: integer
+                  description: "Number of events generated"
+                interfaceStats:
+                  type: object
+                  description: "Statistics per interface"
+                  additionalProperties:
+                    type: object
+                    properties:
+                      packetsReceived:
+                        type: integer
+                        description: "Number of packets received"
+                      packetsDropped:
+                        type: integer
+                        description: "Number of packets dropped"
+                      bytesReceived:
+                        type: integer
+                        description: "Number of bytes received"
+                      eventsGenerated:
+                        type: integer
+                        description: "Number of events generated"
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Interfaces
+          type: string
+          jsonPath: .spec.interfaces[*].name
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

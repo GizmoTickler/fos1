@@ -1,0 +1,35 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: SuricataInstance
+metadata:
+  name: suricata-example
+  namespace: security
+spec:
+  mode: IDS
+  interfaces:
+    - name: eth0
+      promiscuous: true
+      threadCount: 2
+  ruleSources:
+    - name: emerging-threats
+      url: https://rules.emergingthreats.net/open/suricata-5.0/emerging.rules.tar.gz
+      enabled: true
+      categories:
+        - emerging-attack_response
+        - emerging-current_events
+        - emerging-dns
+        - emerging-dos
+        - emerging-exploit
+        - emerging-malware
+        - emerging-scan
+        - emerging-web_client
+        - emerging-web_server
+  resources:
+    limits:
+      cpu: 1
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  detectionEngineProfile: medium
+  statsInterval: 10s
+  hostNetwork: true

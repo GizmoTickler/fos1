@@ -1,0 +1,47 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: EventCorrelation
+metadata:
+  name: correlation-example
+  namespace: security
+spec:
+  enabled: true
+  rules:
+    - name: ssh-brute-force
+      description: "Detect SSH brute force attacks"
+      conditions:
+        - field: signature
+          operator: contains
+          value: "SSH"
+        - field: signature
+          operator: contains
+          value: "brute force"
+        - field: destination_port
+          operator: equals
+          value: "22"
+      threshold: 5
+      timeWindow: 5m
+      severity: high
+      action: alert
+    - name: web-attack
+      description: "Detect web application attacks"
+      conditions:
+        - field: signature
+          operator: contains
+          value: "SQL injection"
+        - field: protocol
+          operator: equals
+          value: "HTTP"
+      threshold: 3
+      timeWindow: 10m
+      severity: critical
+      action: block
+  maxEventsInMemory: 100000
+  maxEventAge: 1h
+  outputFormat: json
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi

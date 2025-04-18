@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ids-controller
+  namespace: security
+  labels:
+    app: ids-controller
+    component: security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ids-controller
+  template:
+    metadata:
+      labels:
+        app: ids-controller
+        component: security
+    spec:
+      serviceAccountName: ids-controller
+      containers:
+      - name: controller
+        image: fos1/ids-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--v=2"
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        ports:
+        - name: metrics
+          containerPort: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ids-controller
+  namespace: security
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ids-controller
+rules:
+- apiGroups: ["security.fos1.io"]
+  resources: ["suricatainstances", "zeekinstances", "eventcorrelations"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["security.fos1.io"]
+  resources: ["suricatainstances/status", "zeekinstances/status", "eventcorrelations/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "services", "pods", "events"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ids-controller
+subjects:
+- kind: ServiceAccount
+  name: ids-controller
+  namespace: security
+roleRef:
+  kind: ClusterRole
+  name: ids-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ids-controller
+  namespace: security
+  labels:
+    app: ids-controller
+    component: security
+spec:
+  selector:
+    app: ids-controller
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+  type: ClusterIP

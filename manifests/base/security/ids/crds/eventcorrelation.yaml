@@ -1,0 +1,200 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: eventcorrelations.security.fos1.io
+spec:
+  group: security.fos1.io
+  names:
+    kind: EventCorrelation
+    listKind: EventCorrelationList
+    plural: eventcorrelations
+    singular: eventcorrelation
+    shortNames:
+      - ecorr
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - rules
+              properties:
+                enabled:
+                  type: boolean
+                  description: "Whether event correlation is enabled"
+                  default: true
+                rules:
+                  type: array
+                  description: "Correlation rules"
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - conditions
+                    properties:
+                      name:
+                        type: string
+                        description: "Name of the rule"
+                      description:
+                        type: string
+                        description: "Description of the rule"
+                      conditions:
+                        type: array
+                        description: "Conditions for the rule"
+                        items:
+                          type: object
+                          required:
+                            - field
+                            - operator
+                            - value
+                          properties:
+                            field:
+                              type: string
+                              description: "Field to match"
+                            operator:
+                              type: string
+                              description: "Operator for the match"
+                              enum: ["equals", "notEquals", "contains", "notContains", "startsWith", "endsWith", "regex", "gt", "lt", "gte", "lte"]
+                            value:
+                              type: string
+                              description: "Value to match"
+                      threshold:
+                        type: integer
+                        description: "Threshold for the rule"
+                        minimum: 1
+                        default: 1
+                      timeWindow:
+                        type: string
+                        description: "Time window for the rule (e.g., 10s, 1m, 1h)"
+                        default: "5m"
+                      severity:
+                        type: string
+                        description: "Severity of the rule"
+                        enum: ["low", "medium", "high", "critical"]
+                        default: "medium"
+                      action:
+                        type: string
+                        description: "Action to take when the rule matches"
+                        enum: ["alert", "block", "log"]
+                        default: "alert"
+                maxEventsInMemory:
+                  type: integer
+                  description: "Maximum number of events to keep in memory"
+                  minimum: 1000
+                  default: 100000
+                maxEventAge:
+                  type: string
+                  description: "Maximum age of events to keep in memory (e.g., 1h, 1d)"
+                  default: "1h"
+                outputFormat:
+                  type: string
+                  description: "Format for correlated events"
+                  enum: ["json", "cef", "leef"]
+                  default: "json"
+                resources:
+                  type: object
+                  description: "Resource requirements"
+                  properties:
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+m|[0-9]+(\.[0-9]+)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(e[0-9]+)?|[0-9]+(\.[0-9]+)?(e[0-9]+)?[EPTGMK]i?)$'
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+m|[0-9]+(\.[0-9]+)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(e[0-9]+)?|[0-9]+(\.[0-9]+)?(e[0-9]+)?[EPTGMK]i?)$'
+                nodeSelector:
+                  type: object
+                  description: "Node selector for deployment"
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: "Current phase of the instance"
+                  enum: ["Pending", "Running", "Failed"]
+                conditions:
+                  type: array
+                  description: "Current conditions of the instance"
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        description: "Type of the condition"
+                      status:
+                        type: string
+                        description: "Status of the condition"
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                        description: "Reason for the condition"
+                      message:
+                        type: string
+                        description: "Message for the condition"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: "Last time the condition transitioned"
+                uptime:
+                  type: string
+                  description: "Uptime of the instance"
+                lastRestart:
+                  type: string
+                  format: date-time
+                  description: "Time of the last restart"
+                eventsProcessed:
+                  type: integer
+                  description: "Number of events processed"
+                correlationsDetected:
+                  type: integer
+                  description: "Number of correlations detected"
+                ruleStats:
+                  type: object
+                  description: "Statistics per rule"
+                  additionalProperties:
+                    type: object
+                    properties:
+                      matches:
+                        type: integer
+                        description: "Number of matches for the rule"
+                      lastMatch:
+                        type: string
+                        format: date-time
+                        description: "Time of the last match"
+                      actionsTriggered:
+                        type: integer
+                        description: "Number of actions triggered"
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Rules
+          type: integer
+          jsonPath: .spec.rules.length
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

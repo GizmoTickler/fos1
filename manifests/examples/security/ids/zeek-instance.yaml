@@ -1,0 +1,28 @@
+apiVersion: security.fos1.io/v1alpha1
+kind: ZeekInstance
+metadata:
+  name: zeek-example
+  namespace: security
+spec:
+  interfaces:
+    - name: eth0
+      promiscuous: true
+  scripts:
+    - name: protocols/ssl/validate-certs
+      enabled: true
+    - name: protocols/http/detect-sqli
+      enabled: true
+    - name: protocols/dns/detect-tunnels
+      enabled: true
+    - name: frameworks/files/hash-all-files
+      enabled: true
+  logRotationInterval: 1h
+  resources:
+    limits:
+      cpu: 1
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  threadCount: 2
+  hostNetwork: true
