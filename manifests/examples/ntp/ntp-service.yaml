@@ -1,0 +1,72 @@
+apiVersion: ntp.fos1.io/v1alpha1
+kind: NTPService
+metadata:
+  name: default-ntp
+  namespace: network
+spec:
+  enabled: true
+  sources:
+    pools:
+      - name: pool.ntp.org
+        servers: 4
+        iburst: true
+      - name: time.cloudflare.com
+        servers: 2
+        iburst: true
+        prefer: true
+    servers:
+      - address: time1.google.com
+        iburst: true
+      - address: time2.google.com
+        iburst: true
+      - address: time.apple.com
+        iburst: true
+    hardware:
+      pps:
+        enabled: false
+      gps:
+        enabled: false
+  server:
+    stratum: 10
+    driftfile: /var/lib/chrony/drift
+    makestep:
+      threshold: 1.0
+      limit: 3
+    local:
+      enabled: true
+      stratum: 10
+  security:
+    nts:
+      enabled: false
+    authentication:
+      enabled: false
+    ratelimit:
+      enabled: true
+      interval: 3
+      burst: 8
+    access:
+      - network: 10.0.0.0/8
+        permission: allow
+      - network: 172.16.0.0/12
+        permission: allow
+      - network: 192.168.0.0/16
+        permission: allow
+  vlanConfig:
+    - vlanRef: management
+      enabled: true
+      broadcast: false
+      clientsOnly: false
+    - vlanRef: trusted
+      enabled: true
+      broadcast: false
+      clientsOnly: false
+    - vlanRef: guest
+      enabled: true
+      broadcast: false
+      clientsOnly: true
+  monitoring:
+    enabled: true
+    offset:
+      warningThreshold: 100
+      criticalThreshold: 500
+    sourcesMinimum: 2

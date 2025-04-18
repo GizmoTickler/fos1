@@ -2,10 +2,10 @@
 package offload
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
 // NewOffloadManager creates a new Offload Manager.
-func NewOffloadManager() (hardware.OffloadManager, error) {
+func NewOffloadManager() (types.OffloadManager, error) {
 	return NewManager()
 }

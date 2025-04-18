@@ -6,16 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/vishvananda/netlink"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
-// Manager implements the hardware.EBPFManager interface.
+// Manager implements the types.EBPFManager interface.
 type Manager struct {
 	programs     map[string]*loadedProgram
 	programsMu   sync.RWMutex
@@ -28,7 +29,7 @@ type Manager struct {
 type loadedProgram struct {
 	program     *ebpf.Program
 	maps        []*ebpf.Map
-	info        hardware.EBPFProgramInfo
+	info        types.EBPFProgramInfo
 	attachments []string // Hooks this program is attached to
 }
 
@@ -91,7 +92,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // LoadProgram loads an eBPF program.
-func (m *Manager) LoadProgram(programConfig hardware.EBPFProgram) error {
+func (m *Manager) LoadProgram(programConfig types.EBPFProgram) error {
 	var prog *ebpf.Program
 	var maps []*ebpf.Map
 	var err error
@@ -140,7 +141,7 @@ func (m *Manager) LoadProgram(programConfig hardware.EBPFProgram) error {
 	m.programs[programConfig.Name] = &loadedProgram{
 		program: prog,
 		maps:    maps,
-		info: hardware.EBPFProgramInfo{
+		info: types.EBPFProgramInfo{
 			Name:      programConfig.Name,
 			Type:      programConfig.Type,
 			ID:        prog.FD(),
@@ -166,7 +167,7 @@ func (m *Manager) UnloadProgram(name string) error {
 	// Detach the program from all hooks
 	for _, hookName := range prog.attachments {
 		linkName := fmt.Sprintf("%s:%s", name, hookName)
-		
+
 		m.linksMu.Lock()
 		link, ok := m.links[linkName]
 		if ok {
@@ -240,7 +241,7 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 		if err != nil {
 			return fmt.Errorf("failed to find interface %s: %w", prog.info.Interface, err)
 		}
-		
+
 		l, err = link.AttachXDP(link.XDPOptions{
 			Program:   prog.program,
 			Interface: iface.Attrs().Index,
@@ -255,7 +256,7 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 		if err != nil {
 			return fmt.Errorf("failed to find interface %s: %w", prog.info.Interface, err)
 		}
-		
+
 		l, err = link.AttachTCX(link.TCXOptions{
 			Program:   prog.program,
 			Attach:    ebpf.AttachTCXIngress,
@@ -271,7 +272,7 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 		if err != nil {
 			return fmt.Errorf("failed to find interface %s: %w", prog.info.Interface, err)
 		}
-		
+
 		l, err = link.AttachTCX(link.TCXOptions{
 			Program:   prog.program,
 			Attach:    ebpf.AttachTCXEgress,
@@ -289,7 +290,7 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 			return fmt.Errorf("failed to open cgroup: %w", err)
 		}
 		defer f.Close()
-		
+
 		l, err = link.AttachCgroup(link.CgroupOptions{
 			Path:    cgroupPath,
 			Attach:  ebpf.AttachCGroupInetIngress,
@@ -307,7 +308,7 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 			return fmt.Errorf("failed to open cgroup: %w", err)
 		}
 		defer f.Close()
-		
+
 		l, err = link.AttachCgroup(link.CgroupOptions{
 			Path:    cgroupPath,
 			Attach:  ebpf.AttachCGroupInetEgress,
@@ -369,7 +370,7 @@ func (m *Manager) DetachProgram(programName, hookName string) error {
 				break
 			}
 		}
-		
+
 		// Update attached status
 		prog.info.Attached = len(prog.attachments) > 0
 	}
@@ -379,11 +380,11 @@ func (m *Manager) DetachProgram(programName, hookName string) error {
 }
 
 // ListPrograms returns a list of all eBPF programs.
-func (m *Manager) ListPrograms() ([]hardware.EBPFProgramInfo, error) {
+func (m *Manager) ListPrograms() ([]types.EBPFProgramInfo, error) {
 	m.programsMu.RLock()
 	defer m.programsMu.RUnlock()
 
-	programs := make([]hardware.EBPFProgramInfo, 0, len(m.programs))
+	programs := make([]types.EBPFProgramInfo, 0, len(m.programs))
 	for _, prog := range m.programs {
 		programs = append(programs, prog.info)
 	}

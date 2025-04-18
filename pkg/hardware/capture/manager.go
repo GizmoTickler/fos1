@@ -14,10 +14,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
-// Manager implements the hardware.CaptureManager interface.
+// Manager implements the types.CaptureManager interface.
 type Manager struct {
 	captures     map[string]*captureJob
 	capturesMu   sync.RWMutex
@@ -28,7 +28,7 @@ type Manager struct {
 // captureJob represents an active packet capture job.
 type captureJob struct {
 	ID          string
-	Config      hardware.CaptureConfig
+	Config      types.CaptureConfig
 	Cmd         *exec.Cmd
 	OutputFile  string
 	StartTime   time.Time
@@ -87,7 +87,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // StartCapture starts a new packet capture.
-func (m *Manager) StartCapture(config hardware.CaptureConfig) (string, error) {
+func (m *Manager) StartCapture(config types.CaptureConfig) (string, error) {
 	// Validate config
 	if config.Interface == "" {
 		return "", fmt.Errorf("interface is required")
@@ -191,7 +191,7 @@ func (m *Manager) StopCapture(captureID string) error {
 }
 
 // GetCaptureStatus gets the status of a packet capture.
-func (m *Manager) GetCaptureStatus(captureID string) (*hardware.CaptureStatus, error) {
+func (m *Manager) GetCaptureStatus(captureID string) (*types.CaptureStatus, error) {
 	m.capturesMu.RLock()
 	defer m.capturesMu.RUnlock()
 
@@ -224,7 +224,7 @@ func (m *Manager) GetCaptureStatus(captureID string) (*hardware.CaptureStatus, e
 		}
 	}
 
-	return &hardware.CaptureStatus{
+	return &types.CaptureStatus{
 		ID:          capture.ID,
 		Interface:   capture.Config.Interface,
 		Filter:      capture.Config.Filter,

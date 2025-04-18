@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntp-controller
+  namespace: kube-system
+  labels:
+    app: ntp-controller
+    component: ntp
+spec:
+  selector:
+    app: ntp-controller
+  ports:
+  - name: metrics
+    port: 9559
+    targetPort: metrics
+  - name: api
+    port: 8080
+    targetPort: api
+  - name: ntp
+    port: 123
+    targetPort: 123
+    protocol: UDP
+  type: ClusterIP

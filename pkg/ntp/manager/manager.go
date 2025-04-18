@@ -100,7 +100,7 @@ func NewManager(
 			Interval:      config.MetricsInterval,
 			ChronyManager: chronyManager,
 		}
-		
+
 		exporter, err := metrics.NewExporter(exporterConfig)
 		if err != nil {
 			cancel()
@@ -262,16 +262,83 @@ func (m *Manager) Status() (*ntp.Status, error) {
 // UpdateFirewallRules updates firewall rules for NTP access
 func (m *Manager) UpdateFirewallRules(service *ntp.NTPService) error {
 	klog.Info("Updating firewall rules for NTP service")
-	
+
 	// In a real implementation, this would update the firewall rules
 	// based on the VLAN configuration in the NTP service.
 	// For now, we'll just log a message.
-	
+
 	for _, vlan := range service.VLANConfig {
 		if vlan.Enabled {
 			klog.Infof("Would update firewall rules for VLAN %s", vlan.VLANRef)
 		}
 	}
-	
+
 	return nil
+}
+
+// GetConfig returns the current NTP service configuration
+func (m *Manager) GetConfig() (*ntp.NTPService, error) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	// In a real implementation, this would retrieve the current configuration
+	// from the Kubernetes API or from a local cache.
+	// For now, we'll return a placeholder configuration.
+
+	// Create a placeholder configuration
+	config := &ntp.NTPService{
+		Name:    "default",
+		Enabled: true,
+		Sources: ntp.Sources{
+			Pools: []ntp.PoolSource{
+				{
+					Name:    "pool.ntp.org",
+					Servers: 4,
+					IBurst:  true,
+				},
+			},
+			Servers: []ntp.ServerSource{
+				{
+					Address: "time.cloudflare.com",
+					IBurst:  true,
+					Prefer:  true,
+				},
+			},
+		},
+		Server: ntp.ServerConfig{
+			Stratum: 10,
+			Local: ntp.LocalClockConfig{
+				Enabled: true,
+				Stratum: 10,
+			},
+		},
+		VLANConfig: []ntp.VLANConfig{
+			{
+				VLANRef: "management",
+				Enabled: true,
+			},
+			{
+				VLANRef: "trusted",
+				Enabled: true,
+			},
+			{
+				VLANRef: "guest",
+				Enabled: true,
+				ClientsOnly: true,
+			},
+		},
+		Security: ntp.SecurityConfig{
+			Authentication: ntp.AuthenticationConfig{
+				Enabled: false,
+			},
+			RateLimit: ntp.RateLimitConfig{
+				Enabled: true,
+			},
+		},
+		Monitoring: ntp.MonitoringConfig{
+			Enabled: true,
+		},
+	}
+
+	return config, nil
 }

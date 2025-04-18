@@ -1,0 +1,141 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wireguard-daemon
+  namespace: network
+  labels:
+    app: wireguard-daemon
+    component: vpn
+spec:
+  selector:
+    matchLabels:
+      app: wireguard-daemon
+  template:
+    metadata:
+      labels:
+        app: wireguard-daemon
+        component: vpn
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: wireguard-daemon
+      containers:
+      - name: wireguard
+        image: fos1/wireguard:latest
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN", "SYS_MODULE"]
+          privileged: true
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/wireguard
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: run-wireguard
+          mountPath: /run/wireguard
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "wg show || true"
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "wg show || true"
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+      - name: exporter
+        image: fos1/wireguard-exporter:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9586
+          name: metrics
+        volumeMounts:
+        - name: run-wireguard
+          mountPath: /run/wireguard
+          readOnly: true
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9586
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      volumes:
+      - name: config-volume
+        emptyDir: {}
+      - name: modules
+        hostPath:
+          path: /lib/modules
+      - name: run-wireguard
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wireguard-daemon
+  namespace: network
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: wireguard-daemon
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wireguard-daemon
+subjects:
+- kind: ServiceAccount
+  name: wireguard-daemon
+  namespace: network
+roleRef:
+  kind: ClusterRole
+  name: wireguard-daemon
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wireguard-metrics
+  namespace: network
+  labels:
+    app: wireguard-daemon
+    component: vpn
+spec:
+  selector:
+    app: wireguard-daemon
+  ports:
+  - name: metrics
+    port: 9586
+    targetPort: metrics
+  type: ClusterIP

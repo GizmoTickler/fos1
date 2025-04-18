@@ -2,10 +2,10 @@
 package ebpf
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
 // NewEBPFManager creates a new eBPF Manager.
-func NewEBPFManager() (hardware.EBPFManager, error) {
+func NewEBPFManager() (types.EBPFManager, error) {
 	return NewManager()
 }

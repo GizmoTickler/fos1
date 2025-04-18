@@ -1,0 +1,65 @@
+apiVersion: vpn.fos1.io/v1alpha1
+kind: WireGuardVPN
+metadata:
+  name: site-to-site
+  namespace: network
+spec:
+  enabled: true
+  interface:
+    name: wg0
+    privateKey: ${WIREGUARD_PRIVATE_KEY}  # Replace with actual key or secret reference
+    listenPort: 51820
+    address:
+      - "10.10.10.1/24"
+      - "fd00:1234:5678:9abc::1/64"
+    mtu: 1420
+    firewall: true
+    table: 51820
+    postUp:
+      - "iptables -A FORWARD -i %i -j ACCEPT"
+      - "iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE"
+      - "ip6tables -A FORWARD -i %i -j ACCEPT"
+      - "ip6tables -t nat -A POSTROUTING -o eth0 -j MASQUERADE"
+    postDown:
+      - "iptables -D FORWARD -i %i -j ACCEPT"
+      - "iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE"
+      - "ip6tables -D FORWARD -i %i -j ACCEPT"
+      - "ip6tables -t nat -D POSTROUTING -o eth0 -j MASQUERADE"
+  peers:
+    - publicKey: ${PEER1_PUBLIC_KEY}  # Replace with actual key
+      presharedKey: ${PEER1_PRESHARED_KEY}  # Replace with actual key or secret reference
+      endpoint: "peer1.example.com:51820"
+      persistentKeepalive: 25
+      allowedIPs:
+        - "10.10.10.2/32"
+        - "192.168.1.0/24"
+        - "fd00:1234:5678:9abc::2/128"
+      description: "Remote Office 1"
+    - publicKey: ${PEER2_PUBLIC_KEY}  # Replace with actual key
+      presharedKey: ${PEER2_PRESHARED_KEY}  # Replace with actual key or secret reference
+      endpoint: "peer2.example.com:51820"
+      persistentKeepalive: 25
+      allowedIPs:
+        - "10.10.10.3/32"
+        - "192.168.2.0/24"
+        - "fd00:1234:5678:9abc::3/128"
+      description: "Remote Office 2"
+  routing:
+    defaultRoute: false
+    allowedIPs:
+      - "192.168.1.0/24"
+      - "192.168.2.0/24"
+      - "fd00:1234:5678:9abc::/64"
+    metric: 100
+  security:
+    keyRotation:
+      enabled: true
+      interval: "30d"
+    accessControl:
+      allowedIPs:
+        - "203.0.113.0/24"  # Example public IP range
+  monitoring:
+    enabled: true
+    metrics: true
+    logging: true
+    logLevel: "info"

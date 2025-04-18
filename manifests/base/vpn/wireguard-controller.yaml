@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wireguard-controller
+  namespace: network
+  labels:
+    app: wireguard-controller
+    component: vpn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wireguard-controller
+  template:
+    metadata:
+      labels:
+        app: wireguard-controller
+        component: vpn
+    spec:
+      serviceAccountName: wireguard-controller
+      containers:
+      - name: controller
+        image: fos1/wireguard-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--v=2"
+        - "--workers=2"
+        - "--resync-period=30m"
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/wireguard-controller
+        - name: wireguard-config
+          mountPath: /etc/wireguard
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        ports:
+        - name: metrics
+          containerPort: 9559
+        - name: api
+          containerPort: 8080
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+          privileged: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: wireguard-controller-config
+      - name: wireguard-config
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wireguard-controller
+  namespace: network
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: wireguard-controller
+rules:
+- apiGroups: ["vpn.fos1.io"]
+  resources: ["wireguardvpns"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["vpn.fos1.io"]
+  resources: ["wireguardvpns/status"]
+  verbs: ["update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets", "services", "pods", "events"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["network.fos1.io"]
+  resources: ["vlans", "networkinterfaces"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wireguard-controller
+subjects:
+- kind: ServiceAccount
+  name: wireguard-controller
+  namespace: network
+roleRef:
+  kind: ClusterRole
+  name: wireguard-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wireguard-controller-config
+  namespace: network
+data:
+  config.yaml: |
+    controller:
+      resyncPeriod: 30m
+      workers: 2
+      leaderElection:
+        enabled: true
+        leaseDuration: 15s
+        renewDeadline: 10s
+        retryPeriod: 2s
+    wireguard:
+      configPath: "/etc/wireguard"
+      defaultMTU: 1420
+      defaultTable: 51820
+    monitoring:
+      enabled: true
+      metricsPort: 9559
+      interval: 15s
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wireguard-controller
+  namespace: network
+  labels:
+    app: wireguard-controller
+    component: vpn
+spec:
+  selector:
+    app: wireguard-controller
+  ports:
+  - name: metrics
+    port: 9559
+    targetPort: metrics
+  - name: api
+    port: 8080
+    targetPort: api
+  type: ClusterIP

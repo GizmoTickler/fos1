@@ -81,7 +81,7 @@ type LocalClockConfig struct {
 // SecurityConfig defines security settings for NTP
 type SecurityConfig struct {
 	NTS            NTSConfig
-	Authentication AuthConfig
+	Authentication AuthenticationConfig
 	RateLimit      RateLimitConfig
 	Access         []AccessRule
 }
@@ -91,8 +91,8 @@ type NTSConfig struct {
 	Enabled bool
 }
 
-// AuthConfig defines authentication settings
-type AuthConfig struct {
+// AuthenticationConfig defines authentication settings
+type AuthenticationConfig struct {
 	Enabled bool
 	Keys    []AuthKey
 }

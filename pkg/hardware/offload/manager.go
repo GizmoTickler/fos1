@@ -8,13 +8,13 @@ import (
 
 	"github.com/safchain/ethtool"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
-// Manager implements the hardware.OffloadManager interface.
+// Manager implements the types.OffloadManager interface.
 type Manager struct {
 	ethtool        *ethtool.Ethtool
-	capabilities   map[string]*hardware.OffloadCapabilities
+	capabilities   map[string]*types.OffloadCapabilities
 	capabilitiesMu sync.RWMutex
 }
 
@@ -27,7 +27,7 @@ func NewManager() (*Manager, error) {
 
 	return &Manager{
 		ethtool:      ethtoolHandler,
-		capabilities: make(map[string]*hardware.OffloadCapabilities),
+		capabilities: make(map[string]*types.OffloadCapabilities),
 	}, nil
 }
 
@@ -41,21 +41,21 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	if m.ethtool != nil {
 		m.ethtool.Close()
 	}
-	
+
 	return nil
 }
 
 // ConfigureOffload configures hardware offloading features for an interface.
-func (m *Manager) ConfigureOffload(ifName string, features hardware.OffloadFeatures) error {
+func (m *Manager) ConfigureOffload(ifName string, features types.OffloadFeatures) error {
 	// Get current features
 	featureMap, err := m.ethtool.Features(ifName)
 	if err != nil {
 		return fmt.Errorf("failed to get feature states: %w", err)
 	}
-	
+
 	// Prepare features to change
 	changes := make(map[string]bool)
-	
+
 	// Map our OffloadFeatures struct to ethtool features
 	// Note: The exact mapping will depend on the actual feature names which can vary by driver
 	if val, ok := featureMap["tx-checksumming"]; ok && val != features.TxChecksum {
@@ -88,37 +88,37 @@ func (m *Manager) ConfigureOffload(ifName string, features hardware.OffloadFeatu
 	if val, ok := featureMap["receive-flow-steering"]; ok && val != features.RFS {
 		changes["receive-flow-steering"] = features.RFS
 	}
-	
+
 	// Apply changes
 	for feature, enabled := range changes {
 		if err := m.ethtool.Change(ifName, feature, enabled); err != nil {
 			return fmt.Errorf("failed to change feature %s to %v: %w", feature, enabled, err)
 		}
 	}
-	
+
 	return nil
 }
 
 // GetOffloadCapabilities gets the offload capabilities of an interface.
-func (m *Manager) GetOffloadCapabilities(ifName string) (*hardware.OffloadCapabilities, error) {
+func (m *Manager) GetOffloadCapabilities(ifName string) (*types.OffloadCapabilities, error) {
 	// Check if capabilities are already cached
 	m.capabilitiesMu.RLock()
 	capabilities, ok := m.capabilities[ifName]
 	m.capabilitiesMu.RUnlock()
-	
+
 	if ok {
 		return capabilities, nil
 	}
-	
+
 	// Get features
 	featureMap, err := m.ethtool.Features(ifName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get features: %w", err)
 	}
-	
+
 	// Create new capabilities
-	capabilities = &hardware.OffloadCapabilities{}
-	
+	capabilities = &types.OffloadCapabilities{}
+
 	// Determine which features are supported by checking if they exist in the feature map
 	// Note: This only checks if the feature exists, not if it can be enabled/disabled
 	_, capabilities.SupportsTxChecksum = featureMap["tx-checksumming"]
@@ -131,12 +131,12 @@ func (m *Manager) GetOffloadCapabilities(ifName string) (*hardware.OffloadCapabi
 	_, capabilities.SupportsXPS = featureMap["tx-packet-steering"]
 	_, capabilities.SupportsNTUPLE = featureMap["rx-flow-hash-filter"]
 	_, capabilities.SupportsRFS = featureMap["receive-flow-steering"]
-	
+
 	// Cache capabilities
 	m.capabilitiesMu.Lock()
 	m.capabilities[ifName] = capabilities
 	m.capabilitiesMu.Unlock()
-	
+
 	return capabilities, nil
 }
 
@@ -147,7 +147,7 @@ func (m *Manager) ResetOffload(ifName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get feature states: %w", err)
 	}
-	
+
 	// Default hardware offloading configuration
 	// These defaults are conservative for better compatibility
 	defaults := map[string]bool{
@@ -162,7 +162,7 @@ func (m *Manager) ResetOffload(ifName string) error {
 		"rx-flow-hash-filter":       false, // Disable NTUPLE filtering (complex to configure)
 		"receive-flow-steering":     false, // Disable RFS (complex to configure)
 	}
-	
+
 	// Apply defaults where features exist
 	for feature, defaultValue := range defaults {
 		if _, ok := featureMap[feature]; ok {
@@ -171,7 +171,7 @@ func (m *Manager) ResetOffload(ifName string) error {
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -182,20 +182,20 @@ func (m *Manager) GetSupportedOffloadFeatures(ifName string) (map[string]bool, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to get features: %w", err)
 	}
-	
+
 	return featureMap, nil
 }
 
 // GetOptimalOffloadConfiguration gets the optimal offload configuration for an interface based on its capabilities.
-func (m *Manager) GetOptimalOffloadConfiguration(ifName string) (hardware.OffloadFeatures, error) {
+func (m *Manager) GetOptimalOffloadConfiguration(ifName string) (types.OffloadFeatures, error) {
 	// Get capabilities
 	capabilities, err := m.GetOffloadCapabilities(ifName)
 	if err != nil {
-		return hardware.OffloadFeatures{}, fmt.Errorf("failed to get capabilities: %w", err)
+		return types.OffloadFeatures{}, fmt.Errorf("failed to get capabilities: %w", err)
 	}
-	
+
 	// Create optimal configuration based on capabilities
-	features := hardware.OffloadFeatures{
+	features := types.OffloadFeatures{
 		TxChecksum: capabilities.SupportsTxChecksum,
 		RxChecksum: capabilities.SupportsRxChecksum,
 		TSO:        capabilities.SupportsTSO,
@@ -209,6 +209,6 @@ func (m *Manager) GetOptimalOffloadConfiguration(ifName string) (hardware.Offloa
 		NTUPLE:     false,
 		RFS:        false,
 	}
-	
+
 	return features, nil
 }

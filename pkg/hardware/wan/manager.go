@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
-// Manager implements the hardware.WANManager interface.
+// Manager implements the types.WANManager interface.
 type Manager struct {
 	wanInterfaces map[string]*wanInterface
 	wanMu         sync.RWMutex
@@ -27,8 +28,8 @@ type Manager struct {
 
 // wanInterface represents a WAN interface.
 type wanInterface struct {
-	config     hardware.WANInterfaceConfig
-	status     hardware.WANStatus
+	config     types.WANInterfaceConfig
+	status     types.WANStatus
 	monitoring bool
 }
 
@@ -56,7 +57,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // AddWANInterface adds a new WAN interface.
-func (m *Manager) AddWANInterface(config hardware.WANInterfaceConfig) error {
+func (m *Manager) AddWANInterface(config types.WANInterfaceConfig) error {
 	// Validate interface exists
 	if _, err := netlink.LinkByName(config.Name); err != nil {
 		return fmt.Errorf("interface %s not found: %w", config.Name, err)
@@ -65,7 +66,7 @@ func (m *Manager) AddWANInterface(config hardware.WANInterfaceConfig) error {
 	// Create WAN interface
 	wan := &wanInterface{
 		config: config,
-		status: hardware.WANStatus{
+		status: types.WANStatus{
 			Name:            config.Name,
 			State:           "initializing",
 			LastStateChange: time.Now().Format(time.RFC3339),
@@ -135,7 +136,7 @@ func (m *Manager) RemoveWANInterface(name string) error {
 }
 
 // GetWANStatus gets the status of a WAN interface.
-func (m *Manager) GetWANStatus(name string) (*hardware.WANStatus, error) {
+func (m *Manager) GetWANStatus(name string) (*types.WANStatus, error) {
 	m.wanMu.RLock()
 	defer m.wanMu.RUnlock()
 
@@ -145,6 +146,45 @@ func (m *Manager) GetWANStatus(name string) (*hardware.WANStatus, error) {
 	}
 
 	return &wan.status, nil
+}
+
+// GetWANInterface gets information about a WAN interface.
+func (m *Manager) GetWANInterface(name string) (*types.WANInterfaceInfo, error) {
+	m.wanMu.RLock()
+	defer m.wanMu.RUnlock()
+
+	wan, ok := m.wanInterfaces[name]
+	if !ok {
+		return nil, fmt.Errorf("WAN interface %s not found", name)
+	}
+
+	// Create interface info
+	info := &types.WANInterfaceInfo{
+		Name:              wan.config.Name,
+		Type:              wan.config.Type,
+		PhysicalInterface: wan.config.PhysicalInterface,
+		State:             wan.status.State,
+		MTU:               wan.config.MTU,
+		Weight:            wan.config.Weight,
+		Priority:          wan.config.Priority,
+		Gateway:           wan.config.Gateway,
+		DNS:               wan.config.DNS,
+		Metric:            wan.config.Metric,
+		Statistics: types.WANStatistics{
+			RxPackets:            wan.status.PacketsReceived,
+			TxPackets:            wan.status.PacketsSent,
+			RxBytes:              wan.status.BytesReceived,
+			TxBytes:              wan.status.BytesSent,
+			RxErrors:             0,
+			TxErrors:             0,
+			Uptime:               0,
+			ConnectionCount:      0,
+			LastConnectedTime:    0,
+			LastDisconnectedTime: 0,
+		},
+	}
+
+	return info, nil
 }
 
 // SetActiveWAN sets the active WAN interface.
@@ -181,13 +221,26 @@ func (m *Manager) SetActiveWAN(name string) error {
 }
 
 // ListWANInterfaces lists all WAN interfaces.
-func (m *Manager) ListWANInterfaces() ([]hardware.WANInterfaceStatus, error) {
+func (m *Manager) ListWANInterfaces() ([]string, error) {
 	m.wanMu.RLock()
 	defer m.wanMu.RUnlock()
 
-	wans := make([]hardware.WANInterfaceStatus, 0, len(m.wanInterfaces))
+	wans := make([]string, 0, len(m.wanInterfaces))
+	for name := range m.wanInterfaces {
+		wans = append(wans, name)
+	}
+
+	return wans, nil
+}
+
+// ListWANInterfaceStatuses lists all WAN interface statuses.
+func (m *Manager) ListWANInterfaceStatuses() ([]types.WANInterfaceStatus, error) {
+	m.wanMu.RLock()
+	defer m.wanMu.RUnlock()
+
+	wans := make([]types.WANInterfaceStatus, 0, len(m.wanInterfaces))
 	for _, wan := range m.wanInterfaces {
-		wans = append(wans, hardware.WANInterfaceStatus{
+		wans = append(wans, types.WANInterfaceStatus{
 			Name:            wan.config.Name,
 			State:           wan.status.State,
 			LastStateChange: wan.status.LastStateChange,
@@ -196,6 +249,40 @@ func (m *Manager) ListWANInterfaces() ([]hardware.WANInterfaceStatus, error) {
 	}
 
 	return wans, nil
+}
+
+// SetWANInterfaceState sets the state of a WAN interface.
+func (m *Manager) SetWANInterfaceState(name string, up bool) error {
+	m.wanMu.Lock()
+	defer m.wanMu.Unlock()
+
+	wan, ok := m.wanInterfaces[name]
+	if !ok {
+		return fmt.Errorf("WAN interface %s not found", name)
+	}
+
+	// Get the link
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to get link %s: %w", name, err)
+	}
+
+	// Set the link state
+	if up {
+		if err := netlink.LinkSetUp(link); err != nil {
+			return fmt.Errorf("failed to set link %s up: %w", name, err)
+		}
+		wan.status.State = "up"
+	} else {
+		if err := netlink.LinkSetDown(link); err != nil {
+			return fmt.Errorf("failed to set link %s down: %w", name, err)
+		}
+		wan.status.State = "down"
+	}
+
+	wan.status.LastStateChange = time.Now().Format(time.RFC3339)
+
+	return nil
 }
 
 // StartMonitoring starts monitoring WAN interfaces.
@@ -387,7 +474,7 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 
 	// If gateway is not specified, try to find it from interface routes
 	if gateway == "" {
-		routes, err := netlink.RouteList(link, netlink.FAMILY_V4)
+		routes, err := netlink.RouteList(link, unix.AF_INET)
 		if err != nil {
 			return fmt.Errorf("failed to list routes: %w", err)
 		}
@@ -405,7 +492,7 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 	}
 
 	// Delete existing default route
-	existingRoutes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
+	existingRoutes, err := netlink.RouteList(nil, unix.AF_INET)
 	if err != nil {
 		return fmt.Errorf("failed to list routes: %w", err)
 	}
@@ -433,6 +520,79 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 	}
 
 	return nil
+}
+
+// GetWANStatistics gets statistics for a WAN interface.
+func (m *Manager) GetWANStatistics(name string) (*types.WANStatistics, error) {
+	m.wanMu.RLock()
+	defer m.wanMu.RUnlock()
+
+	_, ok := m.wanInterfaces[name]
+	if !ok {
+		return nil, fmt.Errorf("WAN interface %s not found", name)
+	}
+
+	// Get link statistics
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get link %s: %w", name, err)
+	}
+
+	stats := link.Attrs().Statistics
+	if stats == nil {
+		stats = &netlink.LinkStatistics{}
+	}
+
+	// Create statistics
+	return &types.WANStatistics{
+		RxPackets:            stats.RxPackets,
+		TxPackets:            stats.TxPackets,
+		RxBytes:              stats.RxBytes,
+		TxBytes:              stats.TxBytes,
+		RxErrors:             stats.RxErrors,
+		TxErrors:             stats.TxErrors,
+		Uptime:               0, // Not implemented yet
+		ConnectionCount:      0, // Not implemented yet
+		LastConnectedTime:    0, // Not implemented yet
+		LastDisconnectedTime: 0, // Not implemented yet
+	}, nil
+}
+
+// TestWANConnectivity tests connectivity for a WAN interface.
+func (m *Manager) TestWANConnectivity(name string) (*types.WANConnectivityResult, error) {
+	m.wanMu.RLock()
+	wan, ok := m.wanInterfaces[name]
+	if !ok {
+		m.wanMu.RUnlock()
+		return nil, fmt.Errorf("WAN interface %s not found", name)
+	}
+
+	// Use the configured monitor targets or default to gateway and 8.8.8.8
+	targets := wan.config.MonitorTargets
+	if len(targets) == 0 {
+		targets = []string{wan.config.Gateway, "8.8.8.8"}
+	}
+	m.wanMu.RUnlock()
+
+	// Test connectivity
+	state, latency, packetLoss, _ := m.checkConnectivity(name, targets)
+
+	// Create result
+	result := &types.WANConnectivityResult{
+		Success:    state == "up",
+		Latency:    latency,
+		PacketLoss: packetLoss,
+		DNSLatency: 0, // Not implemented yet
+		Bandwidth:  0, // Not implemented yet
+	}
+
+	if state == "down" {
+		result.Error = "Interface is down or unreachable"
+	} else if state == "degraded" {
+		result.Error = "Interface has high packet loss"
+	}
+
+	return result, nil
 }
 
 // parsePingOutput parses ping output to extract latency, jitter, and packet count.

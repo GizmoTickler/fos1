@@ -2,10 +2,10 @@
 package nic
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
 // NewNICManager creates a new NIC Manager.
-func NewNICManager() (hardware.NICManager, error) {
+func NewNICManager() (types.NICManager, error) {
 	return NewManager()
 }

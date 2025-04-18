@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: certificate-controller
+  namespace: cert-manager
+  labels:
+    app: certificate-controller
+    component: security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: certificate-controller
+  template:
+    metadata:
+      labels:
+        app: certificate-controller
+        component: security
+    spec:
+      serviceAccountName: certificate-controller
+      containers:
+      - name: controller
+        image: fos1/certificate-controller:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--v=2"
+        - "--namespace=cert-manager"
+        - "--workers=2"
+        - "--resync-period=10m"
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        ports:
+        - name: metrics
+          containerPort: 9559
+        - name: api
+          containerPort: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: certificate-controller
+  namespace: cert-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: certificate-controller
+rules:
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates", "issuers", "clusterissuers", "certificaterequests"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates/status", "issuers/status", "clusterissuers/status", "certificaterequests/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["secrets", "events"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: certificate-controller
+subjects:
+- kind: ServiceAccount
+  name: certificate-controller
+  namespace: cert-manager
+roleRef:
+  kind: ClusterRole
+  name: certificate-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: certificate-controller
+  namespace: cert-manager
+  labels:
+    app: certificate-controller
+    component: security
+spec:
+  selector:
+    app: certificate-controller
+  ports:
+  - name: metrics
+    port: 9559
+    targetPort: metrics
+  - name: api
+    port: 8080
+    targetPort: api
+  type: ClusterIP

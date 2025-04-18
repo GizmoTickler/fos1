@@ -2,10 +2,10 @@
 package wan
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
 // NewWANManager creates a new WAN Manager.
-func NewWANManager() (hardware.WANManager, error) {
+func NewWANManager() (types.WANManager, error) {
 	return NewManager()
 }

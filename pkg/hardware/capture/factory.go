@@ -2,10 +2,10 @@
 package capture
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware"
+	"github.com/varuntirumala1/fos1/pkg/hardware/types"
 )
 
 // NewCaptureManager creates a new Capture Manager.
-func NewCaptureManager() (hardware.CaptureManager, error) {
+func NewCaptureManager() (types.CaptureManager, error) {
 	return NewManager()
 }

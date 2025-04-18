@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntp-controller
+  namespace: kube-system
+  labels:
+    app: ntp-controller
+    component: ntp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ntp-controller
+  template:
+    metadata:
+      labels:
+        app: ntp-controller
+        component: ntp
+    spec:
+      serviceAccountName: ntp-controller
+      containers:
+      - name: ntp-controller
+        image: fos1/ntp-controller:latest
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        ports:
+        - name: metrics
+          containerPort: 9559
+        - name: api
+          containerPort: 8080
+        volumeMounts:
+        - name: chrony-config
+          mountPath: /etc/chrony
+        - name: chrony-data
+          mountPath: /var/lib/chrony
+        - name: chrony-logs
+          mountPath: /var/log/chrony
+        securityContext:
+          capabilities:
+            add:
+            - SYS_TIME
+            - NET_ADMIN
+          privileged: true
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CHRONY_CONFIG_PATH
+          value: "/etc/chrony/chrony.conf"
+        - name: CHRONY_KEYS_PATH
+          value: "/etc/chrony/chrony.keys"
+        - name: METRICS_ENABLED
+          value: "true"
+        - name: METRICS_PORT
+          value: "9559"
+        - name: API_ENABLED
+          value: "true"
+        - name: API_PORT
+          value: "8080"
+        - name: DHCP_INTEGRATION_ENABLED
+          value: "true"
+        - name: DNS_INTEGRATION_ENABLED
+          value: "true"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      - name: chrony
+        image: fos1/chrony:latest
+        imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+        - name: chrony-config
+          mountPath: /etc/chrony
+        - name: chrony-data
+          mountPath: /var/lib/chrony
+        - name: chrony-logs
+          mountPath: /var/log/chrony
+        securityContext:
+          capabilities:
+            add:
+            - SYS_TIME
+            - NET_ADMIN
+          privileged: true
+      volumes:
+      - name: chrony-config
+        emptyDir: {}
+      - name: chrony-data
+        emptyDir: {}
+      - name: chrony-logs
+        emptyDir: {}
