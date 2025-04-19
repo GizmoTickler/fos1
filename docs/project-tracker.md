@@ -416,7 +416,18 @@ Use this document to track progress on all project components. This project is c
 - [ ] Testing Phase (Not Started)
 - [ ] Deployment Phase (Not Started)
 
-### Latest Achievements (April 2025)
+### Latest Achievements (May 2025)
+- Enhanced DPI Framework Implementation
+  - Completed Suricata integration with DPI Framework for comprehensive threat detection
+  - Implemented comprehensive application signatures for streaming, gaming, social media, and conferencing
+  - Added encrypted DNS protocol detection (DNSCrypt, DoT, DoH) for privacy monitoring
+  - Enhanced IoT protocol detection with MQTT, CoAP, AMQP, and other IoT protocols
+  - Integrated Suricata alerts with Cilium policy enforcement for automated threat response
+  - Created deployment files for Suricata, Zeek, and DPI Framework in Kubernetes
+  - Updated Makefile with deployment targets for all DPI components
+  - Implemented event forwarding between Suricata, Zeek, and DPI Manager
+
+### Previous Achievements (April 2025)
 - Implemented Observability Stack
   - Created Alertmanager deployment and configuration
   - Implemented comprehensive alert rules for network, security, and system
@@ -479,6 +490,11 @@ Use this document to track progress on all project components. This project is c
   - Developed event correlation system for security events
   - Added support for custom rules and policies
   - Created sample configurations for common security scenarios
+  - Completed Suricata integration with DPI Framework
+  - Implemented comprehensive application signatures for DPI Framework
+  - Added encrypted DNS protocol detection (DNSCrypt, DoT, DoH)
+  - Enhanced IoT protocol detection (MQTT, CoAP, AMQP, etc.)
+  - Integrated Suricata alerts with Cilium policy enforcement
 
 - Implemented NTP service with Chrony integration
   - Developed DHCP integration for NTP (option 42 for IPv4 and option 56 for IPv6)
