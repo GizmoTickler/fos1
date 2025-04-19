@@ -1019,6 +1019,9 @@ func categorizeApplication(app string) string {
 
 		// Network services
 		"dns":      "network-service",
+		"dnscrypt": "network-service",
+		"dns-over-tls": "network-service",
+		"dns-over-https": "network-service",
 		"dhcp":     "network-service",
 		"ntp":      "network-service",
 		"snmp":     "network-service",
@@ -1164,8 +1167,19 @@ func initApplicationMap() map[string]string {
 
 		// IoT protocols
 		"mqtt":       "iot",
+		"mqtt-sn":    "iot",
 		"coap":       "iot",
+		"amqp":       "iot",
+		"zigbee":     "iot",
+		"zwave":      "iot",
+		"thread":     "iot",
+		"bacnet":     "iot",
 		"modbus":     "iot",
+		"knx":        "iot",
+		"lora":       "iot",
+		"sigfox":     "iot",
+		"weave":      "iot",
+		"homekit":    "iot",
 
 		// IoT devices
 		"amazon-echo": "amazon-echo",
@@ -1190,6 +1204,9 @@ func initApplicationMap() map[string]string {
 
 		// Network services
 		"dns":        "network-service",
+		"dnscrypt":   "network-service",
+		"dns-over-tls": "network-service",
+		"dns-over-https": "network-service",
 		"dhcp":       "network-service",
 		"ntp":        "network-service",
 		"snmp":       "network-service",

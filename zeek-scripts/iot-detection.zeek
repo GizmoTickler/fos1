@@ -33,13 +33,13 @@ export {
     const DEV_SMART_DOORBELL = "smart-doorbell" &redef;
     const DEV_SMART_CAMERA = "smart-camera" &redef;
     const DEV_SMART_SPEAKER = "smart-speaker" &redef;
-    
+
     # Add to the connection record
     redef record Conn::Info += {
         iot_device: string &optional &log;
         iot_vendor: string &optional &log;
     };
-    
+
     # IoT vendors
     const VENDOR_AMAZON = "amazon" &redef;
     const VENDOR_GOOGLE = "google" &redef;
@@ -62,6 +62,103 @@ function set_iot_info(c: connection, device: string, vendor: string) {
     c$conn$iot_device = device;
     c$conn$iot_vendor = vendor;
     c$conn$app_category = AppDetection::CAT_IOT;
+}
+
+# Helper function to set IoT device info from MQTT client ID
+function set_iot_info_from_mqtt(c: connection, client_id: string) {
+    if (/echo/i in client_id || /alexa/i in client_id) {
+        set_iot_info(c, DEV_AMAZON_ECHO, VENDOR_AMAZON);
+    }
+    else if (/nest/i in client_id) {
+        set_iot_info(c, DEV_NEST, VENDOR_NEST);
+    }
+    else if (/hue/i in client_id || /philips/i in client_id) {
+        set_iot_info(c, DEV_PHILIPS_HUE, VENDOR_PHILIPS);
+    }
+    else if (/sonos/i in client_id) {
+        set_iot_info(c, DEV_SONOS, VENDOR_SONOS);
+    }
+    else if (/smartplug/i in client_id || /smartbulb/i in client_id) {
+        if (/tplink/i in client_id) {
+            set_iot_info(c, DEV_SMART_PLUG, VENDOR_TP_LINK);
+        }
+        else if (/wemo/i in client_id) {
+            set_iot_info(c, DEV_SMART_PLUG, VENDOR_BELKIN);
+        }
+        else {
+            # Generic smart plug/bulb
+            if (/plug/i in client_id) {
+                set_iot_info(c, DEV_SMART_PLUG, "unknown");
+            }
+            else {
+                set_iot_info(c, DEV_SMART_BULB, "unknown");
+            }
+        }
+    }
+    else if (/camera/i in client_id) {
+        if (/wyze/i in client_id) {
+            set_iot_info(c, DEV_SMART_CAMERA, VENDOR_WYZE);
+        }
+        else if (/arlo/i in client_id) {
+            set_iot_info(c, DEV_SMART_CAMERA, VENDOR_ARLO);
+        }
+        else {
+            set_iot_info(c, DEV_SMART_CAMERA, "unknown");
+        }
+    }
+    else if (/doorbell/i in client_id) {
+        if (/ring/i in client_id) {
+            set_iot_info(c, DEV_SMART_DOORBELL, VENDOR_RING);
+        }
+        else {
+            set_iot_info(c, DEV_SMART_DOORBELL, "unknown");
+        }
+    }
+    else if (/thermostat/i in client_id) {
+        if (/nest/i in client_id) {
+            set_iot_info(c, DEV_SMART_THERMOSTAT, VENDOR_NEST);
+        }
+        else {
+            set_iot_info(c, DEV_SMART_THERMOSTAT, "unknown");
+        }
+    }
+    else if (/lock/i in client_id) {
+        set_iot_info(c, DEV_SMART_LOCK, "unknown");
+    }
+}
+
+# Helper function to set IoT device info from MQTT topic
+function set_iot_info_from_mqtt_topic(c: connection, topic: string) {
+    if (/smartthings/i in topic) {
+        set_iot_info(c, DEV_SMART_HOME, "samsung");
+    }
+    else if (/nest/i in topic) {
+        set_iot_info(c, DEV_NEST, VENDOR_NEST);
+    }
+    else if (/hue/i in topic) {
+        set_iot_info(c, DEV_PHILIPS_HUE, VENDOR_PHILIPS);
+    }
+    else if (/thermostat/i in topic) {
+        set_iot_info(c, DEV_SMART_THERMOSTAT, "unknown");
+    }
+    else if (/camera/i in topic) {
+        set_iot_info(c, DEV_SMART_CAMERA, "unknown");
+    }
+    else if (/doorbell/i in topic) {
+        set_iot_info(c, DEV_SMART_DOORBELL, "unknown");
+    }
+    else if (/lock/i in topic) {
+        set_iot_info(c, DEV_SMART_LOCK, "unknown");
+    }
+    else if (/light/i in topic || /bulb/i in topic) {
+        set_iot_info(c, DEV_SMART_BULB, "unknown");
+    }
+    else if (/plug/i in topic || /switch/i in topic) {
+        set_iot_info(c, DEV_SMART_PLUG, "unknown");
+    }
+    else if (/speaker/i in topic) {
+        set_iot_info(c, DEV_SMART_SPEAKER, "unknown");
+    }
 }
 
 ###################
@@ -219,7 +316,7 @@ event ssl_established(c: connection) {
 event mqtt_connect(c: connection, msg: MQTT::ConnectMsg) {
     # Client IDs often contain device information
     local client_id = msg$client_id;
-    
+
     if (/echo/i in client_id || /alexa/i in client_id) {
         set_iot_info(c, DEV_AMAZON_ECHO, VENDOR_AMAZON);
     }
@@ -254,7 +351,7 @@ event mqtt_connect(c: connection, msg: MQTT::ConnectMsg) {
 event mqtt_subscribe(c: connection, msg_id: count, topics: MQTT::SubscribeMsg) {
     for (i in topics$topics) {
         local topic = topics$topics[i]$topic;
-        
+
         # Topics often reveal device type and purpose
         if (/smartthings/i in topic) {
             set_iot_info(c, DEV_SMART_HOME, "samsung");

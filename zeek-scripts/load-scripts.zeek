@@ -18,6 +18,8 @@
 @load ./iot-detection
 @load ./port-detection
 @load ./protocol-detection
+@load ./encrypted-dns-detection
+@load ./iot-protocols
 
 # Print a message when scripts are loaded
 event zeek_init() {

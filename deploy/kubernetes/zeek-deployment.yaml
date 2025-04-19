@@ -90,6 +90,8 @@ data:
     @load ./iot-detection
     @load ./port-detection
     @load ./protocol-detection
+    @load ./encrypted-dns-detection
+    @load ./iot-protocols
 
     # Print a message when scripts are loaded
     event zeek_init() {
@@ -482,6 +484,179 @@ data:
         if (!c$conn?$service || c$conn$service == "") {
             set_app_info_from_protocol(c, protocol);
         }
+    }
+
+  encrypted-dns-detection.zeek: |
+    ##! Script for encrypted DNS detection
+    ##! This script adds detection capabilities for DNSCrypt, DoT, and DoH
+
+    @load base/protocols/conn
+    @load base/protocols/dns
+    @load base/protocols/http
+    @load base/protocols/ssl
+    @load policy/protocols/conn/vlan-logging
+    @load ./app-detection
+
+    module EncryptedDNSDetection;
+
+    export {
+        # Define encrypted DNS types
+        const DNS_DNSCRYPT = "dnscrypt" &redef;
+        const DNS_DOT = "dns-over-tls" &redef;
+        const DNS_DOH = "dns-over-https" &redef;
+
+        # Add to the connection record
+        redef record Conn::Info += {
+            encrypted_dns: bool &default=F &log;
+            encrypted_dns_type: string &optional &log;
+        };
+
+        # Known DoH providers
+        global doh_providers: set[string] = {
+            "dns.google",
+            "cloudflare-dns.com",
+            "dns.quad9.net",
+            "dns.adguard.com"
+        };
+
+        # Known DoT providers
+        global dot_providers: set[string] = {
+            "dns.google",
+            "cloudflare-dns.com",
+            "dns.quad9.net",
+            "dns.adguard.com"
+        };
+
+        # DNSCrypt port
+        const DNSCRYPT_PORT = 443/udp &redef;
+
+        # DoT port
+        const DOT_PORT = 853/tcp &redef;
+    }
+
+    # Helper function to set encrypted DNS info
+    function set_encrypted_dns_info(c: connection, dns_type: string) {
+        c$conn$encrypted_dns = T;
+        c$conn$encrypted_dns_type = dns_type;
+        c$conn$service = dns_type;
+        c$conn$app_category = "network-service";
+    }
+
+    # Detect DoH via HTTP headers
+    event http_header(c: connection, is_orig: bool, name: string, value: string) {
+        if (name == "HOST") {
+            if (value in doh_providers) {
+                set_encrypted_dns_info(c, DNS_DOH);
+            }
+        }
+        else if (name == "ACCEPT") {
+            if (value == "application/dns-message" || value == "application/dns-json") {
+                set_encrypted_dns_info(c, DNS_DOH);
+            }
+        }
+    }
+
+    # Detect DoT via SSL/TLS
+    event ssl_established(c: connection) {
+        if (c$id$resp_p == DOT_PORT) {
+            set_encrypted_dns_info(c, DNS_DOT);
+        }
+        else if (c$ssl?$server_name && c$ssl$server_name in dot_providers) {
+            set_encrypted_dns_info(c, DNS_DOT);
+        }
+    }
+
+    # Detect DNSCrypt via port
+    event connection_established(c: connection) {
+        if (c$id$resp_p == DNSCRYPT_PORT) {
+            set_encrypted_dns_info(c, DNS_DNSCRYPT);
+        }
+    }
+
+  iot-protocols.zeek: |
+    ##! Script for IoT protocol detection
+    ##! This script adds detection capabilities for IoT protocols
+
+    @load base/protocols/conn
+    @load base/protocols/http
+    @load base/protocols/dns
+    @load base/protocols/ssl
+    @load base/protocols/mqtt
+    @load policy/protocols/conn/vlan-logging
+    @load ./app-detection
+    @load ./iot-detection
+
+    module IoTProtocols;
+
+    export {
+        # Define IoT protocol types
+        const PROTO_MQTT = "mqtt" &redef;
+        const PROTO_MQTT_SN = "mqtt-sn" &redef;
+        const PROTO_COAP = "coap" &redef;
+        const PROTO_AMQP = "amqp" &redef;
+        const PROTO_ZIGBEE = "zigbee" &redef;
+        const PROTO_ZWAVE = "zwave" &redef;
+        const PROTO_THREAD = "thread" &redef;
+        const PROTO_BACNET = "bacnet" &redef;
+        const PROTO_MODBUS = "modbus" &redef;
+        const PROTO_KNX = "knx" &redef;
+
+        # Protocol ports
+        const MQTT_PORTS: set[port] = {
+            1883/tcp,  # MQTT
+            8883/tcp   # MQTT over TLS
+        };
+
+        const MQTT_SN_PORTS: set[port] = {
+            1883/udp  # MQTT-SN
+        };
+
+        const COAP_PORTS: set[port] = {
+            5683/udp,  # CoAP
+            5684/udp   # CoAP over DTLS
+        };
+
+        const AMQP_PORTS: set[port] = {
+            5672/tcp,  # AMQP
+            5671/tcp   # AMQP over TLS
+        };
+
+        const MODBUS_PORTS: set[port] = {
+            502/tcp   # Modbus TCP
+        };
+    }
+
+    # Helper function to set IoT protocol info
+    function set_iot_protocol_info(c: connection, protocol: string) {
+        c$conn$service = protocol;
+        c$conn$app_category = AppDetection::CAT_IOT;
+    }
+
+    # Detect IoT protocols via port
+    event connection_established(c: connection) {
+        if (c$id$resp_p in MQTT_PORTS) {
+            set_iot_protocol_info(c, PROTO_MQTT);
+        }
+        else if (c$id$resp_p in MQTT_SN_PORTS) {
+            set_iot_protocol_info(c, PROTO_MQTT_SN);
+        }
+        else if (c$id$resp_p in COAP_PORTS) {
+            set_iot_protocol_info(c, PROTO_COAP);
+        }
+        else if (c$id$resp_p in AMQP_PORTS) {
+            set_iot_protocol_info(c, PROTO_AMQP);
+        }
+        else if (c$id$resp_p in MODBUS_PORTS) {
+            set_iot_protocol_info(c, PROTO_MODBUS);
+        }
+    }
+
+    # Detect MQTT via protocol analyzer
+    event mqtt_connect(c: connection, msg: MQTT::ConnectMsg) {
+        set_iot_protocol_info(c, PROTO_MQTT);
+
+        # Check for specific IoT devices in client ID
+        IoTDetection::set_iot_info_from_mqtt(c, msg$client_id);
     }
 ---
 apiVersion: v1
