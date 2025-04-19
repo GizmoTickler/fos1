@@ -9,6 +9,12 @@ data:
       logsPath: /zeek-logs/current
       policyPath: /opt/zeek/share/zeek/policy
 
+    suricata:
+      evePath: /suricata-logs/eve.json
+      rulesPath: /etc/suricata/rules
+      listPath: /etc/suricata/lists
+      mode: ids
+
     profiles:
       - name: default-profile
         description: Default DPI profile
@@ -60,6 +66,9 @@ spec:
         - name: zeek-logs
           mountPath: /zeek-logs
           readOnly: true
+        - name: suricata-logs
+          mountPath: /suricata-logs
+          readOnly: true
         - name: config
           mountPath: /etc/dpi-framework
         env:
@@ -92,6 +101,9 @@ spec:
       - name: zeek-logs
         persistentVolumeClaim:
           claimName: zeek-logs-pvc
+      - name: suricata-logs
+        persistentVolumeClaim:
+          claimName: suricata-logs-pvc
       - name: config
         configMap:
           name: dpi-framework-config

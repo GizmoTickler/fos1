@@ -1,0 +1,193 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suricata-config
+  namespace: security-monitoring
+data:
+  suricata.yaml: |
+    %YAML 1.1
+    ---
+    vars:
+      address-groups:
+        HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+        EXTERNAL_NET: "!$HOME_NET"
+      port-groups:
+        HTTP_PORTS: "80,8080"
+        HTTPS_PORTS: "443"
+        SSH_PORTS: "22"
+        DNS_PORTS: "53"
+      # IP lists path - these will be loaded at runtime
+      path:
+        lists: /etc/suricata/lists
+    
+    outputs:
+      - fast:
+          enabled: yes
+          filename: fast.log
+      - eve-log:
+          enabled: yes
+          filetype: regular
+          filename: eve.json
+          types:
+            - alert
+            - http
+            - dns
+            - tls
+            - files
+            - ssh
+            - flow
+            - netflow
+            - stats
+    
+    # This section is used when running in IDS mode
+    af-packet:
+      - interface: eth0
+        cluster-id: 99
+        cluster-type: cluster_flow
+        defrag: yes
+        use-mmap: yes
+        tpacket-v3: yes
+    
+    # This section is used when running in IPS mode
+    nfq:
+      - queue-num: [0, 1, 2, 3]
+        repeat-mark: 1
+        repeat-mask: 1
+        route-queue: yes
+        batchcount: 20
+        bypass: yes
+    
+    # Default mode is IDS. Change to IPS mode by setting suricata.mode env var to "ips"
+    # and running with --nfqueue instead of --af-packet
+    default-rule-path: /etc/suricata/rules
+    rule-files:
+      - suricata.rules
+      - app-layer-events.rules
+      - dns-events.rules
+      - tls-events.rules
+    
+    # Include any lists
+    reputation-categories:
+      - name: malicious-ips
+        description: Known malicious IP addresses
+        type: ip
+    
+    ip-reputation:
+      files:
+        - path: lists/malicious-ips.list
+          type: malicious-ips
+    
+    # Thresholds for alerts
+    threshold-file: /etc/suricata/threshold.config
+    
+    logging:
+      default-log-level: notice
+      outputs:
+        - console:
+            enabled: yes
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: suricata-logs-pvc
+  namespace: security-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: suricata
+  namespace: security-monitoring
+  labels:
+    app: suricata
+    component: ids
+spec:
+  selector:
+    matchLabels:
+      app: suricata
+  template:
+    metadata:
+      labels:
+        app: suricata
+        component: ids
+    spec:
+      hostNetwork: true
+      containers:
+      - name: suricata
+        image: jasonish/suricata:latest
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN", "NET_RAW"]
+          privileged: true  # Required for NFQueue in IPS mode
+        command: ["/usr/bin/suricata"]
+        args:
+        - "-c"
+        - "/etc/suricata/suricata.yaml"
+        - "--af-packet"  # For IDS mode by default
+        - "-i"
+        - "eth0"
+        env:
+        - name: SURICATA_MODE
+          value: "ids"  # Can be changed to "ips" 
+        - name: NFQUEUE_NUMBERS
+          value: "0,1,2,3"  # Used when in IPS mode
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/suricata/suricata.yaml
+          subPath: suricata.yaml
+        - name: rules-volume
+          mountPath: /etc/suricata/rules
+        - name: lists-volume
+          mountPath: /etc/suricata/lists
+        - name: logs-volume
+          mountPath: /var/log/suricata
+        - name: run-volume
+          mountPath: /var/run/suricata
+        - name: lib-volume
+          mountPath: /var/lib/suricata
+      initContainers:
+      - name: setup-dirs
+        image: busybox
+        command: ["sh", "-c", "mkdir -p /var/lib/suricata /var/run/suricata /etc/suricata/lists /etc/suricata/rules"]
+        volumeMounts:
+        - name: run-volume
+          mountPath: /var/run/suricata
+        - name: lib-volume
+          mountPath: /var/lib/suricata
+        - name: lists-volume
+          mountPath: /etc/suricata/lists
+        - name: rules-volume
+          mountPath: /etc/suricata/rules
+      - name: download-rules
+        image: busybox
+        command: ["sh", "-c", "wget -O /tmp/emerging.rules.tar.gz https://rules.emergingthreats.net/open/suricata-5.0/emerging.rules.tar.gz && tar -xzf /tmp/emerging.rules.tar.gz -C /etc/suricata/rules"]
+        volumeMounts:
+        - name: rules-volume
+          mountPath: /etc/suricata/rules
+      volumes:
+      - name: config-volume
+        configMap:
+          name: suricata-config
+      - name: rules-volume
+        emptyDir: {}
+      - name: lists-volume
+        emptyDir: {}
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: suricata-logs-pvc
+      - name: run-volume
+        emptyDir: {}
+      - name: lib-volume
+        emptyDir: {}

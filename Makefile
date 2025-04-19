@@ -109,6 +109,7 @@ dpi-manifests:
 .PHONY: dpi-deploy
 dpi-deploy:
 	$(KUBECTL) apply -f deploy/kubernetes/zeek-deployment.yaml
+	$(KUBECTL) apply -f deploy/kubernetes/suricata-deployment.yaml
 	$(KUBECTL) apply -f deploy/kubernetes/dpi-framework-deployment.yaml
 	$(KUBECTL) apply -f deploy/kubernetes/network-policies.yaml
 
