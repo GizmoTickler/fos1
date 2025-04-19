@@ -10,6 +10,12 @@ KUBECONFORM := $(GOBIN)/kubeconform
 TALOSCTL := talosctl
 KUBECTL := kubectl
 
+# DPI Framework variables
+REGISTRY ?= ghcr.io/varuntirumala1
+IMAGE_NAME ?= dpi-framework
+TAG ?= latest
+PLATFORMS ?= linux/amd64,linux/arm64
+
 # Build flags
 BUILD_FLAGS := -v
 
@@ -41,6 +47,10 @@ build-dns:
 .PHONY: build-dhcp
 build-dhcp:
 	$(GO) build $(BUILD_FLAGS) ./pkg/dhcp/...
+
+.PHONY: build-dpi
+build-dpi:
+	$(GO) build $(BUILD_FLAGS) -o bin/dpi-framework ./cmd/dpi-framework
 
 # Test targets
 .PHONY: test
@@ -90,6 +100,18 @@ manifests:
 	mkdir -p dist/manifests
 	kustomize build manifests/base > dist/manifests/all.yaml
 
+# DPI Framework Kubernetes targets
+.PHONY: dpi-manifests
+dpi-manifests:
+	mkdir -p dist/manifests/dpi
+	cp deploy/kubernetes/*.yaml dist/manifests/dpi/
+
+.PHONY: dpi-deploy
+dpi-deploy:
+	$(KUBECTL) apply -f deploy/kubernetes/zeek-deployment.yaml
+	$(KUBECTL) apply -f deploy/kubernetes/dpi-framework-deployment.yaml
+	$(KUBECTL) apply -f deploy/kubernetes/network-policies.yaml
+
 .PHONY: dns-manifests
 dns-manifests:
 	mkdir -p dist/manifests/dns
@@ -134,6 +156,16 @@ talos-config:
 talos-apply:
 	$(TALOSCTL) apply-config -n router-fw-endpoint -f config/talos/router-fw.yaml
 
+# DPI Framework Talos targets
+.PHONY: dpi-talos-extension
+dpi-talos-extension:
+	$(KUBECTL) apply -f deploy/talos/zeek-extension.yaml
+	$(KUBECTL) apply -f deploy/talos/storage-config.yaml
+
+.PHONY: dpi-talos-patch
+dpi-talos-patch:
+	$(TALOSCTL) patch machineconfig -n worker-1 -p @deploy/talos/machine-config-patch.yaml
+
 # Clean targets
 .PHONY: clean
 clean:
@@ -151,29 +183,46 @@ install-tools:
 docker-build:
 	docker build -t router-fw:latest .
 
+# DPI Framework Docker image
+.PHONY: dpi-docker-build
+dpi-docker-build:
+	docker buildx build --platform $(PLATFORMS) -t $(REGISTRY)/$(IMAGE_NAME):$(TAG) .
+
+# Push DPI Framework Docker image
+.PHONY: dpi-docker-push
+dpi-docker-push:
+	docker buildx build --platform $(PLATFORMS) -t $(REGISTRY)/$(IMAGE_NAME):$(TAG) --push .
+
 # Help target
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  setup            - Set up the project and install dependencies"
-	@echo "  build            - Build all packages"
-	@echo "  build-dns        - Build only DNS packages"
-	@echo "  build-dhcp       - Build only DHCP packages"
-	@echo "  test             - Run all tests"
-	@echo "  test-dns         - Run DNS subsystem tests"
-	@echo "  test-dhcp        - Run DHCP subsystem tests"
-	@echo "  test-dns-dhcp    - Run both DNS and DHCP tests including integration"
-	@echo "  integration-test - Run integration tests"
-	@echo "  lint             - Run all linters"
-	@echo "  fmt              - Format Go code"
-	@echo "  manifests        - Generate all Kubernetes manifests"
-	@echo "  dns-manifests    - Generate DNS Kubernetes manifests"
-	@echo "  dhcp-manifests   - Generate DHCP Kubernetes manifests"
-	@echo "  apply            - Apply manifests to Kubernetes cluster"
-	@echo "  dev-env-up       - Start development environment"
-	@echo "  dev-env-down     - Stop development environment"
-	@echo "  talos-config     - Generate Talos Linux configuration"
-	@echo "  talos-apply      - Apply Talos Linux configuration"
-	@echo "  clean            - Clean build artifacts"
-	@echo "  install-tools    - Install development tools"
-	@echo "  docker-build     - Build Docker image"
+	@echo "  setup              - Set up the project and install dependencies"
+	@echo "  build              - Build all packages"
+	@echo "  build-dns          - Build only DNS packages"
+	@echo "  build-dhcp         - Build only DHCP packages"
+	@echo "  build-dpi          - Build only DPI Framework"
+	@echo "  test               - Run all tests"
+	@echo "  test-dns           - Run DNS subsystem tests"
+	@echo "  test-dhcp          - Run DHCP subsystem tests"
+	@echo "  test-dns-dhcp      - Run both DNS and DHCP tests including integration"
+	@echo "  integration-test   - Run integration tests"
+	@echo "  lint               - Run all linters"
+	@echo "  fmt                - Format Go code"
+	@echo "  manifests          - Generate all Kubernetes manifests"
+	@echo "  dns-manifests      - Generate DNS Kubernetes manifests"
+	@echo "  dhcp-manifests     - Generate DHCP Kubernetes manifests"
+	@echo "  dpi-manifests      - Generate DPI Framework Kubernetes manifests"
+	@echo "  apply              - Apply manifests to Kubernetes cluster"
+	@echo "  dpi-deploy         - Deploy DPI Framework to Kubernetes cluster"
+	@echo "  dev-env-up         - Start development environment"
+	@echo "  dev-env-down       - Stop development environment"
+	@echo "  talos-config       - Generate Talos Linux configuration"
+	@echo "  talos-apply        - Apply Talos Linux configuration"
+	@echo "  dpi-talos-extension - Install Zeek extension for Talos Linux"
+	@echo "  dpi-talos-patch    - Patch Talos machine config for Zeek"
+	@echo "  clean              - Clean build artifacts"
+	@echo "  install-tools      - Install development tools"
+	@echo "  docker-build       - Build Docker image"
+	@echo "  dpi-docker-build   - Build DPI Framework Docker image"
+	@echo "  dpi-docker-push    - Push DPI Framework Docker image"

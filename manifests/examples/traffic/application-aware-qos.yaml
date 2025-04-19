@@ -1,0 +1,44 @@
+apiVersion: network.fos1.io/v1alpha1
+kind: QoSProfile
+metadata:
+  name: application-aware-qos
+  namespace: default
+spec:
+  interface: eth0
+  uploadBandwidth: 100Mbit
+  downloadBandwidth: 500Mbit
+  classes:
+    - name: realtime
+      priority: 1
+      minBandwidth: 20%
+      maxBandwidth: 40%
+      applications:
+        - zoom
+        - teams
+        - webex
+      applicationCategories:
+        - video_conferencing
+        - voip
+      dscp: 46
+    - name: interactive
+      priority: 3
+      minBandwidth: 30%
+      maxBandwidth: 50%
+      applications:
+        - ssh
+        - rdp
+        - vnc
+      applicationCategories:
+        - remote_access
+        - web
+      dscp: 26
+    - name: background
+      priority: 7
+      maxBandwidth: 20%
+      applications:
+        - bittorrent
+        - ftp
+      applicationCategories:
+        - file_transfer
+        - updates
+      dscp: 8

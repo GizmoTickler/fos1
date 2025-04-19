@@ -1,0 +1,13 @@
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFNATPolicy
+metadata:
+  name: ipv6-nat66
+  namespace: default
+spec:
+  type: snat
+  interface: eth0
+  externalIP: 2001:db8:1::1
+  sourceAddresses:
+    - 2001:db8:2::/64
+  enableTracking: true
+  ipv6: true

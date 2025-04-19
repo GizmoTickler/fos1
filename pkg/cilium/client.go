@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // DefaultCiliumClient implements the CiliumClient interface
@@ -71,7 +72,7 @@ func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *
 	// Create policies for each VLAN pair
 	for _, policy := range config.Policies {
 		policyName := fmt.Sprintf("vlan-%d-to-%d", policy.FromVLAN, policy.ToVLAN)
-		
+
 		// Create a policy that allows traffic between the VLANs
 		networkPolicy := &NetworkPolicy{
 			Name: policyName,
@@ -148,9 +149,9 @@ func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *
 // ConfigureDPIIntegration configures DPI integration with Cilium
 func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *DPIIntegrationConfig) error {
 	// For each application, create a policy
-	for appName, appPolicy := range config.AppPolicies {
+	for _, appName := range config.ApplicationsToMonitor {
 		policyName := fmt.Sprintf("dpi-app-%s", appName)
-		
+
 		// Create a policy for this application
 		networkPolicy := &NetworkPolicy{
 			Name: policyName,
@@ -160,16 +161,16 @@ func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, confi
 			},
 		}
 
-		// Configure based on action (allow, deny, ratelimit, etc.)
-		switch appPolicy.Action {
+		// Configure based on enforcement mode
+		switch config.EnforcementMode {
 		case "allow":
 			// Create an allow policy
 			// Implementation depends on specific requirements
 		case "deny":
 			// Create a deny policy
 			// Implementation depends on specific requirements
-		case "ratelimit":
-			// Create a rate limit policy
+		case "log":
+			// Create a logging policy
 			// Implementation depends on specific requirements
 		}
 
@@ -182,13 +183,133 @@ func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, confi
 	return nil
 }
 
+// RemoveNAT removes NAT rules
+func (c *DefaultCiliumClient) RemoveNAT(ctx context.Context, config *NATConfig) error {
+	// For IPv6, we need to use NAT66
+	natType := "nat"
+	if config.IPv6 {
+		natType = "nat66"
+	}
+
+	// Create NAT policy name
+	policyName := fmt.Sprintf("%s-%s", natType, sanitizeNetworkName(config.SourceNetwork))
+
+	// Delete the policy using kubectl
+	cmd := exec.Command("kubectl", "delete", "cnp", policyName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove NAT policy: %w\nOutput: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// CreateNAT64 creates NAT64 rules (IPv6 to IPv4)
+func (c *DefaultCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Config) error {
+	// Create NAT64 policy name
+	policyName := fmt.Sprintf("nat64-%s", sanitizeNetworkName(config.SourceNetwork))
+
+	// Create a policy that enables NAT64 for the source network
+	policy := &NetworkPolicy{
+		Name: policyName,
+		Labels: map[string]string{
+			"type": "nat64",
+			"network": sanitizeNetworkName(config.SourceNetwork),
+		},
+		Egress: []PolicyRule{
+			{
+				ToEndpoints: []Endpoint{
+					{
+						Labels: map[string]string{
+							"interface": config.DestinationIface,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Apply the policy
+	return c.ApplyNetworkPolicy(ctx, policy)
+}
+
+// RemoveNAT64 removes NAT64 rules
+func (c *DefaultCiliumClient) RemoveNAT64(ctx context.Context, config *NAT64Config) error {
+	// Create NAT64 policy name
+	policyName := fmt.Sprintf("nat64-%s", sanitizeNetworkName(config.SourceNetwork))
+
+	// Delete the policy using kubectl
+	cmd := exec.Command("kubectl", "delete", "cnp", policyName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove NAT64 policy: %w\nOutput: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// CreatePortForward creates port forwarding rules
+func (c *DefaultCiliumClient) CreatePortForward(ctx context.Context, config *PortForwardConfig) error {
+	// Create port forwarding policy name
+	policyName := fmt.Sprintf("portforward-%s-%d-%s",
+		sanitizeNetworkName(config.ExternalIP),
+		config.ExternalPort,
+		config.Protocol)
+
+	// Create a policy that enables port forwarding
+	policy := &NetworkPolicy{
+		Name: policyName,
+		Labels: map[string]string{
+			"type": "portforward",
+			"externalIP": sanitizeNetworkName(config.ExternalIP),
+			"externalPort": fmt.Sprintf("%d", config.ExternalPort),
+			"protocol": config.Protocol,
+		},
+		Ingress: []PolicyRule{
+			{
+				ToPorts: []PortRule{
+					{
+						Ports: []Port{
+							{
+								Port: config.ExternalPort,
+								Protocol: config.Protocol,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Apply the policy
+	return c.ApplyNetworkPolicy(ctx, policy)
+}
+
+// RemovePortForward removes port forwarding rules
+func (c *DefaultCiliumClient) RemovePortForward(ctx context.Context, config *PortForwardConfig) error {
+	// Create port forwarding policy name
+	policyName := fmt.Sprintf("portforward-%s-%d-%s",
+		sanitizeNetworkName(config.ExternalIP),
+		config.ExternalPort,
+		config.Protocol)
+
+	// Delete the policy using kubectl
+	cmd := exec.Command("kubectl", "delete", "cnp", policyName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove port forwarding policy: %w\nOutput: %s", err, string(output))
+	}
+
+	return nil
+}
+
 // Helper methods
 
 // convertToCiliumPolicy converts a NetworkPolicy to a CiliumNetworkPolicy YAML
 func (c *DefaultCiliumClient) convertToCiliumPolicy(policy *NetworkPolicy) (string, error) {
-	// This is a simplified conversion - in a real implementation this would map 
+	// This is a simplified conversion - in a real implementation this would map
 	// to the actual CiliumNetworkPolicy CRD format
-	
+
 	// Create a map representing the CiliumNetworkPolicy
 	ciliumPolicy := map[string]interface{}{
 		"apiVersion": "cilium.io/v2",
@@ -230,7 +351,7 @@ func (c *DefaultCiliumClient) applyYAML(yamlContent string) error {
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(yamlContent)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to apply policy: %w\nOutput: %s", err, string(output))

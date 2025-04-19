@@ -10,9 +10,12 @@ DPI provides visibility into application-layer traffic, enabling the system to m
 
 ### Primary DPI Technologies
 
-1. **nProbe**
+1. **Zeek** (formerly Bro)
+   - Deep protocol analysis for common services
+   - Behavioral anomaly detection
+   - Session tracking and connection analysis
+   - Event-based programming model for custom analysis
    - Application recognition and fingerprinting
-   - NetFlow/IPFIX export for traffic analysis
    - Traffic classification for QoS and policy enforcement
    - Flow collection for long-term traffic analysis
 
@@ -21,12 +24,6 @@ DPI provides visibility into application-layer traffic, enabling the system to m
    - Protocol analysis and anomaly detection
    - Intrusion detection and prevention capabilities
    - High-performance packet capture and analysis
-
-3. **Zeek** (formerly Bro)
-   - Deep protocol analysis for common services
-   - Behavioral anomaly detection
-   - Session tracking and connection analysis
-   - Event-based programming model for custom analysis
 
 ## Architecture
 
@@ -101,7 +98,7 @@ func ProcessDPIEvent(event DPIEvent) {
 ### 2. QoS Integration
 
 #### Data Flow
-- nProbe classifies traffic by application type
+- Zeek classifies traffic by application type
 - Classification data is fed to QoS engine
 - Traffic is queued and prioritized based on application type
 
@@ -113,7 +110,7 @@ func ProcessDPIEvent(event DPIEvent) {
 
 #### Technical Approach
 - Traffic classes defined in ConfigMap
-- nProbe exports classifications to etcd
+- Zeek exports classifications to etcd
 - QoS controller watches for changes and updates tc (traffic control) rules
 - eBPF programs enforce QoS at high speed
 
@@ -190,7 +187,7 @@ spec:
 
 ### Phase 1: Infrastructure Setup
 1. Deploy base packet capture infrastructure
-2. Implement nProbe, Suricata, and Zeek containers
+2. Implement Zeek and Suricata containers
 3. Configure basic event collection and storage
 
 ### Phase 2: Event Integration
@@ -204,7 +201,7 @@ spec:
 3. Create threat intelligence integration
 
 ### Phase 4: QoS Integration
-1. Implement traffic classification based on nProbe data
+1. Implement traffic classification based on Zeek data
 2. Develop QoS controller for managing tc rules
 3. Configure DSCP marking based on application type
 

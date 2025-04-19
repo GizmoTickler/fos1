@@ -1,0 +1,210 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alert-rules
+  namespace: monitoring
+data:
+  network-alerts.yml: |
+    groups:
+    - name: network.rules
+      rules:
+      - alert: NetworkInterfaceHighUtilization
+        expr: traffic_interface_rx_utilization > 80 or traffic_interface_tx_utilization > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network interface high utilization"
+          description: "Network interface {{ $labels.interface }} has high utilization (> 80%) for more than 5 minutes."
+      
+      - alert: NetworkInterfaceCriticalUtilization
+        expr: traffic_interface_rx_utilization > 95 or traffic_interface_tx_utilization > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Network interface critical utilization"
+          description: "Network interface {{ $labels.interface }} has critical utilization (> 95%) for more than 5 minutes."
+      
+      - alert: NetworkInterfaceErrors
+        expr: rate(traffic_interface_rx_errors[5m]) > 10 or rate(traffic_interface_tx_errors[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network interface errors"
+          description: "Network interface {{ $labels.interface }} has more than 10 errors per second for more than 5 minutes."
+      
+      - alert: NetworkInterfaceDrops
+        expr: rate(traffic_interface_rx_drops[5m]) > 10 or rate(traffic_interface_tx_drops[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network interface drops"
+          description: "Network interface {{ $labels.interface }} has more than 10 drops per second for more than 5 minutes."
+      
+      - alert: TrafficClassHighUtilization
+        expr: traffic_class_utilization > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Traffic class high utilization"
+          description: "Traffic class {{ $labels.class }} on interface {{ $labels.interface }} has high utilization (> 90%) for more than 5 minutes."
+      
+      - alert: TrafficClassDrops
+        expr: rate(traffic_class_drops[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Traffic class drops"
+          description: "Traffic class {{ $labels.class }} on interface {{ $labels.interface }} has more than 10 drops per second for more than 5 minutes."
+
+  security-alerts.yml: |
+    groups:
+    - name: security.rules
+      rules:
+      - alert: SecurityEventDetected
+        expr: security_events_total{severity="high"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Security event detected"
+          description: "A high severity security event has been detected."
+      
+      - alert: SecurityEventCritical
+        expr: security_events_total{severity="critical"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical security event detected"
+          description: "A critical severity security event has been detected."
+      
+      - alert: SecurityEventBurst
+        expr: sum(rate(security_events_total[5m])) by (type) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Security event burst detected"
+          description: "More than 10 security events of type {{ $labels.type }} per second have been detected for more than 5 minutes."
+      
+      - alert: DPIEngineDown
+        expr: up{job="dpi"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DPI engine down"
+          description: "The DPI engine has been down for more than 5 minutes."
+      
+      - alert: FirewallRuleViolations
+        expr: rate(firewall_rule_violations_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Firewall rule violations"
+          description: "More than 10 firewall rule violations per second have been detected for more than 5 minutes."
+
+  system-alerts.yml: |
+    groups:
+    - name: system.rules
+      rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}."
+      
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 80% for more than 5 minutes on {{ $labels.instance }}."
+      
+      - alert: HighDiskUsage
+        expr: 100 - ((node_filesystem_avail_bytes{mountpoint="/"} * 100) / node_filesystem_size_bytes{mountpoint="/"}) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is above 80% for more than 5 minutes on {{ $labels.instance }}."
+      
+      - alert: NodeDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node down"
+          description: "Node {{ $labels.instance }} has been down for more than 5 minutes."
+      
+      - alert: HighLoad
+        expr: node_load1 > 2 * count without (cpu, mode) (node_cpu_seconds_total{mode="idle"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High load"
+          description: "Load is high on {{ $labels.instance }} for more than 5 minutes."
+
+  application-alerts.yml: |
+    groups:
+    - name: application.rules
+      rules:
+      - alert: HighHTTPErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) by (service) / sum(rate(http_requests_total[5m])) by (service) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate"
+          description: "HTTP error rate is above 5% for service {{ $labels.service }} for more than 5 minutes."
+      
+      - alert: HighHTTPLatency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP latency"
+          description: "HTTP latency (95th percentile) is above 1 second for service {{ $labels.service }} for more than 5 minutes."
+      
+      - alert: ServiceDown
+        expr: up{job=~".*-service"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service down"
+          description: "Service {{ $labels.job }} has been down for more than 5 minutes."
+      
+      - alert: HighGRPCErrorRate
+        expr: sum(rate(grpc_server_handled_total{grpc_code!="OK"}[5m])) by (service) / sum(rate(grpc_server_handled_total[5m])) by (service) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High gRPC error rate"
+          description: "gRPC error rate is above 5% for service {{ $labels.service }} for more than 5 minutes."
+      
+      - alert: HighGRPCLatency
+        expr: histogram_quantile(0.95, sum(rate(grpc_server_handling_seconds_bucket[5m])) by (le, service)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High gRPC latency"
+          description: "gRPC latency (95th percentile) is above 1 second for service {{ $labels.service }} for more than 5 minutes."

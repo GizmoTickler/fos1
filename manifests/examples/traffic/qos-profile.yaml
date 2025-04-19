@@ -1,0 +1,49 @@
+apiVersion: network.fos1.io/v1alpha1
+kind: QoSProfile
+metadata:
+  name: wan-qos
+  namespace: default
+spec:
+  interface: eth0
+  uploadBandwidth: 50Mbit
+  downloadBandwidth: 200Mbit
+  defaultClass: standard
+  classes:
+    - name: voip
+      priority: 1
+      minBandwidth: 10Mbit
+      maxBandwidth: 20Mbit
+      burst: 15kb
+      dscp: 46
+      applications:
+        - voip
+        - sip
+        - rtp
+      applicationCategories:
+        - voice
+        - video_conferencing
+    - name: streaming
+      priority: 3
+      minBandwidth: 20Mbit
+      maxBandwidth: 40%
+      dscp: 34
+      applications:
+        - netflix
+        - youtube
+      applicationCategories:
+        - streaming
+    - name: standard
+      priority: 5
+      minBandwidth: 1Mbit
+      maxBandwidth: 30%
+      dscp: 0
+    - name: bulk
+      priority: 7
+      maxBandwidth: 10%
+      dscp: 8
+      applications:
+        - bittorrent
+        - ftp
+      applicationCategories:
+        - file_sharing
+        - backup

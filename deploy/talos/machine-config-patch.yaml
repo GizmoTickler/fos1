@@ -1,0 +1,37 @@
+machine:
+  kernel:
+    modules:
+      - name: af_packet
+      - name: tun
+      - name: pf_ring
+  sysctls:
+    net.core.bpf_jit_enable: "1"
+    net.core.bpf_jit_harden: "0"
+    net.core.bpf_jit_kallsyms: "1"
+    net.core.rmem_max: "33554432"
+    net.core.wmem_max: "33554432"
+    net.ipv4.tcp_rmem: "4096 87380 33554432"
+    net.ipv4.tcp_wmem: "4096 65536 33554432"
+  time:
+    servers:
+      - time.cloudflare.com
+  features:
+    rbac: true
+  kubelet:
+    extraArgs:
+      feature-gates: "NodeSwap=true"
+    extraMounts:
+      - destination: /var/lib/zeek
+        type: bind
+        source: /var/lib/zeek
+        options:
+          - bind
+          - rshared
+          - rw
+  network:
+    extraHostEntries:
+      - ip: 127.0.0.1
+        aliases:
+          - zeek.local
+  extensions:
+    - image: ghcr.io/siderolabs/zeek-extension:v1.0.0

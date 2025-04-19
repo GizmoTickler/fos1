@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeek-extension-config
+  namespace: kube-system
+data:
+  extension.yaml: |
+    apiVersion: extensions.talos.dev/v1alpha1
+    kind: Extension
+    metadata:
+      name: zeek
+      description: "Zeek Network Security Monitor"
+    spec:
+      version: v1.0.0
+      author: "FOS Team"
+      dependencies:
+        - name: "kernel"
+          version: ">=5.15.0"
+      requirements:
+        - name: "net_raw"
+          type: "capability"
+        - name: "net_admin"
+          type: "capability"
+      container:
+        entrypoint: "/bin/sh"
+        args:
+          - "-c"
+          - |
+            # Load necessary kernel modules
+            modprobe af_packet
+            modprobe tun
+            
+            # Create directory for Zeek
+            mkdir -p /opt/zeek
+            
+            # Exit successfully to allow the Kubernetes deployment to manage Zeek
+            exit 0
+      files:
+        - path: /etc/cni/net.d/zeek-cni.conflist
+          content: |
+            {
+              "cniVersion": "0.4.0",
+              "name": "zeek-network",
+              "plugins": [
+                {
+                  "type": "bridge",
+                  "bridge": "zeek0",
+                  "isGateway": true,
+                  "ipMasq": true,
+                  "ipam": {
+                    "type": "host-local",
+                    "subnet": "172.30.0.0/16",
+                    "routes": [
+                      { "dst": "0.0.0.0/0" }
+                    ]
+                  }
+                },
+                {
+                  "type": "portmap",
+                  "capabilities": {"portMappings": true}
+                }
+              ]
+            }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zeek-extension-installer
+  namespace: kube-system
+  labels:
+    app: zeek-extension-installer
+spec:
+  selector:
+    matchLabels:
+      app: zeek-extension-installer
+  template:
+    metadata:
+      labels:
+        app: zeek-extension-installer
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: installer
+        image: alpine:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Copy extension configuration to Talos extension directory
+          mkdir -p /var/lib/talos/extensions
+          cp /config/extension.yaml /var/lib/talos/extensions/zeek.yaml
+          
+          # Signal Talos to load the extension
+          # In a real implementation, this would use the Talos API
+          echo "Extension installed, waiting for Talos to load it"
+          
+          # Keep the container running to maintain the extension
+          sleep infinity
+        volumeMounts:
+        - name: host-extensions
+          mountPath: /var/lib/talos/extensions
+        - name: config
+          mountPath: /config
+        securityContext:
+          privileged: true
+      volumes:
+      - name: host-extensions
+        hostPath:
+          path: /var/lib/talos/extensions
+          type: DirectoryOrCreate
+      - name: config
+        configMap:
+          name: zeek-extension-config

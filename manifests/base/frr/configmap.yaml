@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frr-config
+  namespace: network
+data:
+  daemons: |
+    zebra=yes
+    bgpd=yes
+    ospfd=yes
+    ospf6d=no
+    ripd=no
+    ripngd=no
+    isisd=no
+    pimd=no
+    ldpd=no
+    nhrpd=no
+    eigrpd=no
+    babeld=no
+    sharpd=no
+    pbrd=no
+    bfdd=yes
+    fabricd=no
+    vrrpd=no
+    pathd=no
+
+  frr.conf: |
+    frr version 8.4
+    frr defaults traditional
+    hostname frr-router
+    log syslog informational
+    service integrated-vtysh-config
+    !
+    ! Basic configuration - will be overridden by controller
+    !
+    ip forwarding
+    ipv6 forwarding
+    !
+    router-id 192.168.1.1
+    !
+    line vty
+    !
+
+  vtysh.conf: |
+    service integrated-vtysh-config
+    !
+    username admin nopassword

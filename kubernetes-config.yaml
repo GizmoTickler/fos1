@@ -1,0 +1,40 @@
+kubernetes:
+  enabled: true
+  namespace: "security-monitoring"
+
+zeek:
+  logsPath: "/zeek-logs/current"
+  policyPath: "/zeek-policy"
+
+profiles:
+  - name: "default-profile"
+    description: "Default DPI profile for Kubernetes"
+    enabled: true
+    inspectionDepth: 5
+    applications:
+      - "http"
+      - "https"
+      - "ssh"
+      - "dns"
+      - "ftp"
+    applicationCategories:
+      - "web"
+      - "email"
+      - "file-transfer"
+    trafficClasses:
+      - name: "web-traffic"
+        applications:
+          - "http"
+          - "https"
+        dscp: 0
+      - name: "high-priority"
+        applications:
+          - "ssh"
+        dscp: 46
+
+flows:
+  - description: "Default flow"
+    enabled: true
+    sourceNetwork: "0.0.0.0/0"
+    destinationNetwork: "0.0.0.0/0"
+    profile: "default-profile"

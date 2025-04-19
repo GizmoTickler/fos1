@@ -26,7 +26,6 @@ This document outlines the comprehensive design for the Advanced Deep Packet Ins
 2. **Engine Connectors**:
    - Suricata Connector (`pkg/security/dpi/connectors/suricata.go`)
    - Zeek Connector (`pkg/security/dpi/connectors/zeek.go`)
-   - nProbe Connector (`pkg/security/dpi/connectors/nprobe.go`) *[To be implemented]*
 
 3. **Application Detector** (`pkg/security/dpi/application.go`):
    - Responsible for application recognition
@@ -80,21 +79,20 @@ type DPIManager struct {
     profiles        map[string]*DPIProfile
     flows           map[string]*DPIFlow
     flowStats       map[string]*FlowStatistics
-    
+
     // Detection engines
     appDetector     *ApplicationDetector
     flowMonitor     *FlowMonitor
-    
+
     // Engine connectors
     suricataConnector *connectors.SuricataConnector
     zeekConnector     *connectors.ZeekConnector
-    nprobeConnector   *connectors.NProbeConnector
-    
+
     // Integration
     ciliumClient    cilium.CiliumClient
     networkCtrl     *cilium.NetworkController
     integrationCtrl *IntegrationController
-    
+
     // Control
     ctx              context.Context
     cancel           context.CancelFunc
@@ -120,11 +118,8 @@ Engine connectors integrate with specific DPI technologies:
    - Provides protocol analysis
    - Enables behavioral monitoring
    - Extracts metadata for applications
-
-3. **nProbe Connector** (new):
-   - High-performance application detection
-   - Traffic classification
-   - Flow monitoring and export
+   - Application detection and classification
+   - Flow monitoring and traffic analysis
 
 Each connector implements a common interface:
 
@@ -151,7 +146,7 @@ type ApplicationDetector struct {
     applicationInfo map[string]*ApplicationInfo
     signatures      map[string]*AppSignature
     categories      map[string][]string
-    
+
     // Machine learning components for advanced detection
     mlClassifier    *MLClassifier
 }
@@ -390,7 +385,7 @@ spec:
 - Integrate with Cilium policy generation
 
 ### Phase 2: Advanced Features
-- Implement nProbe connector
+- Enhance Zeek-based application detection
 - Enhance application detection with ML
 - Add flow monitoring capabilities
 

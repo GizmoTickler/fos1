@@ -4,3 +4,8 @@ kind: Kustomization
 resources:
   - prometheus.yaml
   - grafana.yaml
+  - alertmanager.yaml
+  - alert-rules.yaml
+  - elasticsearch.yaml
+  - fluentd.yaml
+  - kibana.yaml

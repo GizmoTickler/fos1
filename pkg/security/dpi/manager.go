@@ -3,10 +3,11 @@ package dpi
 import (
 	"context"
 	"fmt"
-	"os/exec"
+	"os"
 	"strings"
 	"sync"
-	
+	"time"
+
 	"github.com/varuntirumala1/fos1/pkg/cilium"
 	"github.com/varuntirumala1/fos1/pkg/security/dpi/connectors"
 )
@@ -19,15 +20,18 @@ type DPIManager struct {
 	flows           map[string]*DPIFlow
 	flowStats       map[string]*FlowStatistics
 	appDetector     *ApplicationDetector
-	
+
 	// Integration with Cilium
 	ciliumClient    cilium.CiliumClient
 	networkCtrl     *cilium.NetworkController
-	
-	// Connectors for DPI engines
-	suricataConnector *connectors.SuricataConnector
-	zeekConnector     *connectors.ZeekConnector
-	
+
+	// Zeek connector
+	zeekConnector   *connectors.ZeekConnector
+
+	// Event processing
+	eventChan        chan DPIEvent
+	eventHandlers    []func(DPIEvent)
+
 	// Control
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -35,10 +39,11 @@ type DPIManager struct {
 
 // DPIManagerOptions configures the DPI manager
 type DPIManagerOptions struct {
-	CiliumClient  cilium.CiliumClient
-	SuricataEvePath string
-	SuricataMode    string // "ids" or "ips"
-	ZeekLogsPath    string
+	CiliumClient     cilium.CiliumClient
+	ZeekLogsPath     string
+	ZeekPolicyPath   string
+	KubernetesMode   bool   // Whether running in Kubernetes
+	Namespace        string // Kubernetes namespace
 }
 
 // NewDPIManager creates a new DPI manager
@@ -46,9 +51,20 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 	if opts.CiliumClient == nil {
 		return nil, fmt.Errorf("cilium client is required")
 	}
-	
+
+	// Set default namespace if running in Kubernetes mode
+	if opts.KubernetesMode && opts.Namespace == "" {
+		// Try to get namespace from environment
+		if ns := os.Getenv("KUBERNETES_NAMESPACE"); ns != "" {
+			opts.Namespace = ns
+		} else {
+			// Default to "default" namespace
+			opts.Namespace = "default"
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	manager := &DPIManager{
 		profiles:     make(map[string]*DPIProfile),
 		flows:        make(map[string]*DPIFlow),
@@ -56,37 +72,31 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 		appDetector:  NewApplicationDetector(),
 		ciliumClient: opts.CiliumClient,
 		networkCtrl:  cilium.NewNetworkController(opts.CiliumClient),
+		eventChan:    make(chan DPIEvent, 1000),
+		eventHandlers: make([]func(DPIEvent), 0),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
-	
-	// Initialize Suricata connector
-	suricataOpts := connectors.SuricataOptions{
-		EvePath:      opts.SuricataEvePath,
-		Mode:         opts.SuricataMode,
-		CiliumClient: opts.CiliumClient,
-	}
-	
-	suricataConnector, err := connectors.NewSuricataConnector(suricataOpts)
-	if err != nil {
-		cancel() // Cancel the context if we fail to initialize
-		return nil, fmt.Errorf("failed to initialize Suricata connector: %w", err)
-	}
-	manager.suricataConnector = suricataConnector
-	
+
 	// Initialize Zeek connector
 	zeekOpts := connectors.ZeekOptions{
-		LogsPath:     opts.ZeekLogsPath,
-		CiliumClient: opts.CiliumClient,
+		LogsPath:       opts.ZeekLogsPath,
+		PolicyPath:     opts.ZeekPolicyPath,
+		CiliumClient:   opts.CiliumClient,
+		KubernetesMode: opts.KubernetesMode,
+		Namespace:      opts.Namespace,
 	}
-	
+
 	zeekConnector, err := connectors.NewZeekConnector(zeekOpts)
 	if err != nil {
 		cancel() // Cancel the context if we fail to initialize
 		return nil, fmt.Errorf("failed to initialize Zeek connector: %w", err)
 	}
 	manager.zeekConnector = zeekConnector
-	
+
+	// Start event processing
+	go manager.processEvents()
+
 	return manager, nil
 }
 
@@ -216,66 +226,70 @@ func (m *DPIManager) GetFlowStatistics(sourceNetwork, destinationNetwork string)
 	return stats, nil
 }
 
-// Start starts the DPI manager and all connectors
+// Start starts the DPI manager and Zeek connector
 func (m *DPIManager) Start() error {
-	// Start Suricata connector
-	if m.suricataConnector != nil {
-		if err := m.suricataConnector.Start(); err != nil {
-			return fmt.Errorf("failed to start Suricata connector: %w", err)
-		}
-		fmt.Println("Started Suricata connector")
-	}
-	
 	// Start Zeek connector
 	if m.zeekConnector != nil {
 		if err := m.zeekConnector.Start(); err != nil {
 			return fmt.Errorf("failed to start Zeek connector: %w", err)
 		}
 		fmt.Println("Started Zeek connector")
+
+		// Register for events
+		events, err := m.zeekConnector.GetEvents(m.ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get Zeek events: %w", err)
+		}
+
+		// Forward events to our event channel
+		go m.forwardEvents(events, "zeek")
 	}
-	
+
 	// Apply DPI profiles and flows to configure what to inspect
 	m.applyProfilesToEngines()
-	
+
 	fmt.Println("DPI manager started successfully")
 	return nil
 }
 
-// Stop stops the DPI manager and all connectors
+// Stop stops the DPI manager and Zeek connector
 func (m *DPIManager) Stop() error {
 	// Cancel our context to stop all goroutines
 	m.cancel()
-	
-	// Stop Suricata connector
-	if m.suricataConnector != nil {
-		if err := m.suricataConnector.Stop(); err != nil {
-			fmt.Printf("Error stopping Suricata connector: %v\n", err)
-		}
-	}
-	
+
 	// Stop Zeek connector
 	if m.zeekConnector != nil {
 		if err := m.zeekConnector.Stop(); err != nil {
 			fmt.Printf("Error stopping Zeek connector: %v\n", err)
 		}
 	}
-	
+
 	fmt.Println("DPI manager stopped")
 	return nil
 }
 
-// applyProfilesToEngines applies DPI profiles to the DPI engines
+// applyProfilesToEngines applies DPI profiles to Zeek
 func (m *DPIManager) applyProfilesToEngines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
-	// Apply profiles to DPI engines
-	// This would configure which applications, protocols, etc. are of interest
-	
-	// In a real implementation, this would generate configuration files
-	// for Suricata and Zeek based on the profiles
-	
-	fmt.Println("Applied DPI profiles to engines")
+
+	// Configure Zeek
+	if m.zeekConnector != nil {
+		// Generate Zeek configuration from profiles
+		fmt.Println("Applying profiles to Zeek")
+
+		// Create configuration for Zeek
+		config := map[string]interface{}{
+			"applications": getApplicationsFromProfiles(m.profiles),
+		}
+
+		// Apply configuration
+		if err := m.zeekConnector.Configure(config); err != nil {
+			fmt.Printf("Error configuring Zeek: %v\n", err)
+		}
+	}
+
+	fmt.Println("Applied DPI profiles to Zeek")
 }
 
 // GetApplicationInfo gets information about an application
@@ -297,17 +311,17 @@ func (m *DPIManager) SetDSCPMarkingForApplication(applicationName string, dscp i
 		Priority:    1,
 		DSCP:        uint8(dscp),
 	}
-	
+
 	// Create a map with this application policy
 	appPolicies := map[string]cilium.AppPolicy{
 		applicationName: appPolicy,
 	}
-	
+
 	// Apply policy to Cilium
 	if err := m.networkCtrl.IntegrateDPI(m.ctx, appPolicies); err != nil {
 		return fmt.Errorf("failed to apply DSCP marking to Cilium: %w", err)
 	}
-	
+
 	fmt.Printf("Set DSCP marking %d for application %s\n", dscp, applicationName)
 	return nil
 }
@@ -318,7 +332,7 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 	if applicationName == "" || nextHop == "" {
 		return fmt.Errorf("application name and next hop are required")
 	}
-	
+
 	// Create a routing policy based on application
 	// This would create Cilium policies that route specific application traffic
 	policy := &cilium.NetworkPolicy{
@@ -329,7 +343,7 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 			"next-hop":  nextHop,
 		},
 	}
-	
+
 	// Add rules to redirect the application traffic
 	policy.Egress = append(policy.Egress, cilium.PolicyRule{
 		ToPorts: []cilium.PortRule{
@@ -347,47 +361,41 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 			},
 		},
 	})
-	
+
 	// Apply the policy
 	if err := m.networkCtrl.ApplyDynamicPolicy(m.ctx, policy); err != nil {
 		return fmt.Errorf("failed to configure policy-based routing: %w", err)
 	}
-	
+
 	fmt.Printf("Configured policy-based routing for %s to next hop %s\n", applicationName, nextHop)
 	return nil
 }
 
-// ConfigureSuricataIPSMode configures Suricata to run in IPS mode
-func (m *DPIManager) ConfigureSuricataIPSMode(enable bool) error {
-	if m.suricataConnector == nil {
-		return fmt.Errorf("Suricata connector not initialized")
+// GetDetectedProtocols gets the list of protocols detected by Zeek
+func (m *DPIManager) GetDetectedProtocols() (map[string]int, error) {
+	if m.zeekConnector == nil {
+		return nil, fmt.Errorf("Zeek connector not initialized")
 	}
-	
-	if err := m.suricataConnector.ConfigureIPSMode(enable); err != nil {
-		return fmt.Errorf("failed to configure Suricata IPS mode: %w", err)
-	}
-	
-	mode := "IDS"
-	if enable {
-		mode = "IPS"
-	}
-	
-	fmt.Printf("Configured Suricata to run in %s mode\n", mode)
-	return nil
+
+	return m.zeekConnector.ExtractProtocols()
 }
 
-// UpdateSuricataIPList updates a Suricata IP list
-func (m *DPIManager) UpdateSuricataIPList(listName string, ips []string) error {
-	if m.suricataConnector == nil {
-		return fmt.Errorf("Suricata connector not initialized")
+// GetProtocolStats gets statistics for a specific protocol
+func (m *DPIManager) GetProtocolStats(protocol string) (map[string]interface{}, error) {
+	if m.zeekConnector == nil {
+		return nil, fmt.Errorf("Zeek connector not initialized")
 	}
-	
-	if err := m.suricataConnector.UpdateIPList(listName, ips); err != nil {
-		return fmt.Errorf("failed to update Suricata IP list: %w", err)
+
+	return m.zeekConnector.GetProtocolStats(protocol)
+}
+
+// GetZeekStatus gets the status of the Zeek engine
+func (m *DPIManager) GetZeekStatus() (ZeekStatus, error) {
+	if m.zeekConnector == nil {
+		return ZeekStatus{}, fmt.Errorf("Zeek connector not initialized")
 	}
-	
-	fmt.Printf("Updated Suricata IP list %s with %d IPs\n", listName, len(ips))
-	return nil
+
+	return m.zeekConnector.Status()
 }
 
 // DPIProfile represents a DPI profile
@@ -449,109 +457,218 @@ type FlowStatistics struct {
 	LastUpdateTime string
 }
 
-// ApplicationDetector detects applications in network traffic
-type ApplicationDetector struct {
-	// This would integrate with nDPI, Suricata, etc.
-	applicationInfo map[string]*ApplicationInfo
+// processEvents processes events from all DPI engines
+func (m *DPIManager) processEvents() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return // Context canceled, exit
+
+		case event := <-m.eventChan:
+			// Process the event
+			m.handleEvent(event)
+		}
+	}
 }
 
-// NewApplicationDetector creates a new application detector
-func NewApplicationDetector() *ApplicationDetector {
-	// Initialize with some predefined applications
-	info := make(map[string]*ApplicationInfo)
-	for _, app := range []string{"http", "https", "ssh", "dns", "ftp", "smtp"} {
-		info[app] = &ApplicationInfo{
-			Name:        app,
-			Category:    categorizeApplication(app),
-			Description: fmt.Sprintf("%s protocol", strings.ToUpper(app)),
-			DefaultPorts: getDefaultPorts(app),
+// forwardEvents forwards events from a DPI engine to the main event channel
+func (m *DPIManager) forwardEvents(events <-chan DPIEvent, source string) {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return // Context canceled, exit
+
+		case event, ok := <-events:
+			if !ok {
+				// Channel closed
+				fmt.Printf("Event channel for %s closed\n", source)
+				return
+			}
+
+			// Add source information
+			if event.RawData == nil {
+				event.RawData = make(map[string]interface{})
+			}
+			event.RawData["source"] = source
+
+			// Forward to main event channel
+			select {
+			case m.eventChan <- event:
+				// Successfully sent
+			default:
+				// Channel full, log and continue
+				fmt.Println("Event channel full, dropping event")
+			}
+		}
+	}
+}
+
+// handleEvent handles a DPI event
+func (m *DPIManager) handleEvent(event DPIEvent) {
+	// Update flow statistics
+	if event.SourceIP != "" && event.DestIP != "" {
+		m.updateFlowStats(event)
+	}
+
+	// Handle based on event type
+	switch event.EventType {
+	case "flow":
+		// Process flow event
+		m.handleFlowEvent(event)
+
+	case "alert":
+		// Process alert event
+		m.handleAlertEvent(event)
+
+	case "notice":
+		// Process notice event
+		m.handleNoticeEvent(event)
+	}
+
+	// Call all registered event handlers
+	for _, handler := range m.eventHandlers {
+		handler(event)
+	}
+}
+
+// updateFlowStats updates flow statistics based on an event
+func (m *DPIManager) updateFlowStats(event DPIEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Find matching flow
+	for key, stats := range m.flowStats {
+		// In a real implementation, would check if the event matches the flow
+		// For now, just update all flow stats
+		stats.FlowsProcessed++
+
+		// Update bytes processed if available
+		if bytes, ok := event.RawData["bytes"]; ok {
+			if bytesInt, ok := bytes.(int64); ok {
+				stats.BytesProcessed += bytesInt
+			}
+		}
+
+		// Update last update time
+		stats.LastUpdateTime = event.Timestamp.Format(time.RFC3339)
+
+		// Update the stats in the map
+		m.flowStats[key] = stats
+	}
+}
+
+// handleFlowEvent handles a flow event
+func (m *DPIManager) handleFlowEvent(event DPIEvent) {
+	// Process flow event
+	// In a real implementation, would update application statistics,
+	// trigger policy updates, etc.
+
+	// For now, just log the event
+	fmt.Printf("Flow event: %s application from %s:%d to %s:%d\n",
+		event.Application, event.SourceIP, event.SourcePort, event.DestIP, event.DestPort)
+}
+
+// handleAlertEvent handles an alert event
+func (m *DPIManager) handleAlertEvent(event DPIEvent) {
+	// Process alert event
+	// In a real implementation, would trigger policy updates,
+	// send notifications, etc.
+
+	// For now, just log the event
+	fmt.Printf("Alert event: %s (severity %d) - %s\n",
+		event.Signature, event.Severity, event.Description)
+
+	// For high-severity alerts, create a blocking policy
+	if event.Severity >= 3 {
+		m.createBlockingPolicy(event)
+	}
+}
+
+// handleNoticeEvent handles a notice event
+func (m *DPIManager) handleNoticeEvent(event DPIEvent) {
+	// Process notice event
+	// In a real implementation, would log, send notifications, etc.
+
+	// For now, just log the event
+	fmt.Printf("Notice event: %s - %s\n", event.Signature, event.Description)
+}
+
+// createBlockingPolicy creates a blocking policy for an event
+func (m *DPIManager) createBlockingPolicy(event DPIEvent) {
+	// Create a policy to block traffic related to the event
+	policy := &cilium.NetworkPolicy{
+		Name: fmt.Sprintf("dpi-block-%s-%s", event.EventType, normalizeString(event.Signature)),
+		Labels: map[string]string{
+			"app":       "dpi",
+			"event":     event.EventType,
+			"signature": normalizeString(event.Signature),
+			"severity":  fmt.Sprintf("%d", event.Severity),
+		},
+	}
+
+	// Add rules based on the event
+	if event.SourceIP != "" {
+		policy.Ingress = append(policy.Ingress, cilium.PolicyRule{
+			FromCIDRs: []string{event.SourceIP + "/32"},
+			Denied:   true,
+		})
+	}
+
+	if event.DestIP != "" {
+		policy.Egress = append(policy.Egress, cilium.PolicyRule{
+			ToCIDRs: []string{event.DestIP + "/32"},
+			Denied:  true,
+		})
+	}
+
+	// Apply the policy
+	if err := m.networkCtrl.ApplyDynamicPolicy(m.ctx, policy); err != nil {
+		fmt.Printf("Failed to apply blocking policy: %v\n", err)
+	} else {
+		fmt.Printf("Applied blocking policy for %s\n", event.Signature)
+	}
+}
+
+// RegisterEventHandler registers a handler for DPI events
+func (m *DPIManager) RegisterEventHandler(handler func(DPIEvent)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.eventHandlers = append(m.eventHandlers, handler)
+}
+
+// getApplicationsFromProfiles extracts all applications from profiles
+func getApplicationsFromProfiles(profiles map[string]*DPIProfile) []string {
+	apps := make(map[string]bool)
+
+	for _, profile := range profiles {
+		if profile.Enabled {
+			for _, app := range profile.Applications {
+				apps[app] = true
+			}
 		}
 	}
 
-	return &ApplicationDetector{
-		applicationInfo: info,
+	// Convert to slice
+	result := make([]string, 0, len(apps))
+	for app := range apps {
+		result = append(result, app)
 	}
+
+	return result
 }
 
-// GetApplicationInfo gets information about an application
-func (d *ApplicationDetector) GetApplicationInfo(applicationName string) (*ApplicationInfo, error) {
-	info, exists := d.applicationInfo[applicationName]
-	if !exists {
-		return nil, fmt.Errorf("application %s not found", applicationName)
-	}
+// normalizeString normalizes a string for use in policy names
+func normalizeString(s string) string {
+	// Replace spaces and special characters with hyphens
+	s = strings.ReplaceAll(s, " ", "-")
+	s = strings.ReplaceAll(s, ".", "-")
+	s = strings.ReplaceAll(s, ":", "-")
+	s = strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, "\\", "-")
 
-	return info, nil
-}
+	// Convert to lowercase
+	s = strings.ToLower(s)
 
-// DetectApplication detects an application in a packet
-func (d *ApplicationDetector) DetectApplication(packet []byte) (string, error) {
-	// This would normally use nDPI or another DPI library
-	// For now, return a simple detection based on the first few bytes
-	if len(packet) < 4 {
-		return "unknown", nil
-	}
-
-	// Very simplistic detection based on port numbers
-	// In a real implementation, you'd use proper DPI techniques
-	srcPort := (int(packet[0]) << 8) | int(packet[1])
-	dstPort := (int(packet[2]) << 8) | int(packet[3])
-
-	if srcPort == 80 || dstPort == 80 {
-		return "http", nil
-	} else if srcPort == 443 || dstPort == 443 {
-		return "https", nil
-	} else if srcPort == 22 || dstPort == 22 {
-		return "ssh", nil
-	} else if srcPort == 53 || dstPort == 53 {
-		return "dns", nil
-	}
-
-	return "unknown", nil
-}
-
-// ApplicationInfo represents information about an application
-type ApplicationInfo struct {
-	Name         string
-	Category     string
-	Description  string
-	DefaultPorts []string
-	Risks        []string
-}
-
-// Helper functions for the application detector
-
-func categorizeApplication(app string) string {
-	categories := map[string]string{
-		"http":  "web",
-		"https": "web",
-		"ssh":   "remote_access",
-		"dns":   "network",
-		"ftp":   "file_transfer",
-		"smtp":  "email",
-	}
-
-	category, exists := categories[app]
-	if !exists {
-		return "other"
-	}
-
-	return category
-}
-
-func getDefaultPorts(app string) []string {
-	ports := map[string][]string{
-		"http":  {"80"},
-		"https": {"443"},
-		"ssh":   {"22"},
-		"dns":   {"53"},
-		"ftp":   {"20", "21"},
-		"smtp":  {"25"},
-	}
-
-	p, exists := ports[app]
-	if !exists {
-		return []string{}
-	}
-
-	return p
+	return s
 }

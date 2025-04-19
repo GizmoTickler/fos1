@@ -1,0 +1,12 @@
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFNATPolicy
+metadata:
+  name: ipv6-to-ipv4
+  namespace: default
+spec:
+  type: nat64
+  interface: eth0
+  sourceAddresses:
+    - 2001:db8:2::/64
+  enableTracking: true
+  prefix64: 64:ff9b::/96

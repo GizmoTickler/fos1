@@ -1,0 +1,44 @@
+apiVersion: network.fos1.io/v1alpha1
+kind: QoSProfile
+metadata:
+  name: business-qos
+  namespace: default
+spec:
+  interface: eth0
+  uploadBandwidth: 100Mbit
+  downloadBandwidth: 500Mbit
+  classes:
+    - name: voip
+      priority: 1
+      minBandwidth: 20Mbit
+      maxBandwidth: 30%
+      applications:
+        - voip
+        - webex
+        - teams
+      applicationCategories:
+        - video_conferencing
+      dscp: 46
+    - name: business
+      priority: 3
+      minBandwidth: 50Mbit
+      maxBandwidth: 60%
+      applicationCategories:
+        - database
+        - erp
+        - crm
+      dscp: 26
+    - name: web
+      priority: 5
+      minBandwidth: 20Mbit
+      maxBandwidth: 40%
+      applicationCategories:
+        - web
+      dscp: 0
+    - name: bulk
+      priority: 7
+      maxBandwidth: 10%
+      applicationCategories:
+        - file_transfer
+        - updates
+      dscp: 8

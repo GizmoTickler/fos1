@@ -1,0 +1,168 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security-monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zeek-config
+  namespace: security-monitoring
+data:
+  local.zeek: |
+    ##! Local site policy. Customize as appropriate.
+    ##!
+    ##! This file will not be overwritten when upgrading or reinstalling!
+
+    # This script logs which scripts were loaded during each run.
+    @load misc/loaded-scripts
+
+    # Apply the default tuning scripts for common tuning settings.
+    @load tuning/defaults
+
+    # Load the scan detection script.
+    @load misc/scan
+
+    # Log some information about web applications being used.
+    @load misc/app-stats
+
+    # Detect traceroute being run on the network.
+    @load misc/detect-traceroute
+
+    # Generate notices when vulnerable versions of software are discovered.
+    @load frameworks/software/vulnerable
+
+    # Detect software changing (e.g. attacker installing hacked SSHD).
+    @load frameworks/software/version-changes
+
+    # This adds signatures to detect cleartext forward and reverse shell sessions.
+    @load-sigs frameworks/signatures/detect-shellshock
+
+    # Load all of the scripts that detect software in various protocols.
+    @load protocols/ftp/software
+    @load protocols/smtp/software
+    @load protocols/ssh/software
+    @load protocols/http/software
+
+    # Load all of the scripts that detect malware in various protocols.
+    @load-sigs frameworks/signatures/detect-windows-shells
+
+    # Uncomment the following line to enable detection of the heartbleed attack.
+    @load policy/protocols/ssl/heartbleed
+
+    # Uncomment the following line to enable logging of connection VLANs.
+    @load policy/protocols/conn/vlan-logging
+
+    # Uncomment the following line to enable logging of BPF filter expressions.
+    @load policy/frameworks/packet-filter/log-packets
+
+    # Enable JSON logging for easier integration
+    @load policy/tuning/json-logs.zeek
+    redef LogAscii::use_json = T;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeek-logs-pvc
+  namespace: security-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zeek
+  namespace: security-monitoring
+  labels:
+    app: zeek
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zeek
+  template:
+    metadata:
+      labels:
+        app: zeek
+    spec:
+      # Use host network to capture traffic
+      hostNetwork: true
+      containers:
+      - name: zeek
+        image: zeek/zeek:latest
+        securityContext:
+          capabilities:
+            add: ["NET_RAW", "NET_ADMIN"]
+          privileged: true
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          mkdir -p /opt/zeek/share/zeek/site/local
+          cp /zeek-config/local.zeek /opt/zeek/share/zeek/site/local/local.zeek
+          /opt/zeek/bin/zeekctl deploy
+          tail -f /opt/zeek/logs/current/stderr.log
+        volumeMounts:
+        - name: zeek-logs
+          mountPath: /opt/zeek/logs
+        - name: zeek-config
+          mountPath: /zeek-config
+        env:
+        - name: INTERFACE
+          value: "eth0" # Change to the appropriate interface
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "pgrep zeek || pgrep zeekctl"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "test -f /opt/zeek/logs/current/conn.log"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: false  # Zeek needs root for packet capture
+          runAsUser: 0
+          capabilities:
+            add: ["NET_RAW", "NET_ADMIN", "SYS_NICE"]
+            drop: ["ALL"]
+      volumes:
+      - name: zeek-logs
+        persistentVolumeClaim:
+          claimName: zeek-logs-pvc
+      - name: zeek-config
+        configMap:
+          name: zeek-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zeek
+  namespace: security-monitoring
+spec:
+  selector:
+    app: zeek
+  ports:
+  - port: 9999
+    targetPort: 9999
+    name: zeek-api
+  type: ClusterIP

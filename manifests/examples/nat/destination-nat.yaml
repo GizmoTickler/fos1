@@ -1,0 +1,21 @@
+apiVersion: networking.fos1.io/v1alpha1
+kind: EBPFNATPolicy
+metadata:
+  name: web-server-dnat
+  namespace: default
+spec:
+  type: dnat
+  interface: eth0
+  externalIP: 203.0.113.10
+  portMappings:
+    - protocol: tcp
+      externalPort: 80
+      internalIP: 10.0.0.10
+      internalPort: 8080
+      description: "Web server HTTP"
+    - protocol: tcp
+      externalPort: 443
+      internalIP: 10.0.0.10
+      internalPort: 8443
+      description: "Web server HTTPS"
+  enableTracking: true

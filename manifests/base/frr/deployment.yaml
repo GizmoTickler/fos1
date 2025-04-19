@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frr-router
+  namespace: network
+  labels:
+    app: frr-router
+    component: routing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frr-router
+  template:
+    metadata:
+      labels:
+        app: frr-router
+        component: routing
+    spec:
+      serviceAccountName: frr-router
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: frr
+        image: frrouting/frr:latest
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - NET_ADMIN
+            - SYS_ADMIN
+        ports:
+        - name: bgp
+          containerPort: 179
+          hostPort: 179
+          protocol: TCP
+        - name: ospf
+          containerPort: 520
+          hostPort: 520
+          protocol: UDP
+        - name: vtysh
+          containerPort: 2605
+          protocol: TCP
+        volumeMounts:
+        - name: frr-config
+          mountPath: /etc/frr
+        - name: run
+          mountPath: /var/run/frr
+        - name: log
+          mountPath: /var/log/frr
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        livenessProbe:
+          exec:
+            command:
+            - /usr/lib/frr/watchfrr.sh
+            - zebra
+            - bgpd
+            - ospfd
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - vtysh
+            - -c
+            - show running-config
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: frr-config
+        configMap:
+          name: frr-config
+      - name: run
+        emptyDir: {}
+      - name: log
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: frr-router
+  namespace: network
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: frr-router
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.fos1.io"]
+  resources: ["bgpconfigs", "ospfconfigs", "routes"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: frr-router
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: frr-router
+subjects:
+- kind: ServiceAccount
+  name: frr-router
+  namespace: network
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frr-router
+  namespace: network
+  labels:
+    app: frr-router
+spec:
+  selector:
+    app: frr-router
+  ports:
+  - name: bgp
+    port: 179
+    protocol: TCP
+  - name: vtysh
+    port: 2605
+    protocol: TCP
+  type: ClusterIP

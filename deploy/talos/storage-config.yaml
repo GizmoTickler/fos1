@@ -1,0 +1,45 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: zeek-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: zeek-pv
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: zeek-storage
+  local:
+    path: /var/lib/zeek
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - worker-1  # Replace with your Talos worker node name
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeek-logs-pvc
+  namespace: security-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: zeek-storage
+  resources:
+    requests:
+      storage: 10Gi
