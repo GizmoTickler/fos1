@@ -15,6 +15,9 @@
 # Load custom scripts
 @load ./app-detection
 @load ./vlan-processing
+@load ./iot-detection
+@load ./port-detection
+@load ./protocol-detection
 
 # Print a message when scripts are loaded
 event zeek_init() {

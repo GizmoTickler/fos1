@@ -915,21 +915,130 @@ func (c *ZeekConnector) Status() (dpi.ZeekStatus, error) {
 // categorizeApplication categorizes an application protocol
 func categorizeApplication(app string) string {
 	categories := map[string]string{
+		// Web applications
 		"http":     "web",
 		"https":    "web",
-		"ssh":      "remote_access",
-		"dns":      "network",
-		"ftp":      "file_transfer",
+
+		// Email applications
 		"smtp":     "email",
 		"pop3":     "email",
 		"imap":     "email",
+		"email":    "email",
+
+		// File transfer
+		"ftp":      "file-transfer",
+		"sftp":     "file-transfer",
+		"scp":      "file-transfer",
+		"file-transfer": "file-transfer",
+
+		// Remote access
+		"ssh":      "remote-access",
+		"rdp":      "remote-access",
+		"telnet":   "remote-access",
+		"vnc":      "remote-access",
+		"remote-access": "remote-access",
+
+		// Streaming services
+		"rtmp":     "streaming",
+		"rtsp":     "streaming",
+		"rtp":      "streaming",
+		"streaming": "streaming",
+		"netflix":  "streaming",
+		"youtube":  "streaming",
+		"spotify":  "streaming",
+		"hulu":     "streaming",
+		"disney-plus": "streaming",
+		"amazon-video": "streaming",
+		"hbo-max":  "streaming",
+		"twitch":   "streaming",
+		"apple-tv": "streaming",
+		"peacock":  "streaming",
+		"paramount-plus": "streaming",
+		"tubi":     "streaming",
+		"crunchyroll": "streaming",
+
+		// Video conferencing
+		"zoom":     "video-conferencing",
+		"ms-teams": "video-conferencing",
+		"google-meet": "video-conferencing",
+		"webex":    "video-conferencing",
+		"video-conferencing": "video-conferencing",
+
+		// Social media
+		"facebook": "social-media",
+		"instagram": "social-media",
+		"twitter":  "social-media",
+		"tiktok":   "social-media",
+		"snapchat": "social-media",
+		"pinterest": "social-media",
+		"reddit":   "social-media",
+		"social-media": "social-media",
+
+		// Gaming
+		"steam":    "gaming",
+		"epic-games": "gaming",
+		"xbox-live": "gaming",
+		"playstation-network": "gaming",
+		"nintendo": "gaming",
+		"roblox":   "gaming",
+		"minecraft": "gaming",
+		"gaming":   "gaming",
+
+		// Messaging
+		"xmpp":     "messaging",
+		"sip":      "voip",
+		"slack":    "messaging",
+		"discord":  "messaging",
+		"messaging": "messaging",
+		"voip":     "voip",
+
+		// IoT
+		"mqtt":     "iot",
+		"coap":     "iot",
+		"modbus":   "iot",
+		"iot":      "iot",
+		"amazon-echo": "iot",
+		"google-home": "iot",
+		"nest":     "iot",
+		"ring":     "iot",
+		"philips-hue": "iot",
+		"sonos":    "iot",
+		"roku":     "iot",
+		"chromecast": "iot",
+		"smart-tv": "iot",
+		"samsung-tv": "iot",
+		"lg-tv":    "iot",
+		"vizio-tv": "iot",
+		"smart-plug": "iot",
+		"smart-bulb": "iot",
+		"smart-lock": "iot",
+		"smart-thermostat": "iot",
+		"smart-doorbell": "iot",
+		"smart-camera": "iot",
+		"smart-speaker": "iot",
+
+		// Network services
+		"dns":      "network-service",
+		"dhcp":     "network-service",
+		"ntp":      "network-service",
+		"snmp":     "network-service",
+		"network-service": "network-service",
+
+		// Databases
 		"mysql":    "database",
 		"postgres": "database",
 		"mongodb":  "database",
 		"redis":    "database",
-		"telnet":   "remote_access",
-		"rdp":      "remote_access",
-		"vnc":      "remote_access",
+		"database": "database",
+
+		// Productivity
+		"office365": "productivity",
+		"google-docs": "productivity",
+		"dropbox":  "productivity",
+		"box":      "productivity",
+		"onedrive": "productivity",
+		"sharepoint": "productivity",
+		"productivity": "productivity",
 	}
 
 	category, exists := categories[app]
@@ -1009,6 +1118,45 @@ func initApplicationMap() map[string]string {
 		"rtmp":       "streaming",
 		"rtsp":       "streaming",
 		"rtp":        "streaming",
+		"netflix":    "netflix",
+		"youtube":    "youtube",
+		"spotify":    "spotify",
+		"hulu":       "hulu",
+		"disney-plus": "disney-plus",
+		"amazon-video": "amazon-video",
+		"hbo-max":    "hbo-max",
+		"twitch":     "twitch",
+		"apple-tv":   "apple-tv",
+		"peacock":    "peacock",
+		"paramount-plus": "paramount-plus",
+		"tubi":       "tubi",
+		"crunchyroll": "crunchyroll",
+
+		// Video conferencing
+		"zoom":       "zoom",
+		"ms-teams":   "ms-teams",
+		"google-meet": "google-meet",
+		"webex":      "webex",
+		"slack":      "slack",
+		"discord":    "discord",
+
+		// Social media
+		"facebook":   "facebook",
+		"instagram":  "instagram",
+		"twitter":    "twitter",
+		"tiktok":     "tiktok",
+		"snapchat":   "snapchat",
+		"pinterest":  "pinterest",
+		"reddit":     "reddit",
+
+		// Gaming
+		"steam":      "steam",
+		"epic-games": "epic-games",
+		"xbox-live":  "xbox-live",
+		"playstation-network": "playstation-network",
+		"nintendo":   "nintendo",
+		"roblox":     "roblox",
+		"minecraft":  "minecraft",
 
 		// Messaging
 		"xmpp":       "messaging",
@@ -1018,6 +1166,27 @@ func initApplicationMap() map[string]string {
 		"mqtt":       "iot",
 		"coap":       "iot",
 		"modbus":     "iot",
+
+		// IoT devices
+		"amazon-echo": "amazon-echo",
+		"google-home": "google-home",
+		"nest":       "nest",
+		"ring":       "ring",
+		"philips-hue": "philips-hue",
+		"sonos":      "sonos",
+		"roku":       "roku",
+		"chromecast": "chromecast",
+		"smart-tv":   "smart-tv",
+		"samsung-tv": "samsung-tv",
+		"lg-tv":      "lg-tv",
+		"vizio-tv":   "vizio-tv",
+		"smart-plug": "smart-plug",
+		"smart-bulb": "smart-bulb",
+		"smart-lock": "smart-lock",
+		"smart-thermostat": "smart-thermostat",
+		"smart-doorbell": "smart-doorbell",
+		"smart-camera": "smart-camera",
+		"smart-speaker": "smart-speaker",
 
 		// Network services
 		"dns":        "network-service",

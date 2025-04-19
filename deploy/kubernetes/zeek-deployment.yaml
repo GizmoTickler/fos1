@@ -87,6 +87,9 @@ data:
     # Load custom scripts
     @load ./app-detection
     @load ./vlan-processing
+    @load ./iot-detection
+    @load ./port-detection
+    @load ./protocol-detection
 
     # Print a message when scripts are loaded
     event zeek_init() {
@@ -272,6 +275,212 @@ data:
             print msg;
 
             # In a real implementation, this would trigger an alert or block the traffic
+        }
+    }
+
+  iot-detection.zeek: |
+    ##! Script for IoT device detection
+    ##! This script adds detection capabilities for IoT devices
+
+    @load base/protocols/conn
+    @load base/protocols/http
+    @load base/protocols/dns
+    @load base/protocols/ssl
+    @load base/protocols/mqtt
+    @load policy/protocols/conn/vlan-logging
+    @load ./app-detection
+
+    module IoTDetection;
+
+    export {
+        # Define IoT device types
+        const DEV_AMAZON_ECHO = "amazon-echo" &redef;
+        const DEV_GOOGLE_HOME = "google-home" &redef;
+        const DEV_NEST = "nest" &redef;
+        const DEV_RING = "ring" &redef;
+        const DEV_PHILIPS_HUE = "philips-hue" &redef;
+        const DEV_SONOS = "sonos" &redef;
+        const DEV_ROKU = "roku" &redef;
+        const DEV_APPLE_TV = "apple-tv" &redef;
+        const DEV_CHROMECAST = "chromecast" &redef;
+        const DEV_SMART_TV = "smart-tv" &redef;
+        const DEV_SAMSUNG_TV = "samsung-tv" &redef;
+        const DEV_LG_TV = "lg-tv" &redef;
+        const DEV_VIZIO_TV = "vizio-tv" &redef;
+        const DEV_SMART_PLUG = "smart-plug" &redef;
+        const DEV_SMART_BULB = "smart-bulb" &redef;
+        const DEV_SMART_LOCK = "smart-lock" &redef;
+        const DEV_SMART_THERMOSTAT = "smart-thermostat" &redef;
+        const DEV_SMART_DOORBELL = "smart-doorbell" &redef;
+        const DEV_SMART_CAMERA = "smart-camera" &redef;
+        const DEV_SMART_SPEAKER = "smart-speaker" &redef;
+        const DEV_SMART_HOME = "smart-home" &redef;
+
+        # Add to the connection record
+        redef record Conn::Info += {
+            iot_device: string &optional &log;
+            iot_vendor: string &optional &log;
+        };
+
+        # IoT vendors
+        const VENDOR_AMAZON = "amazon" &redef;
+        const VENDOR_GOOGLE = "google" &redef;
+        const VENDOR_APPLE = "apple" &redef;
+        const VENDOR_SAMSUNG = "samsung" &redef;
+        const VENDOR_LG = "lg" &redef;
+        const VENDOR_PHILIPS = "philips" &redef;
+        const VENDOR_SONOS = "sonos" &redef;
+        const VENDOR_NEST = "nest" &redef;
+        const VENDOR_RING = "ring" &redef;
+        const VENDOR_ROKU = "roku" &redef;
+        const VENDOR_TP_LINK = "tp-link" &redef;
+        const VENDOR_BELKIN = "belkin" &redef;
+        const VENDOR_WYZE = "wyze" &redef;
+        const VENDOR_ARLO = "arlo" &redef;
+    }
+
+    # Helper function to set IoT device info
+    function set_iot_info(c: connection, device: string, vendor: string) {
+        c$conn$iot_device = device;
+        c$conn$iot_vendor = vendor;
+        c$conn$app_category = AppDetection::CAT_IOT;
+    }
+
+    # Amazon Echo / Alexa detection
+    event http_header(c: connection, is_orig: bool, name: string, value: string) {
+        if (name == "HOST") {
+            if (/alexa\.amazon\.com/ in value) {
+                set_iot_info(c, DEV_AMAZON_ECHO, VENDOR_AMAZON);
+            }
+        }
+    }
+
+    event ssl_established(c: connection) {
+        if (c$ssl?$server_name) {
+            if (/alexa\.amazon\.com/ in c$ssl$server_name) {
+                set_iot_info(c, DEV_AMAZON_ECHO, VENDOR_AMAZON);
+            }
+        }
+    }
+
+  port-detection.zeek: |
+    ##! Script for port-based application detection
+    ##! This script adds detection capabilities based on port numbers
+
+    @load base/protocols/conn
+    @load ./app-detection
+
+    module PortDetection;
+
+    export {
+        # Port to application mapping
+        global port_app_map: table[port] of string = {
+            # Web
+            80/tcp  => "http",
+            443/tcp => "https",
+            8080/tcp => "http",
+            8443/tcp => "https",
+
+            # Email
+            25/tcp  => "smtp",
+            587/tcp => "smtp",
+            465/tcp => "smtps",
+            110/tcp => "pop3",
+            995/tcp => "pop3s",
+            143/tcp => "imap",
+            993/tcp => "imaps",
+
+            # File transfer
+            21/tcp  => "ftp",
+            22/tcp  => "ssh",
+
+            # Remote access
+            3389/tcp => "rdp",
+            5900/tcp => "vnc",
+
+            # Streaming
+            1935/tcp => "rtmp",
+            554/tcp  => "rtsp",
+
+            # IoT
+            1883/tcp => "mqtt",
+            8883/tcp => "mqtts",
+            5683/tcp => "coap"
+        };
+    }
+
+    # Helper function to set application based on port
+    function set_app_info_from_port(c: connection) {
+        local dst_port = c$id$resp_p;
+        local proto = get_port_transport_proto(dst_port);
+        local port_num = port_to_count(dst_port);
+
+        # Create the port with the correct protocol
+        local p: port;
+        if (proto == tcp) {
+            p = port(port_num, tcp);
+        } else if (proto == udp) {
+            p = port(port_num, udp);
+        } else {
+            return;
+        }
+
+        # Check if we have an application mapping for this port
+        if (p in port_app_map) {
+            c$conn$service = port_app_map[p];
+        }
+    }
+
+    # Apply port-based detection when a connection is established
+    event connection_established(c: connection) {
+        # Only apply if no service has been identified yet
+        if (!c$conn?$service || c$conn$service == "") {
+            set_app_info_from_port(c);
+        }
+    }
+
+  protocol-detection.zeek: |
+    ##! Script for protocol-specific application detection
+    ##! This script adds detection capabilities based on protocol analysis
+
+    @load base/protocols/conn
+    @load base/protocols/http
+    @load base/protocols/dns
+    @load base/protocols/ssl
+    @load ./app-detection
+
+    module ProtocolDetection;
+
+    export {
+        # Protocol to application mapping
+        global protocol_app_map: table[string] of string = {
+            "http"  => "http",
+            "https" => "https",
+            "ssl"   => "https",
+            "ssh"   => "ssh",
+            "dns"   => "dns",
+            "smtp"  => "smtp",
+            "ftp"   => "ftp",
+            "mqtt"  => "mqtt",
+            "coap"  => "coap"
+        };
+    }
+
+    # Helper function to set application based on protocol
+    function set_app_info_from_protocol(c: connection, protocol: string) {
+        # Check if we have an application mapping for this protocol
+        if (protocol in protocol_app_map) {
+            c$conn$service = protocol_app_map[protocol];
+        }
+    }
+
+    # Apply protocol-based detection when a protocol is detected
+    event protocol_confirmation(c: connection, atype: Analyzer::Tag, aid: count) {
+        local protocol = Analyzer::name(atype);
+
+        # Only apply if no service has been identified yet
+        if (!c$conn?$service || c$conn$service == "") {
+            set_app_info_from_protocol(c, protocol);
         }
     }
 ---
