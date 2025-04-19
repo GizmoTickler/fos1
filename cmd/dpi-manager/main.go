@@ -15,10 +15,17 @@ import (
 func main() {
 	// Parse command line flags
 	ciliumAPI := flag.String("cilium-api", "http://localhost:9234", "Cilium API endpoint")
+
+	// Suricata options
 	suricataEvePath := flag.String("suricata-eve", "/var/log/suricata/eve.json", "Path to Suricata eve.json")
+	suricataRulesPath := flag.String("suricata-rules", "/etc/suricata/rules", "Path to Suricata rules directory")
+	suricataListPath := flag.String("suricata-lists", "/etc/suricata/lists", "Path to Suricata IP lists directory")
 	suricataMode := flag.String("suricata-mode", "ids", "Suricata mode: 'ids' or 'ips'")
-	zeekLogsPath := flag.String("zeek-logs", "/usr/local/zeek/logs/current", "Path to Zeek logs directory")
 	enableIPS := flag.Bool("enable-ips", false, "Enable IPS mode (Suricata)")
+
+	// Zeek options
+	zeekLogsPath := flag.String("zeek-logs", "/usr/local/zeek/logs/current", "Path to Zeek logs directory")
+	zeekPolicyPath := flag.String("zeek-policy", "/usr/local/zeek/share/zeek/policy", "Path to Zeek policy directory")
 	flag.Parse()
 
 	// Check if Suricata mode is valid
@@ -32,9 +39,20 @@ func main() {
 	// Create DPI manager
 	dpiOpts := dpi.DPIManagerOptions{
 		CiliumClient:     ciliumClient,
+
+		// Suricata options
 		SuricataEvePath:  *suricataEvePath,
+		SuricataRulesPath: *suricataRulesPath,
+		SuricataListPath: *suricataListPath,
 		SuricataMode:     *suricataMode,
+
+		// Zeek options
 		ZeekLogsPath:     *zeekLogsPath,
+		ZeekPolicyPath:   *zeekPolicyPath,
+
+		// General options
+		KubernetesMode:   false, // Set to true when running in Kubernetes
+		VLANAware:        true,  // Enable VLAN-aware processing
 	}
 
 	dpiManager, err := dpi.NewDPIManager(dpiOpts)

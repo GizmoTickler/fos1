@@ -25,8 +25,9 @@ type DPIManager struct {
 	ciliumClient    cilium.CiliumClient
 	networkCtrl     *cilium.NetworkController
 
-	// Zeek connector
-	zeekConnector   *connectors.ZeekConnector
+	// DPI engine connectors
+	zeekConnector     *connectors.ZeekConnector
+	suricataConnector *connectors.SuricataConnector
 
 	// Event processing
 	eventChan        chan DPIEvent
@@ -40,8 +41,18 @@ type DPIManager struct {
 // DPIManagerOptions configures the DPI manager
 type DPIManagerOptions struct {
 	CiliumClient     cilium.CiliumClient
+
+	// Zeek options
 	ZeekLogsPath     string
 	ZeekPolicyPath   string
+
+	// Suricata options
+	SuricataEvePath  string
+	SuricataRulesPath string
+	SuricataListPath string
+	SuricataMode     string // "ids" or "ips"
+
+	// General options
 	KubernetesMode   bool   // Whether running in Kubernetes
 	Namespace        string // Kubernetes namespace
 	VLANAware        bool   // Whether to process VLAN tags
@@ -106,6 +117,24 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 		return nil, fmt.Errorf("failed to initialize Zeek connector: %w", err)
 	}
 	manager.zeekConnector = zeekConnector
+
+	// Initialize Suricata connector if options are provided
+	if opts.SuricataEvePath != "" {
+		suricataOpts := connectors.SuricataOptions{
+			EvePath:      opts.SuricataEvePath,
+			RulesetPath:  opts.SuricataRulesPath,
+			ListPath:     opts.SuricataListPath,
+			Mode:         opts.SuricataMode,
+			CiliumClient: opts.CiliumClient,
+		}
+
+		suricataConnector, err := connectors.NewSuricataConnector(suricataOpts)
+		if err != nil {
+			cancel() // Cancel the context if we fail to initialize
+			return nil, fmt.Errorf("failed to initialize Suricata connector: %w", err)
+		}
+		manager.suricataConnector = suricataConnector
+	}
 
 	// Start event processing
 	go manager.processEvents()
@@ -239,7 +268,7 @@ func (m *DPIManager) GetFlowStatistics(sourceNetwork, destinationNetwork string)
 	return stats, nil
 }
 
-// Start starts the DPI manager and Zeek connector
+// Start starts the DPI manager and all connectors
 func (m *DPIManager) Start() error {
 	// Start Zeek connector
 	if m.zeekConnector != nil {
@@ -258,6 +287,23 @@ func (m *DPIManager) Start() error {
 		go m.forwardEvents(events, "zeek")
 	}
 
+	// Start Suricata connector
+	if m.suricataConnector != nil {
+		if err := m.suricataConnector.Start(); err != nil {
+			return fmt.Errorf("failed to start Suricata connector: %w", err)
+		}
+		fmt.Println("Started Suricata connector")
+
+		// Register for events
+		events, err := m.suricataConnector.GetEvents(m.ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get Suricata events: %w", err)
+		}
+
+		// Forward events to our event channel
+		go m.forwardEvents(events, "suricata")
+	}
+
 	// Apply DPI profiles and flows to configure what to inspect
 	m.applyProfilesToEngines()
 
@@ -265,7 +311,7 @@ func (m *DPIManager) Start() error {
 	return nil
 }
 
-// Stop stops the DPI manager and Zeek connector
+// Stop stops the DPI manager and all connectors
 func (m *DPIManager) Stop() error {
 	// Cancel our context to stop all goroutines
 	m.cancel()
@@ -277,11 +323,18 @@ func (m *DPIManager) Stop() error {
 		}
 	}
 
+	// Stop Suricata connector
+	if m.suricataConnector != nil {
+		if err := m.suricataConnector.Stop(); err != nil {
+			fmt.Printf("Error stopping Suricata connector: %v\n", err)
+		}
+	}
+
 	fmt.Println("DPI manager stopped")
 	return nil
 }
 
-// applyProfilesToEngines applies DPI profiles to Zeek
+// applyProfilesToEngines applies DPI profiles to all engines
 func (m *DPIManager) applyProfilesToEngines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -302,7 +355,21 @@ func (m *DPIManager) applyProfilesToEngines() {
 		}
 	}
 
-	fmt.Println("Applied DPI profiles to Zeek")
+	// Configure Suricata
+	if m.suricataConnector != nil {
+		// For Suricata, we might want to enable/disable specific rule categories
+		// based on the profiles
+		fmt.Println("Applying profiles to Suricata")
+
+		// Extract categories from profiles that should be monitored
+		categories := getCategoriesFromProfiles(m.profiles)
+
+		// In a real implementation, we would configure Suricata rules based on these categories
+		// For now, we'll just log the categories
+		fmt.Printf("Would configure Suricata to monitor categories: %v\n", categories)
+	}
+
+	fmt.Println("Applied DPI profiles to all engines")
 }
 
 // GetApplicationInfo gets information about an application
@@ -337,6 +404,24 @@ func (m *DPIManager) SetDSCPMarkingForApplication(applicationName string, dscp i
 
 	fmt.Printf("Set DSCP marking %d for application %s\n", dscp, applicationName)
 	return nil
+}
+
+// ConfigureSuricata configures Suricata with the provided options
+func (m *DPIManager) ConfigureSuricata(options map[string]interface{}) error {
+	if m.suricataConnector == nil {
+		return fmt.Errorf("Suricata connector not initialized")
+	}
+
+	return m.suricataConnector.Configure(options)
+}
+
+// ConfigureSuricataIPSMode configures Suricata to run in IPS mode
+func (m *DPIManager) ConfigureSuricataIPSMode(enable bool) error {
+	if m.suricataConnector == nil {
+		return fmt.Errorf("Suricata connector not initialized")
+	}
+
+	return m.suricataConnector.ConfigureIPSMode(enable)
 }
 
 // ConfigurePolicyBasedRouting configures policy-based routing for an application
@@ -409,6 +494,24 @@ func (m *DPIManager) GetZeekStatus() (ZeekStatus, error) {
 	}
 
 	return m.zeekConnector.Status()
+}
+
+// GetSuricataStatus gets the status of the Suricata engine
+func (m *DPIManager) GetSuricataStatus() (connectors.SuricataStatus, error) {
+	if m.suricataConnector == nil {
+		return connectors.SuricataStatus{}, fmt.Errorf("Suricata connector not initialized")
+	}
+
+	return m.suricataConnector.Status()
+}
+
+// UpdateSuricataIPList updates a Suricata IP list
+func (m *DPIManager) UpdateSuricataIPList(listName string, ips []string) error {
+	if m.suricataConnector == nil {
+		return fmt.Errorf("Suricata connector not initialized")
+	}
+
+	return m.suricataConnector.UpdateIPList(listName, ips)
 }
 
 // DPIProfile represents a DPI profile
@@ -588,13 +691,27 @@ func (m *DPIManager) handleAlertEvent(event DPIEvent) {
 	// In a real implementation, would trigger policy updates,
 	// send notifications, etc.
 
-	// For now, just log the event
-	fmt.Printf("Alert event: %s (severity %d) - %s\n",
-		event.Signature, event.Severity, event.Description)
+	// Check the source of the alert
+	source := "unknown"
+	if event.RawData != nil {
+		if s, ok := event.RawData["source"].(string); ok {
+			source = s
+		}
+	}
+
+	// Log the event with its source
+	fmt.Printf("Alert event from %s: %s (severity %d) - %s\n",
+		source, event.Signature, event.Severity, event.Description)
 
 	// For high-severity alerts, create a blocking policy
 	if event.Severity >= 3 {
-		m.createBlockingPolicy(event)
+		// If this is a Suricata alert and we're in IPS mode, Suricata will handle the blocking
+		if source == "suricata" && m.suricataConnector != nil && m.suricataConnector.GetMode() == "ips" {
+			fmt.Printf("Suricata IPS will handle blocking for alert: %s\n", event.Signature)
+		} else {
+			// Otherwise, create a blocking policy ourselves
+			m.createBlockingPolicy(event)
+		}
 	}
 }
 
@@ -667,6 +784,27 @@ func getApplicationsFromProfiles(profiles map[string]*DPIProfile) []string {
 	result := make([]string, 0, len(apps))
 	for app := range apps {
 		result = append(result, app)
+	}
+
+	return result
+}
+
+// getCategoriesFromProfiles extracts all categories from profiles
+func getCategoriesFromProfiles(profiles map[string]*DPIProfile) []string {
+	categories := make(map[string]bool)
+
+	for _, profile := range profiles {
+		if profile.Enabled {
+			for _, category := range profile.ApplicationCategories {
+				categories[category] = true
+			}
+		}
+	}
+
+	// Convert to slice
+	result := make([]string, 0, len(categories))
+	for category := range categories {
+		result = append(result, category)
 	}
 
 	return result
