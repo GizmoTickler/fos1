@@ -29,6 +29,11 @@ type Config struct {
 		PolicyPath string `yaml:"policyPath"`
 	} `yaml:"zeek"`
 
+	VLANs struct {
+		Enabled bool                `yaml:"enabled"`
+		Configs []dpi.VLANConfig   `yaml:"configs"`
+	} `yaml:"vlans"`
+
 	Profiles []dpi.DPIProfile `yaml:"profiles"`
 	Flows    []dpi.DPIFlow    `yaml:"flows"`
 }
@@ -89,6 +94,14 @@ func main() {
 		ciliumClient = &cilium.DirectCiliumClient{}
 	}
 
+	// Convert VLAN configs to map
+	vlanMap := make(map[int]dpi.VLANConfig)
+	if config.VLANs.Enabled {
+		for _, vlanConfig := range config.VLANs.Configs {
+			vlanMap[vlanConfig.ID] = vlanConfig
+		}
+	}
+
 	// Create DPI manager options
 	opts := dpi.DPIManagerOptions{
 		CiliumClient:   ciliumClient,
@@ -96,6 +109,8 @@ func main() {
 		ZeekPolicyPath: config.Zeek.PolicyPath,
 		KubernetesMode: config.Kubernetes.Enabled,
 		Namespace:      config.Kubernetes.Namespace,
+		VLANAware:      config.VLANs.Enabled,
+		VLANs:          vlanMap,
 	}
 
 	// Create DPI manager

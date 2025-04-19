@@ -44,6 +44,17 @@ type DPIManagerOptions struct {
 	ZeekPolicyPath   string
 	KubernetesMode   bool   // Whether running in Kubernetes
 	Namespace        string // Kubernetes namespace
+	VLANAware        bool   // Whether to process VLAN tags
+	VLANs            map[int]VLANConfig // VLAN configurations
+}
+
+// VLANConfig represents configuration for a VLAN
+type VLANConfig struct {
+	ID             int
+	Name           string
+	Subnet         string
+	DefaultPolicy  string // "allow", "deny", or "restrict"
+	Applications   []string // Allowed applications
 }
 
 // NewDPIManager creates a new DPI manager
@@ -85,6 +96,8 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 		CiliumClient:   opts.CiliumClient,
 		KubernetesMode: opts.KubernetesMode,
 		Namespace:      opts.Namespace,
+		VLANAware:      opts.VLANAware,
+		VLANs:          opts.VLANs,
 	}
 
 	zeekConnector, err := connectors.NewZeekConnector(zeekOpts)
@@ -418,6 +431,7 @@ type DPIFlow struct {
 	SourceNetwork      string
 	DestinationNetwork string
 	Profile            string
+	VLAN               int      // VLAN ID for this flow
 	BypassRules        []BypassRule
 }
 

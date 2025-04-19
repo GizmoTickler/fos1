@@ -6,6 +6,35 @@ zeek:
   logsPath: "/usr/local/zeek/logs/current"
   policyPath: "/usr/local/zeek/share/zeek/policy"
 
+vlans:
+  enabled: true
+  configs:
+    - id: 10
+      name: "iot"
+      subnet: "192.168.10.0/24"
+      defaultPolicy: "restrict"
+      applications:
+        - "mqtt"
+        - "http"
+        - "dns"
+    - id: 20
+      name: "media"
+      subnet: "192.168.20.0/24"
+      defaultPolicy: "allow"
+      applications:
+        - "rtsp"
+        - "rtmp"
+        - "http"
+        - "https"
+    - id: 30
+      name: "guest"
+      subnet: "192.168.30.0/24"
+      defaultPolicy: "deny"
+      applications:
+        - "http"
+        - "https"
+        - "dns"
+
 profiles:
   - name: "default-profile"
     description: "Default DPI profile"
@@ -33,6 +62,27 @@ profiles:
         dscp: 46
 
 flows:
+  - description: "IoT VLAN flow"
+    enabled: true
+    sourceNetwork: "192.168.10.0/24"
+    destinationNetwork: "0.0.0.0/0"
+    profile: "default-profile"
+    vlan: 10
+
+  - description: "Media VLAN flow"
+    enabled: true
+    sourceNetwork: "192.168.20.0/24"
+    destinationNetwork: "0.0.0.0/0"
+    profile: "default-profile"
+    vlan: 20
+
+  - description: "Guest VLAN flow"
+    enabled: true
+    sourceNetwork: "192.168.30.0/24"
+    destinationNetwork: "0.0.0.0/0"
+    profile: "default-profile"
+    vlan: 30
+
   - description: "Default flow"
     enabled: true
     sourceNetwork: "0.0.0.0/0"

@@ -25,11 +25,14 @@ type ZeekConnector struct {
 	policyPath    string
 	ciliumClient  cilium.CiliumClient
 	networkCtrl   *cilium.NetworkController
+	vlanAware     bool
+	vlans         map[int]VLANConfig
 
 	// State
 	watcher       *fsnotify.Watcher
 	policies      map[string]*cilium.NetworkPolicy
 	protocolStats map[string]*ProtocolStats
+	applicationMap map[string]string // Maps service names to application names
 
 	// Locking
 	mu            sync.RWMutex
@@ -53,6 +56,10 @@ type ZeekOptions struct {
 	KubernetesMode bool   // Whether running in Kubernetes
 	Namespace      string // Kubernetes namespace
 
+	// VLAN configuration
+	VLANAware      bool              // Whether to process VLAN tags
+	VLANs          map[int]VLANConfig // VLAN configurations
+
 	// TLS configuration
 	TLSEnabled     bool   // Whether to use TLS for communication
 	TLSCertPath    string // Path to TLS certificate
@@ -67,7 +74,17 @@ type ProtocolStats struct {
 	Packets     int64
 	Duration    int64
 	Hosts       map[string]bool
+	VLANs        map[int]int64 // Count of connections per VLAN
 	LastSeen    time.Time
+}
+
+// VLANConfig contains configuration for a VLAN
+type VLANConfig struct {
+	ID          int
+	Name        string
+	Subnet      string
+	DefaultPolicy string // "allow", "deny", or "restrict"
+	Applications []string // Allowed applications
 }
 
 // NewZeekConnector creates a new Zeek connector
@@ -109,9 +126,12 @@ func NewZeekConnector(opts ZeekOptions) (*ZeekConnector, error) {
 		policyPath:    opts.PolicyPath,
 		ciliumClient:  opts.CiliumClient,
 		networkCtrl:   cilium.NewNetworkController(opts.CiliumClient),
+		vlanAware:     opts.VLANAware,
+		vlans:         opts.VLANs,
 		watcher:       watcher,
 		policies:      make(map[string]*cilium.NetworkPolicy),
 		protocolStats: make(map[string]*ProtocolStats),
+		applicationMap: initApplicationMap(),
 		eventChan:     make(chan dpi.DPIEvent, 1000),
 		ctx:           ctx,
 		cancel:        cancel,
@@ -489,13 +509,33 @@ func (c *ZeekConnector) processConnLog(path string) {
 		service := fields[7] // This is the application protocol
 
 		// Skip entries with missing data
-		if srcIP == "-" || destIP == "-" || service == "-" {
+		if srcIP == "-" || destIP == "-" {
 			continue
 		}
 
 		// Parse numeric fields
 		srcPortNum, _ := strconv.Atoi(srcPort)
 		destPortNum, _ := strconv.Atoi(destPort)
+
+		// Extract VLAN information if available (field 9 in newer Zeek versions with vlan-logging.zeek)
+		vlan := 0
+		if len(fields) > 9 && c.vlanAware {
+			vlanStr := fields[9]
+			if vlanStr != "-" {
+				vlan, _ = strconv.Atoi(vlanStr)
+			}
+		}
+
+		// Map service to application
+		application := service
+		if service != "-" {
+			if mappedApp, exists := c.applicationMap[service]; exists {
+				application = mappedApp
+			}
+		} else {
+			// Try to determine application based on port
+			application = determineApplicationByPort(destPortNum, proto)
+		}
 
 		// Parse timestamp
 		timestamp, err := time.Parse("2006-01-02T15:04:05.999999", ts)
@@ -527,7 +567,21 @@ func (c *ZeekConnector) processConnLog(path string) {
 		}
 
 		// Update protocol statistics
-		c.updateProtocolStats(service, srcIP, destIP, origBytes+respBytes, origPkts+respPkts, duration)
+		c.updateProtocolStats(application, srcIP, destIP, origBytes+respBytes, origPkts+respPkts, duration, vlan)
+
+		// Check if this application is allowed on this VLAN
+		allowed := true
+		if c.vlanAware && vlan > 0 {
+			if vlanConfig, exists := c.vlans[vlan]; exists {
+				// Check if application is in the allowed list
+				allowed = isApplicationAllowed(application, vlanConfig.Applications)
+
+				// If not allowed and policy is deny, create a blocking policy
+				if !allowed && vlanConfig.DefaultPolicy == "deny" {
+					c.createVLANBlockingPolicy(vlan, application, srcIP, destIP, uint16(srcPortNum), uint16(destPortNum), proto)
+				}
+			}
+		}
 
 		// Create a DPI event for this connection
 		event := dpi.DPIEvent{
@@ -537,16 +591,19 @@ func (c *ZeekConnector) processConnLog(path string) {
 			SourcePort:  srcPortNum,
 			DestPort:    destPortNum,
 			Protocol:    proto,
-			Application: service,
-			Category:    categorizeApplication(service),
+			Application: application,
+			Category:    categorizeApplication(application),
 			EventType:   "flow",
 			Severity:    0, // Normal flow, no severity
-			Description: fmt.Sprintf("%s flow from %s:%d to %s:%d", service, srcIP, srcPortNum, destIP, destPortNum),
+			Description: fmt.Sprintf("%s flow from %s:%d to %s:%d", application, srcIP, srcPortNum, destIP, destPortNum),
 			SessionID:   uid,
 			RawData: map[string]interface{}{
 				"bytes":    origBytes + respBytes,
 				"packets":  origPkts + respPkts,
 				"duration": duration,
+				"vlan":     vlan,
+				"allowed":  allowed,
+				"service":  service,
 			},
 		}
 
@@ -746,7 +803,7 @@ func (c *ZeekConnector) GetProtocolStats(protocol string) (map[string]interface{
 }
 
 // updateProtocolStats updates statistics for a protocol
-func (c *ZeekConnector) updateProtocolStats(protocol, srcIP, destIP string, bytes, packets, duration int64) {
+func (c *ZeekConnector) updateProtocolStats(protocol, srcIP, destIP string, bytes, packets, duration int64, vlan int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -755,6 +812,7 @@ func (c *ZeekConnector) updateProtocolStats(protocol, srcIP, destIP string, byte
 	if !exists {
 		stats = &ProtocolStats{
 			Hosts: make(map[string]bool),
+			VLANs: make(map[int]int64),
 		}
 		c.protocolStats[protocol] = stats
 	}
@@ -769,6 +827,11 @@ func (c *ZeekConnector) updateProtocolStats(protocol, srcIP, destIP string, byte
 	// Track hosts using this protocol
 	stats.Hosts[srcIP] = true
 	stats.Hosts[destIP] = true
+
+	// Track VLANs if VLAN-aware
+	if c.vlanAware && vlan > 0 {
+		stats.VLANs[vlan]++
+	}
 }
 
 // GetEvents returns a channel of DPI events
@@ -914,5 +977,192 @@ func (c *ZeekConnector) waitForLogsDirectory() {
 			// Wait before checking again
 			time.Sleep(5 * time.Second)
 		}
+	}
+}
+
+// initApplicationMap initializes the application mapping
+func initApplicationMap() map[string]string {
+	return map[string]string{
+		// Web applications
+		"http":       "http",
+		"https":      "https",
+		"ssl":        "https",
+		"http/2":     "http",
+
+		// Email applications
+		"smtp":       "email",
+		"pop3":       "email",
+		"imap":       "email",
+
+		// File transfer
+		"ftp":        "file-transfer",
+		"sftp":       "file-transfer",
+		"scp":        "file-transfer",
+
+		// Remote access
+		"ssh":        "remote-access",
+		"rdp":        "remote-access",
+		"telnet":     "remote-access",
+		"vnc":        "remote-access",
+
+		// Streaming
+		"rtmp":       "streaming",
+		"rtsp":       "streaming",
+		"rtp":        "streaming",
+
+		// Messaging
+		"xmpp":       "messaging",
+		"sip":        "voip",
+
+		// IoT protocols
+		"mqtt":       "iot",
+		"coap":       "iot",
+		"modbus":     "iot",
+
+		// Network services
+		"dns":        "network-service",
+		"dhcp":       "network-service",
+		"ntp":        "network-service",
+		"snmp":       "network-service",
+
+		// Databases
+		"mysql":      "database",
+		"postgres":   "database",
+		"mongodb":    "database",
+		"redis":      "database",
+	}
+}
+
+// determineApplicationByPort tries to determine the application based on port and protocol
+func determineApplicationByPort(port int, protocol string) string {
+	// Common port to application mappings
+	portMap := map[int]string{
+		// Web
+		80:    "http",
+		443:   "https",
+		8080:  "http",
+		8443:  "https",
+
+		// Email
+		25:    "smtp",
+		587:   "smtp",
+		465:   "smtp",
+		110:   "pop3",
+		995:   "pop3",
+		143:   "imap",
+		993:   "imap",
+
+		// File transfer
+		21:    "ftp",
+		22:    "ssh",  // SSH/SFTP
+
+		// Remote access
+		3389:  "rdp",
+		23:    "telnet",
+		5900:  "vnc",
+
+		// Streaming
+		1935:  "rtmp",
+		554:   "rtsp",
+
+		// Messaging
+		5222:  "xmpp",
+		5060:  "sip",
+		5061:  "sip",
+
+		// IoT
+		1883:  "mqtt",
+		8883:  "mqtt",
+		5683:  "coap",
+		502:   "modbus",
+
+		// Network services
+		53:    "dns",
+		67:    "dhcp",
+		68:    "dhcp",
+		123:   "ntp",
+		161:   "snmp",
+
+		// Databases
+		3306:  "mysql",
+		5432:  "postgres",
+		27017: "mongodb",
+		6379:  "redis",
+	}
+
+	if app, exists := portMap[port]; exists {
+		return app
+	}
+
+	return "unknown"
+}
+
+// isApplicationAllowed checks if an application is in the allowed list
+func isApplicationAllowed(application string, allowedApps []string) bool {
+	// If no allowed apps specified, allow all
+	if len(allowedApps) == 0 {
+		return true
+	}
+
+	// Check if application is in allowed list
+	for _, app := range allowedApps {
+		if app == application || app == "*" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// createVLANBlockingPolicy creates a policy to block traffic for an application on a VLAN
+func (c *ZeekConnector) createVLANBlockingPolicy(vlan int, application, srcIP, destIP string, srcPort, destPort uint16, proto string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Create a policy name
+	policyName := fmt.Sprintf("vlan-%d-block-%s", vlan, normalizeString(application))
+
+	// Check if we already have this policy
+	if _, exists := c.policies[policyName]; exists {
+		return
+	}
+
+	// Create a policy that denies the specific traffic
+	policy := &cilium.NetworkPolicy{
+		Name: policyName,
+		Labels: map[string]string{
+			"app":         "zeek",
+			"vlan":        fmt.Sprintf("%d", vlan),
+			"application": normalizeString(application),
+			"component":   "security",
+		},
+	}
+
+	// Add rules to block the application
+	policy.Egress = append(policy.Egress, cilium.PolicyRule{
+		ToPorts: []cilium.PortRule{
+			{
+				Ports: []cilium.Port{
+					{
+						Port:     destPort,
+						Protocol: proto,
+					},
+				},
+				Rules: map[string]string{
+					"l7proto": application,
+				},
+			},
+		},
+		Denied: true,
+	})
+
+	// Store the policy
+	c.policies[policyName] = policy
+
+	// Apply the policy
+	if err := c.networkCtrl.ApplyDynamicPolicy(c.ctx, policy); err != nil {
+		fmt.Printf("Failed to apply VLAN blocking policy: %v\n", err)
+	} else {
+		fmt.Printf("Applied VLAN %d blocking policy for %s\n", vlan, application)
 	}
 }
