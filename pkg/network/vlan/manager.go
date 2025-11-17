@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +19,8 @@ type VLANManagerImpl struct {
 	mu sync.RWMutex
 	eventCh chan VLANEvent
 	nextSubID int
+	qosManager *QoSManager
+	statsCollector *StatsCollector
 }
 
 // NewVLANManagerImpl creates a new VLAN manager implementation
@@ -30,11 +31,13 @@ func NewVLANManagerImpl() *VLANManagerImpl {
 		trunkConfigs: make(map[string]*TrunkConfig),
 		eventCh: make(chan VLANEvent, 100),
 		nextSubID: 1,
+		qosManager: NewQoSManager(),
+		statsCollector: NewStatsCollector(),
 	}
-	
+
 	// Start event dispatcher goroutine
 	go manager.dispatchEvents()
-	
+
 	return manager
 }
 
@@ -128,13 +131,13 @@ func (m *VLANManagerImpl) CreateVLAN(parent string, vlanID int, name string, con
 		return nil, fmt.Errorf("failed to add VLAN interface %s: %w", name, err)
 	}
 	
-	// Set the QoS priority if specified
+	// Set the QoS priority if specified (802.1p)
 	if config.QoSPriority >= 0 && config.QoSPriority <= 7 {
-		// Implement QoS priority setting here
-		klog.Infof("Setting QoS priority %d for VLAN interface %s", config.QoSPriority, name)
-		
-		// This would typically involve setting the priority in /proc/net/vlan/name
-		// or using TC commands depending on the system
+		klog.Infof("Setting 802.1p QoS priority %d for VLAN interface %s", config.QoSPriority, name)
+
+		if err := m.qosManager.SetVLANPriority(name, config.QoSPriority); err != nil {
+			klog.Warningf("Failed to set 802.1p priority for VLAN interface %s: %v", name, err)
+		}
 	}
 	
 	// Set link state
@@ -152,28 +155,50 @@ func (m *VLANManagerImpl) CreateVLAN(parent string, vlanID int, name string, con
 	// Add IP addresses if specified
 	if len(config.Addresses) > 0 {
 		for _, ipConfig := range config.Addresses {
+			// Determine IP version (IPv4 = 32 bits, IPv6 = 128 bits)
+			bits := 32
+			if ipConfig.Address.To4() == nil {
+				bits = 128
+			}
+
 			ipNet := &net.IPNet{
 				IP:   ipConfig.Address,
-				Mask: net.CIDRMask(ipConfig.Prefix, ipConfig.Address.BitLen()),
+				Mask: net.CIDRMask(ipConfig.Prefix, bits),
 			}
-			
+
 			addr := &netlink.Addr{
 				IPNet: ipNet,
 			}
-			
+
 			if err := netlink.AddrAdd(link, addr); err != nil {
-				klog.Warningf("Failed to add address %s to VLAN interface %s: %v", 
+				klog.Warningf("Failed to add address %s to VLAN interface %s: %v",
 					ipNet.String(), name, err)
 			}
 		}
 	}
 	
-	// Configure QoS if specified
-	if config.Egress.Enabled || config.Ingress.Enabled {
-		// Implement QoS configuration here using TC
-		klog.Infof("Configuring QoS for VLAN interface %s", name)
-		
-		// This would typically involve setting up TC qdiscs, classes, and filters
+	// Configure egress QoS if specified
+	if config.Egress.Enabled {
+		klog.Infof("Configuring egress QoS for VLAN interface %s", name)
+
+		if err := m.qosManager.ConfigureQoS(name, config.Egress); err != nil {
+			klog.Warningf("Failed to configure egress QoS for VLAN interface %s: %v", name, err)
+		}
+	}
+
+	// Note: Ingress QoS typically requires different mechanisms (e.g., IFB devices, police)
+	// For now, we focus on egress QoS which is more commonly used
+	if config.Ingress.Enabled {
+		klog.Infof("Ingress QoS requested for VLAN interface %s (not yet fully implemented)", name)
+	}
+
+	// Set DSCP marking if specified
+	if config.DSCP >= 0 && config.DSCP <= 63 {
+		klog.Infof("Setting DSCP marking %d for VLAN interface %s", config.DSCP, name)
+
+		if err := m.qosManager.SetDSCPMarking(name, config.DSCP); err != nil {
+			klog.Warningf("Failed to set DSCP marking for VLAN interface %s: %v", name, err)
+		}
 	}
 	
 	// Create VLANInterface object
@@ -190,7 +215,7 @@ func (m *VLANManagerImpl) CreateVLAN(parent string, vlanID int, name string, con
 		OperationalState: getInterfaceState(link),
 		Config:           config,
 		ActualMTU:        actualMTU,
-		Statistics:       getInterfaceStats(link),
+		Statistics:       m.statsCollector.CollectStats(link),
 	}
 	
 	// Save the interface
@@ -284,7 +309,7 @@ func (m *VLANManagerImpl) GetVLAN(name string) (*VLANInterface, error) {
 	}
 	
 	// Update statistics
-	vlanIf.Statistics = getInterfaceStats(link)
+	vlanIf.Statistics = m.statsCollector.CollectStats(link)
 	vlanIf.OperationalState = getInterfaceState(link)
 	vlanIf.ActualMTU = link.Attrs().MTU
 	
@@ -371,20 +396,15 @@ func (m *VLANManagerImpl) UpdateVLAN(name string, config VLANConfig) (*VLANInter
 	for _, addr := range currentAddrs {
 		found := false
 		for _, ipConfig := range config.Addresses {
-			ipNet := &net.IPNet{
-				IP:   ipConfig.Address,
-				Mask: net.CIDRMask(ipConfig.Prefix, ipConfig.Address.BitLen()),
-			}
-			
 			if addr.IP.Equal(ipConfig.Address) {
 				found = true
 				break
 			}
 		}
-		
+
 		if !found {
 			if err := netlink.AddrDel(link, &addr); err != nil {
-				klog.Warningf("Failed to remove address %s from VLAN interface %s: %v", 
+				klog.Warningf("Failed to remove address %s from VLAN interface %s: %v",
 					addr.String(), name, err)
 			}
 		}
@@ -399,37 +419,81 @@ func (m *VLANManagerImpl) UpdateVLAN(name string, config VLANConfig) (*VLANInter
 				break
 			}
 		}
-		
+
 		if !found {
+			// Determine IP version (IPv4 = 32 bits, IPv6 = 128 bits)
+			bits := 32
+			if ipConfig.Address.To4() == nil {
+				bits = 128
+			}
+
 			ipNet := &net.IPNet{
 				IP:   ipConfig.Address,
-				Mask: net.CIDRMask(ipConfig.Prefix, ipConfig.Address.BitLen()),
+				Mask: net.CIDRMask(ipConfig.Prefix, bits),
 			}
-			
+
 			addr := &netlink.Addr{
 				IPNet: ipNet,
 			}
-			
+
 			if err := netlink.AddrAdd(link, addr); err != nil {
-				klog.Warningf("Failed to add address %s to VLAN interface %s: %v", 
+				klog.Warningf("Failed to add address %s to VLAN interface %s: %v",
 					ipNet.String(), name, err)
 			}
 		}
 	}
-	
-	// Update QoS configuration if needed
-	if config.QoSPriority >= 0 && config.QoSPriority <= 7 && 
-	   config.QoSPriority != vlanIf.Config.QoSPriority {
-		klog.Infof("Updating QoS priority to %d for VLAN interface %s", config.QoSPriority, name)
-		// Implement QoS priority update here
-	}
-	
-	// Update the configuration in our map
+
+	// Save old config for comparison
 	oldConfig := vlanIf.Config
+
+	// Update QoS priority if changed
+	if config.QoSPriority >= 0 && config.QoSPriority <= 7 &&
+	   config.QoSPriority != oldConfig.QoSPriority {
+		klog.Infof("Updating 802.1p QoS priority to %d for VLAN interface %s", config.QoSPriority, name)
+
+		if err := m.qosManager.SetVLANPriority(name, config.QoSPriority); err != nil {
+			klog.Warningf("Failed to update 802.1p priority for VLAN interface %s: %v", name, err)
+		}
+	}
+
+	// Update egress QoS if changed
+	if config.Egress.Enabled != oldConfig.Egress.Enabled {
+		if config.Egress.Enabled {
+			klog.Infof("Enabling egress QoS for VLAN interface %s", name)
+
+			if err := m.qosManager.ConfigureQoS(name, config.Egress); err != nil {
+				klog.Warningf("Failed to configure egress QoS for VLAN interface %s: %v", name, err)
+			}
+		} else {
+			klog.Infof("Disabling egress QoS for VLAN interface %s", name)
+
+			if err := m.qosManager.RemoveQoS(name); err != nil {
+				klog.Warningf("Failed to remove QoS for VLAN interface %s: %v", name, err)
+			}
+		}
+	} else if config.Egress.Enabled {
+		// QoS is enabled, but configuration may have changed
+		klog.Infof("Updating egress QoS configuration for VLAN interface %s", name)
+
+		if err := m.qosManager.ConfigureQoS(name, config.Egress); err != nil {
+			klog.Warningf("Failed to update egress QoS for VLAN interface %s: %v", name, err)
+		}
+	}
+
+	// Update DSCP marking if changed
+	if config.DSCP != oldConfig.DSCP && config.DSCP >= 0 && config.DSCP <= 63 {
+		klog.Infof("Updating DSCP marking to %d for VLAN interface %s", config.DSCP, name)
+
+		if err := m.qosManager.SetDSCPMarking(name, config.DSCP); err != nil {
+			klog.Warningf("Failed to update DSCP marking for VLAN interface %s: %v", name, err)
+		}
+	}
+
+	// Update the configuration in our map
 	vlanIf.Config = config
 	vlanIf.OperationalState = getInterfaceState(link)
 	vlanIf.ActualMTU = link.Attrs().MTU
-	vlanIf.Statistics = getInterfaceStats(link)
+	vlanIf.Statistics = m.statsCollector.CollectStats(link)
 	
 	// Send event
 	m.sendEvent(VLANEvent{
@@ -634,18 +698,10 @@ func getInterfaceState(link netlink.Link) string {
 	return string(VLANStateDown)
 }
 
-// getInterfaceStats returns statistics for an interface
+// getInterfaceStats is kept for backward compatibility but now uses StatsCollector
 func getInterfaceStats(link netlink.Link) VLANStats {
-	stats := VLANStats{
-		LastUpdated: getCurrentTimestamp(),
-	}
-	
-	// Read statistics from sysfs
-	// /sys/class/net/<ifname>/statistics/
-	// This is a simplified implementation, in a real system you would read 
-	// actual statistics from sysfs or use netlink
-	
-	return stats
+	collector := NewStatsCollector()
+	return collector.CollectStats(link)
 }
 
 // getCurrentTimestamp returns the current Unix timestamp

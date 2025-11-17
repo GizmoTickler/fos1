@@ -3,12 +3,9 @@ package vlan
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
-    "errors"
-    "strconv"
-    "net"
-    "strings"
+	"net"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -316,9 +313,15 @@ func (c *VLANController) updateVLANStatus(name string) error {
 	// Add addresses
 	addresses := make([]string, 0, len(vlan.Config.Addresses))
 	for _, addr := range vlan.Config.Addresses {
+		// Determine IP version (IPv4 = 32 bits, IPv6 = 128 bits)
+		bits := 32
+		if addr.Address.To4() == nil {
+			bits = 128
+		}
+
 		ipNet := &net.IPNet{
 			IP:   addr.Address,
-			Mask: net.CIDRMask(addr.Prefix, addr.Address.BitLen()),
+			Mask: net.CIDRMask(addr.Prefix, bits),
 		}
 		addresses = append(addresses, ipNet.String())
 	}
@@ -348,7 +351,7 @@ func (c *VLANController) updateCRDStatus(crd *unstructured.Unstructured, status 
 		Namespace(copy.GetNamespace()).
 		Resource(NetworkInterfaceResource).
 		Name(copy.GetName()).
-		Subresource("status").
+		SubResource("status").
 		Body(copy).
 		Do(context.Background()).
 		Get()
@@ -489,12 +492,12 @@ func (c *VLANController) reconcileVLAN(key string) error {
 	}
 	
 	// Check if the VLAN interface already exists
-	existing, err := c.manager.GetVLAN(name)
+	_, err = c.manager.GetVLAN(name)
 	if err == nil {
 		// VLAN exists, so update it
 		return c.handleVLANUpdate(name, config)
 	}
-	
+
 	// VLAN doesn't exist, so create it
 	return c.handleVLANCreate(name, parent, vlanID, config)
 }

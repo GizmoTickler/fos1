@@ -3,19 +3,14 @@ package vlan
 import (
 	"context"
 	"testing"
-	"time"
 	"net"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic/fake"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/cache"
 )
 
 // MockVLANManager is a mock implementation of the VLANManager interface for testing
@@ -148,10 +143,10 @@ func TestVLANControllerCreate(t *testing.T) {
 	mockManager.On("CreateVLAN", "eth0", 100, "test-vlan100", mock.AnythingOfType("VLANConfig")).Return(mockVLAN, nil)
 	mockManager.On("GetVLAN", "test-vlan100").Return(mockVLAN, nil)
 	
-	// Create a fake dynamic client
+	// Create a fake dynamic client (not used in this test but kept for future expansion)
 	scheme := runtime.NewScheme()
 	objs := []runtime.Object{}
-	client := fake.NewSimpleDynamicClient(scheme, objs...)
+	_ = fake.NewSimpleDynamicClient(scheme, objs...)
 	
 	// Create a controller config
 	config := VLANControllerConfig{
@@ -166,9 +161,9 @@ func TestVLANControllerCreate(t *testing.T) {
 	
 	// Create the controller
 	controller := NewVLANController(nil, mockManager, config)
-	
-	// Start the controller
-	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start the controller (context for future use)
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	
 	// Manually create and process a VLAN NetworkInterface CRD
@@ -234,10 +229,10 @@ func TestVLANControllerUpdate(t *testing.T) {
 	mockManager.On("GetVLAN", "test-vlan100").Return(existingVLAN, nil)
 	mockManager.On("UpdateVLAN", "test-vlan100", mock.AnythingOfType("VLANConfig")).Return(updatedVLAN, nil)
 	
-	// Create a fake dynamic client
+	// Create a fake dynamic client (not used in this test but kept for future expansion)
 	scheme := runtime.NewScheme()
 	objs := []runtime.Object{}
-	client := fake.NewSimpleDynamicClient(scheme, objs...)
+	_ = fake.NewSimpleDynamicClient(scheme, objs...)
 	
 	// Create a controller config
 	config := VLANControllerConfig{
@@ -252,9 +247,9 @@ func TestVLANControllerUpdate(t *testing.T) {
 	
 	// Create the controller
 	controller := NewVLANController(nil, mockManager, config)
-	
-	// Start the controller
-	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start the controller (context for future use)
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	
 	// Manually create and process a VLAN NetworkInterface CRD
@@ -286,10 +281,10 @@ func TestVLANControllerDelete(t *testing.T) {
 	// Setup expectations
 	mockManager.On("DeleteVLAN", "test-vlan100").Return(nil)
 	
-	// Create a fake dynamic client
+	// Create a fake dynamic client (not used in this test but kept for future expansion)
 	scheme := runtime.NewScheme()
 	objs := []runtime.Object{}
-	client := fake.NewSimpleDynamicClient(scheme, objs...)
+	_ = fake.NewSimpleDynamicClient(scheme, objs...)
 	
 	// Create a controller config
 	config := VLANControllerConfig{
@@ -304,9 +299,9 @@ func TestVLANControllerDelete(t *testing.T) {
 	
 	// Create the controller
 	controller := NewVLANController(nil, mockManager, config)
-	
-	// Start the controller
-	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start the controller (context for future use)
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	
 	// Manually trigger reconciliation for a non-existent object (simulating deletion)
