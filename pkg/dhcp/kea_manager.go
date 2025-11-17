@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
 	"k8s.io/klog/v2"
 )
 

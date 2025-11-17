@@ -16,7 +16,7 @@ import (
 	"golang.org/x/oauth2"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/security/auth"
+	"github.com/GizmoTickler/fos1/pkg/security/auth"
 )
 
 // OAuthProvider implements the auth.Provider interface for OAuth authentication

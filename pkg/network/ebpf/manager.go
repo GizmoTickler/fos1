@@ -3,7 +3,7 @@ package ebpf
 import (
 	"fmt"
 	"sync"
-	hwEbpf "github.com/varuntirumala1/fos1/pkg/hardware/ebpf"
+	hwEbpf "github.com/GizmoTickler/fos1/pkg/hardware/ebpf"
 )
 
 // Import explanation:

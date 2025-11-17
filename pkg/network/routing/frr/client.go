@@ -291,6 +291,11 @@ func (c *Client) ConfigureBGP(ctx context.Context, asNumber int, routerID string
 
 // ConfigureOSPF configures OSPF
 func (c *Client) ConfigureOSPF(ctx context.Context, routerID string, areas []OSPFArea, redistributions []Redistribution) error {
+	return c.ConfigureOSPFWithParams(ctx, routerID, areas, redistributions, 0)
+}
+
+// ConfigureOSPFWithParams configures OSPF with additional parameters
+func (c *Client) ConfigureOSPFWithParams(ctx context.Context, routerID string, areas []OSPFArea, redistributions []Redistribution, referenceBandwidth int) error {
 	var commands strings.Builder
 
 	// Start configuration
@@ -299,6 +304,11 @@ func (c *Client) ConfigureOSPF(ctx context.Context, routerID string, areas []OSP
 	// Configure OSPF router
 	commands.WriteString("router ospf\n")
 	commands.WriteString(fmt.Sprintf("ospf router-id %s\n", routerID))
+
+	// Set reference bandwidth if specified
+	if referenceBandwidth > 0 {
+		commands.WriteString(fmt.Sprintf("auto-cost reference-bandwidth %d\n", referenceBandwidth))
+	}
 
 	// Configure areas
 	for _, area := range areas {
@@ -317,15 +327,78 @@ func (c *Client) ConfigureOSPF(ctx context.Context, routerID string, areas []OSP
 		if area.NSSAArea {
 			commands.WriteString(fmt.Sprintf("area %s nssa\n", area.AreaID))
 		}
+
+		// Configure area authentication if specified on first interface
+		if len(area.Interfaces) > 0 && area.Interfaces[0].Authentication.Type != "" && area.Interfaces[0].Authentication.Type != "none" {
+			if area.Interfaces[0].Authentication.Type == "md5" {
+				commands.WriteString(fmt.Sprintf("area %s authentication message-digest\n", area.AreaID))
+			} else if area.Interfaces[0].Authentication.Type == "simple" {
+				commands.WriteString(fmt.Sprintf("area %s authentication\n", area.AreaID))
+			}
+		}
 	}
 
 	// Configure redistributions
 	for _, redist := range redistributions {
 		if redist.RouteMapRef != "" {
-			commands.WriteString(fmt.Sprintf("redistribute %s route-map %s\n", 
+			commands.WriteString(fmt.Sprintf("redistribute %s route-map %s\n",
 				redist.Protocol, redist.RouteMapRef))
 		} else {
 			commands.WriteString(fmt.Sprintf("redistribute %s\n", redist.Protocol))
+		}
+	}
+
+	// Exit router configuration
+	commands.WriteString("exit\n")
+
+	// Configure interface-specific settings
+	for _, area := range areas {
+		for _, intf := range area.Interfaces {
+			if intf.Name != "" {
+				commands.WriteString(fmt.Sprintf("interface %s\n", intf.Name))
+
+				// Configure cost
+				if intf.Cost > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf cost %d\n", intf.Cost))
+				}
+
+				// Configure priority
+				if intf.Priority > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf priority %d\n", intf.Priority))
+				}
+
+				// Configure network type
+				if intf.NetworkType != "" {
+					commands.WriteString(fmt.Sprintf("ip ospf network %s\n", intf.NetworkType))
+				}
+
+				// Configure authentication
+				if intf.Authentication.Type != "" && intf.Authentication.Type != "none" {
+					if intf.Authentication.Type == "md5" {
+						commands.WriteString(fmt.Sprintf("ip ospf message-digest-key %d md5 %s\n",
+							intf.Authentication.KeyID, intf.Authentication.Key))
+					} else if intf.Authentication.Type == "simple" {
+						commands.WriteString(fmt.Sprintf("ip ospf authentication-key %s\n",
+							intf.Authentication.Key))
+					}
+				}
+
+				// Configure timers
+				if intf.HelloInterval > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf hello-interval %d\n", intf.HelloInterval))
+				}
+				if intf.DeadInterval > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf dead-interval %d\n", intf.DeadInterval))
+				}
+				if intf.RetransmitInterval > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf retransmit-interval %d\n", intf.RetransmitInterval))
+				}
+				if intf.TransmitDelay > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf transmit-delay %d\n", intf.TransmitDelay))
+				}
+
+				commands.WriteString("exit\n")
+			}
 		}
 	}
 

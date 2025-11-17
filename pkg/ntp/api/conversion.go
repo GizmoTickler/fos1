@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/ntp"
-	"github.com/varuntirumala1/fos1/pkg/ntp/api/v1alpha1"
+	"github.com/GizmoTickler/fos1/pkg/ntp"
+	"github.com/GizmoTickler/fos1/pkg/ntp/api/v1alpha1"
 )
 
 // ConvertToInternal converts from the CRD types to internal types

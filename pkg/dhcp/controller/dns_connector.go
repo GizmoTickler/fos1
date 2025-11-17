@@ -6,8 +6,8 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
-	"github.com/varuntirumala1/fos1/pkg/dns/manager"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
+	"github.com/GizmoTickler/fos1/pkg/dns/manager"
 )
 
 // DNSConnector manages the connection between DHCP and DNS

@@ -2,7 +2,7 @@
 package nic
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware/types"
+	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
 // NewNICManager creates a new NIC Manager.

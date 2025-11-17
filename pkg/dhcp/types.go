@@ -7,7 +7,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	
-	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
 )
 
 // DHCPv4Service defines the specification for a DHCPv4 service

@@ -20,13 +20,13 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	networkv1 "github.com/varuntirumala1/fos1/pkg/apis/network/v1"
-	clientset "github.com/varuntirumala1/fos1/pkg/client/clientset/versioned"
-	informers "github.com/varuntirumala1/fos1/pkg/client/informers/externalversions"
-	listers "github.com/varuntirumala1/fos1/pkg/client/listers/network/v1"
-	"github.com/varuntirumala1/fos1/pkg/dhcp"
-	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
-	"github.com/varuntirumala1/fos1/pkg/dns/manager"
+	networkv1 "github.com/GizmoTickler/fos1/pkg/apis/network/v1"
+	clientset "github.com/GizmoTickler/fos1/pkg/client/clientset/versioned"
+	informers "github.com/GizmoTickler/fos1/pkg/client/informers/externalversions"
+	listers "github.com/GizmoTickler/fos1/pkg/client/listers/network/v1"
+	"github.com/GizmoTickler/fos1/pkg/dhcp"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
+	"github.com/GizmoTickler/fos1/pkg/dns/manager"
 )
 
 const (

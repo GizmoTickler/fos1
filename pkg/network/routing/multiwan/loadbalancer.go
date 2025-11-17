@@ -8,7 +8,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/network/routing"
+	"github.com/GizmoTickler/fos1/pkg/network/routing"
 )
 
 // loadBalancer implements load balancing for multi-WAN

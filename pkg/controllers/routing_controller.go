@@ -7,13 +7,13 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/network/routing"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/frr"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/multiwan"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/policy"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/protocols"
-	"github.com/varuntirumala1/fos1/pkg/security/qos"
-	"github.com/varuntirumala1/fos1/pkg/traffic"
+	"github.com/GizmoTickler/fos1/pkg/network/routing"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/frr"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/multiwan"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/policy"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/protocols"
+	"github.com/GizmoTickler/fos1/pkg/security/qos"
+	"github.com/GizmoTickler/fos1/pkg/traffic"
 )
 
 // RoutingController manages all routing-related controllers

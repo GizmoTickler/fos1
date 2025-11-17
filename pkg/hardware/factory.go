@@ -2,12 +2,12 @@
 package hardware
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware/capture"
-	"github.com/varuntirumala1/fos1/pkg/hardware/ebpf"
-	"github.com/varuntirumala1/fos1/pkg/hardware/nic"
-	"github.com/varuntirumala1/fos1/pkg/hardware/offload"
-	"github.com/varuntirumala1/fos1/pkg/hardware/types"
-	"github.com/varuntirumala1/fos1/pkg/hardware/wan"
+	"github.com/GizmoTickler/fos1/pkg/hardware/capture"
+	"github.com/GizmoTickler/fos1/pkg/hardware/ebpf"
+	"github.com/GizmoTickler/fos1/pkg/hardware/nic"
+	"github.com/GizmoTickler/fos1/pkg/hardware/offload"
+	"github.com/GizmoTickler/fos1/pkg/hardware/types"
+	"github.com/GizmoTickler/fos1/pkg/hardware/wan"
 )
 
 // NewNICManager creates a new NIC Manager.

@@ -9,9 +9,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/ntp"
-	"github.com/varuntirumala1/fos1/pkg/ntp/chrony"
-	"github.com/varuntirumala1/fos1/pkg/ntp/metrics"
+	"github.com/GizmoTickler/fos1/pkg/ntp"
+	"github.com/GizmoTickler/fos1/pkg/ntp/chrony"
+	"github.com/GizmoTickler/fos1/pkg/ntp/metrics"
 )
 
 // Manager coordinates all NTP services

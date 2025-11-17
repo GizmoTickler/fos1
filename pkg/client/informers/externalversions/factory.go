@@ -7,7 +7,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 
-	clientset "github.com/varuntirumala1/fos1/pkg/client/clientset/versioned"
+	clientset "github.com/GizmoTickler/fos1/pkg/client/clientset/versioned"
 )
 
 // SharedInformerFactory provides shared informers for resources

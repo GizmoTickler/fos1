@@ -11,7 +11,7 @@ import (
 	"github.com/safchain/ethtool"
 	"github.com/vishvananda/netlink"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware/types"
+	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
 // Manager implements the types.NICManager interface.

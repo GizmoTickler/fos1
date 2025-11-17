@@ -11,7 +11,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/vpn"
+	"github.com/GizmoTickler/fos1/pkg/vpn"
 )
 
 // Manager implements the vpn.WireGuardManager interface

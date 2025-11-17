@@ -98,12 +98,13 @@ type ProtocolConfig interface {
 
 // ProtocolStatus represents the status of a routing protocol
 type ProtocolStatus struct {
-	Name            string
-	State           string
-	Uptime          time.Duration
+	Name             string
+	State            string
+	Uptime           time.Duration
+	StartTime        time.Time
 	PrefixesReceived int
-	PrefixesSent    int
-	Neighbors       []NeighborStatus
+	PrefixesSent     int
+	Neighbors        []NeighborStatus
 }
 
 // NeighborStatus represents the status of a routing protocol neighbor

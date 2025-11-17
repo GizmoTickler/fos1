@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware/types"
+	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
 // Manager implements the types.CaptureManager interface.

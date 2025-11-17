@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/varuntirumala1/fos1/pkg/network/routing"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/frr"
+	"github.com/GizmoTickler/fos1/pkg/network/routing"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/frr"
 )
 
 // ProtocolHandler defines the interface for protocol handlers
@@ -146,13 +146,20 @@ func (m *Manager) ListProtocols() ([]string, error) {
 func (m *Manager) UpdateProtocolConfig(protocolName string, config routing.ProtocolConfig) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
 	// Check if the protocol is running
 	handler, exists := m.handlers[protocolName]
 	if !exists {
 		return fmt.Errorf("protocol not running: %s", protocolName)
 	}
-	
+
 	// Update the configuration
 	return handler.UpdateConfig(config)
+}
+
+// GetProtocolRoutes retrieves routes learned via a specific protocol
+func (m *Manager) GetProtocolRoutes(protocolName string) ([]*routing.Route, error) {
+	// This would typically query the routing table for routes with the specified protocol
+	// For now, return an error indicating this is not yet implemented
+	return nil, fmt.Errorf("GetProtocolRoutes not yet implemented for protocol: %s", protocolName)
 }

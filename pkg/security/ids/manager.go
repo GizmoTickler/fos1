@@ -15,9 +15,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	"github.com/varuntirumala1/fos1/pkg/security/ids/correlation"
-	"github.com/varuntirumala1/fos1/pkg/security/ids/suricata"
-	"github.com/varuntirumala1/fos1/pkg/security/ids/zeek"
+	"github.com/GizmoTickler/fos1/pkg/security/ids/correlation"
+	"github.com/GizmoTickler/fos1/pkg/security/ids/suricata"
+	"github.com/GizmoTickler/fos1/pkg/security/ids/zeek"
 )
 
 // IDSManager manages the IDS/IPS system

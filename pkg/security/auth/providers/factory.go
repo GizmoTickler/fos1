@@ -3,7 +3,7 @@ package providers
 import (
 	"fmt"
 
-	"github.com/varuntirumala1/fos1/pkg/security/auth"
+	"github.com/GizmoTickler/fos1/pkg/security/auth"
 )
 
 // Factory creates authentication providers

@@ -15,8 +15,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/network/routing"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/policy"
+	"github.com/GizmoTickler/fos1/pkg/network/routing"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/policy"
 )
 
 const (

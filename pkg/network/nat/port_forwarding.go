@@ -6,7 +6,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
 )
 
 // PortForwardingManager manages port forwarding rules

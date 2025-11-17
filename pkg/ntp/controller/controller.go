@@ -13,10 +13,10 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/ntp"
-	"github.com/varuntirumala1/fos1/pkg/ntp/chrony"
-	ntpclient "github.com/varuntirumala1/fos1/pkg/ntp/client"
-	"github.com/varuntirumala1/fos1/pkg/ntp/manager"
+	"github.com/GizmoTickler/fos1/pkg/ntp"
+	"github.com/GizmoTickler/fos1/pkg/ntp/chrony"
+	ntpclient "github.com/GizmoTickler/fos1/pkg/ntp/client"
+	"github.com/GizmoTickler/fos1/pkg/ntp/manager"
 )
 
 // Controller watches NTP CRDs and manages the NTP service

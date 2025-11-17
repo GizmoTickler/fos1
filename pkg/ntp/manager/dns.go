@@ -7,7 +7,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/ntp"
+	"github.com/GizmoTickler/fos1/pkg/ntp"
 )
 
 // DNSIntegration handles the integration between NTP and DNS
