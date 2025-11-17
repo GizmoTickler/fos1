@@ -131,20 +131,43 @@ func (h *BGPHandler) updateStatus() {
 	for {
 		select {
 		case <-ticker.C:
+			if h.status.State != "running" {
+				return
+			}
+
 			ctx := context.Background()
-			summary, err := h.frrClient.GetBGPSummary(ctx)
+
+			// Get parsed BGP summary
+			summary, err := h.frrClient.GetBGPSummaryParsed(ctx, uint32(h.config.ASNumber))
 			if err != nil {
 				klog.Errorf("Failed to get BGP summary: %v", err)
+				// Fallback to string output
+				_, err2 := h.frrClient.GetBGPSummary(ctx)
+				if err2 != nil {
+					klog.Errorf("Failed to get BGP summary (fallback): %v", err2)
+				}
 				continue
 			}
 
-			// In a real implementation, we would parse the summary to update the status
-			// For now, just update the uptime
+			// Update neighbors status
+			neighbors := make([]routing.NeighborStatus, 0, len(summary.Neighbors))
+			for _, n := range summary.Neighbors {
+				neighbors = append(neighbors, routing.NeighborStatus{
+					Address:          n.IP,
+					State:            n.State,
+					Uptime:           0, // Parse uptime string if needed
+					PrefixesReceived: n.PrefixReceived,
+					PrefixesSent:     n.PrefixSent,
+				})
+			}
+			h.status.Neighbors = neighbors
+
+			// Update uptime
 			if h.status.State == "running" {
 				h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
 			}
 
-			klog.V(4).Infof("BGP summary: %s", summary)
+			klog.V(4).Infof("BGP status updated: %d neighbors, uptime: %v", len(neighbors), h.status.Uptime)
 		}
 	}
 }

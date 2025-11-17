@@ -128,20 +128,43 @@ func (h *OSPFHandler) updateStatus() {
 	for {
 		select {
 		case <-ticker.C:
+			if h.status.State != "running" {
+				return
+			}
+
 			ctx := context.Background()
-			neighbors, err := h.frrClient.GetOSPFNeighbors(ctx)
+
+			// Get parsed OSPF summary
+			summary, err := h.frrClient.GetOSPFSummaryParsed(ctx)
 			if err != nil {
-				klog.Errorf("Failed to get OSPF neighbors: %v", err)
+				klog.Errorf("Failed to get OSPF summary: %v", err)
+				// Fallback to string output
+				_, err2 := h.frrClient.GetOSPFNeighbors(ctx)
+				if err2 != nil {
+					klog.Errorf("Failed to get OSPF neighbors (fallback): %v", err2)
+				}
 				continue
 			}
 
-			// In a real implementation, we would parse the neighbors to update the status
-			// For now, just update the uptime
+			// Update neighbors status
+			neighbors := make([]routing.NeighborStatus, 0, len(summary.Neighbors))
+			for _, n := range summary.Neighbors {
+				neighbors = append(neighbors, routing.NeighborStatus{
+					Address:          n.Address,
+					State:            n.State,
+					Uptime:           0, // Parse deadtime string if needed
+					PrefixesReceived: 0, // OSPF doesn't track prefix counts like BGP
+					PrefixesSent:     0,
+				})
+			}
+			h.status.Neighbors = neighbors
+
+			// Update uptime
 			if h.status.State == "running" {
 				h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
 			}
 
-			klog.V(4).Infof("OSPF neighbors: %s", neighbors)
+			klog.V(4).Infof("OSPF status updated: %d neighbors, uptime: %v", len(neighbors), h.status.Uptime)
 		}
 	}
 }
