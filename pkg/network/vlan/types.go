@@ -83,6 +83,30 @@ type QoSClass struct {
 	Rate        string      // Rate limit (e.g., "100Mbit")
 	Ceiling     string      // Maximum rate (e.g., "1Gbit")
 	Burst       string      // Burst size (e.g., "15kb")
+	QueueType   string      // Queue discipline: "sfq", "red", "gred", "codel", "fq_codel" (default: "sfq")
+	REDParams   *REDParams  // RED/GRED parameters (optional)
+	CodelParams *CodelParams // Codel parameters (optional)
+}
+
+// REDParams contains parameters for RED (Random Early Detection) qdisc
+type REDParams struct {
+	Min       uint32 // Minimum threshold in bytes
+	Max       uint32 // Maximum threshold in bytes
+	Avpkt     uint32 // Average packet size in bytes
+	Limit     uint32 // Hard limit on queue size in bytes
+	Burst     uint32 // Burst allowance (packets)
+	Probability float64 // Mark probability
+	ECN       bool   // Enable ECN (Explicit Congestion Notification)
+	Adaptive  bool   // Enable adaptive RED
+}
+
+// CodelParams contains parameters for Codel (Controlled Delay) qdisc
+type CodelParams struct {
+	Target   uint32 // Target queue delay in microseconds (default: 5000)
+	Limit    uint32 // Hard limit on queue size in packets (default: 1000)
+	Interval uint32 // Interval for measuring delay in microseconds (default: 100000)
+	ECN      bool   // Enable ECN marking
+	CE       uint32 // CE threshold for ECN marking (microseconds)
 }
 
 // BridgeConfig represents bridge configuration
