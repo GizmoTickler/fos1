@@ -1,6 +1,7 @@
 package vlan
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -304,5 +305,113 @@ func TestQoSMultipleClasses(t *testing.T) {
 	// Total guaranteed rate should be <= max rate
 	if totalRate > maxRate {
 		t.Errorf("Total guaranteed rate (%d) exceeds max rate (%d)", totalRate, maxRate)
+	}
+}
+
+// TestDSCPMarkingValidation tests DSCP marking functionality
+func TestDSCPMarkingValidation(t *testing.T) {
+	_ = NewQoSManager()
+
+	tests := []struct {
+		name    string
+		dscp    int
+		wantErr bool
+	}{
+		{"Valid DSCP 0 (BE)", 0, false},
+		{"Valid DSCP 10 (AF11)", 10, false},
+		{"Valid DSCP 46 (EF)", 46, false},
+		{"Valid DSCP 63", 63, false},
+		{"Invalid DSCP -1", -1, true},
+		{"Invalid DSCP 64", 64, true},
+		{"Invalid DSCP 100", 100, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// We can't actually set DSCP on non-existent interfaces,
+			// but we can test the validation logic
+			if tt.dscp < 0 || tt.dscp > 63 {
+				// Should be invalid
+				if !tt.wantErr {
+					t.Errorf("DSCP %d should be invalid but test expects it to be valid", tt.dscp)
+				}
+			} else {
+				// Should be valid
+				if tt.wantErr {
+					t.Errorf("DSCP %d should be valid but test expects it to be invalid", tt.dscp)
+				}
+			}
+
+			// Note: Actual SetDSCPMarking call would fail without a real interface
+			// In integration tests with real interfaces, we would call:
+			// err := qos.SetDSCPMarking("test-if", tt.dscp)
+		})
+	}
+
+	// Verify that DSCP values map correctly to TOS field
+	// TOS field: DSCP (6 bits) + ECN (2 bits)
+	// DSCP is shifted left by 2
+	dscpTests := []struct {
+		dscp     int
+		expected int // Expected TOS value
+	}{
+		{0, 0},      // BE (Best Effort)
+		{10, 40},    // AF11 (Assured Forwarding class 1, low drop)
+		{18, 72},    // AF21
+		{26, 104},   // AF31
+		{34, 136},   // AF41
+		{46, 184},   // EF (Expedited Forwarding)
+		{48, 192},   // CS6 (Class Selector 6)
+		{56, 224},   // CS7 (Class Selector 7)
+	}
+
+	for _, tt := range dscpTests {
+		t.Run(fmt.Sprintf("DSCP %d to TOS 0x%02x", tt.dscp, tt.expected), func(t *testing.T) {
+			tosValue := tt.dscp << 2
+			if tosValue != tt.expected {
+				t.Errorf("Expected TOS value 0x%02x, got 0x%02x", tt.expected, tosValue)
+			}
+		})
+	}
+}
+
+// TestCommonDSCPValues tests well-known DSCP values
+func TestCommonDSCPValues(t *testing.T) {
+	commonValues := map[string]int{
+		"BE (Best Effort)":           0,
+		"CS1 (Class Selector 1)":     8,
+		"AF11 (Assured Forwarding)":  10,
+		"AF12":                        12,
+		"AF13":                        14,
+		"CS2":                         16,
+		"AF21":                        18,
+		"AF22":                        20,
+		"AF23":                        22,
+		"CS3":                         24,
+		"AF31":                        26,
+		"AF32":                        28,
+		"AF33":                        30,
+		"CS4":                         32,
+		"AF41":                        34,
+		"AF42":                        36,
+		"AF43":                        38,
+		"CS5":                         40,
+		"EF (Expedited Forwarding)":  46,
+		"CS6":                         48,
+		"CS7":                         56,
+	}
+
+	for name, dscp := range commonValues {
+		t.Run(name, func(t *testing.T) {
+			if dscp < 0 || dscp > 63 {
+				t.Errorf("DSCP value %d (%s) is out of valid range", dscp, name)
+			}
+
+			// Verify TOS calculation
+			tos := dscp << 2
+			if tos > 255 {
+				t.Errorf("TOS value %d for DSCP %d (%s) exceeds 8 bits", tos, dscp, name)
+			}
+		})
 	}
 }

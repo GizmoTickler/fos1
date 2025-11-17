@@ -380,9 +380,6 @@ func (q *QoSManager) SetDSCPMarking(linkName string, dscp int) error {
 
 	ifindex := link.Attrs().Index
 
-	// Use TC filter with skbedit action to set DSCP
-	// This requires creating a filter that matches all traffic and applies the DSCP mark
-
 	// First, ensure there's a qdisc
 	qdiscs, err := netlink.QdiscList(link)
 	if err != nil {
@@ -390,16 +387,18 @@ func (q *QoSManager) SetDSCPMarking(linkName string, dscp int) error {
 	}
 
 	hasQdisc := false
+	var qdiscHandle uint32
 	for _, qd := range qdiscs {
 		attrs := qd.Attrs()
 		if attrs.Parent == netlink.HANDLE_ROOT && attrs.Handle != 0 {
 			hasQdisc = true
+			qdiscHandle = attrs.Handle
 			break
 		}
 	}
 
 	if !hasQdisc {
-		// Add a simple prio qdisc
+		// Add a simple prio qdisc if none exists
 		attrs := netlink.QdiscAttrs{
 			LinkIndex: ifindex,
 			Handle:    netlink.MakeHandle(1, 0),
@@ -409,13 +408,104 @@ func (q *QoSManager) SetDSCPMarking(linkName string, dscp int) error {
 		if err := netlink.QdiscAdd(qdisc); err != nil {
 			return fmt.Errorf("failed to add prio qdisc: %w", err)
 		}
+		qdiscHandle = netlink.MakeHandle(1, 0)
 	}
 
-	// Note: Setting DSCP via netlink requires using BPF or u32 filters with skbedit
-	// This is complex and may require using the tc command directly
-	// For now, we'll log that DSCP marking is requested
-	klog.Infof("DSCP marking %d requested for interface %s (implementation requires tc command or BPF)",
-		dscp, linkName)
+	// Use tc command to set DSCP marking with u32 filter and skbedit action
+	// This matches all IP packets and sets the DSCP value in the TOS field
+	// The TOS field structure: DSCP (6 bits) + ECN (2 bits)
+	// We need to shift DSCP left by 2 bits to position it correctly
+	tosValue := dscp << 2
 
+	// Remove any existing DSCP filter first
+	if err := q.RemoveDSCPMarking(linkName); err != nil {
+		klog.V(4).Infof("No existing DSCP filter to remove on %s: %v", linkName, err)
+	}
+
+	// Add TC filter with u32 match and skbedit action
+	// Match all IP packets (0.0.0.0/0) and set DSCP
+	// tc filter add dev <if> parent <handle> protocol ip prio 1 u32 match ip dst 0.0.0.0/0 action skbedit dscp <value>
+	cmd := exec.Command("tc", "filter", "add", "dev", linkName,
+		"parent", fmt.Sprintf("%x:", qdiscHandle>>16),
+		"protocol", "ip",
+		"prio", "1",
+		"u32",
+		"match", "ip", "dst", "0.0.0.0/0",
+		"action", "skbedit", "dscp", fmt.Sprintf("%d", dscp))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add DSCP filter: %w, output: %s", err, string(output))
+	}
+
+	// Also add filter for IPv6 if this is an IPv6-capable interface
+	cmd = exec.Command("tc", "filter", "add", "dev", linkName,
+		"parent", fmt.Sprintf("%x:", qdiscHandle>>16),
+		"protocol", "ipv6",
+		"prio", "1",
+		"u32",
+		"match", "ip6", "dst", "::/0",
+		"action", "skbedit", "dscp", fmt.Sprintf("%d", dscp))
+
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		// IPv6 filter failure is non-fatal, just log it
+		klog.V(4).Infof("Failed to add IPv6 DSCP filter on %s (may not support IPv6): %v", linkName, err)
+	}
+
+	klog.Infof("Successfully set DSCP marking %d (TOS: 0x%02x) for interface %s", dscp, tosValue, linkName)
+	return nil
+}
+
+// RemoveDSCPMarking removes DSCP marking filters from a VLAN interface
+func (q *QoSManager) RemoveDSCPMarking(linkName string) error {
+	// Get the link
+	link, err := netlink.LinkByName(linkName)
+	if err != nil {
+		return fmt.Errorf("failed to get link %s: %w", linkName, err)
+	}
+
+	// List all qdiscs to find the parent
+	qdiscs, err := netlink.QdiscList(link)
+	if err != nil {
+		return fmt.Errorf("failed to list qdiscs: %w", err)
+	}
+
+	var qdiscHandle uint32
+	for _, qd := range qdiscs {
+		attrs := qd.Attrs()
+		if attrs.Parent == netlink.HANDLE_ROOT && attrs.Handle != 0 {
+			qdiscHandle = attrs.Handle
+			break
+		}
+	}
+
+	if qdiscHandle == 0 {
+		return fmt.Errorf("no qdisc found on interface %s", linkName)
+	}
+
+	// Remove IPv4 DSCP filter
+	cmd := exec.Command("tc", "filter", "del", "dev", linkName,
+		"parent", fmt.Sprintf("%x:", qdiscHandle>>16),
+		"protocol", "ip",
+		"prio", "1")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		klog.V(4).Infof("Failed to remove IPv4 DSCP filter on %s: %v, output: %s", linkName, err, string(output))
+	}
+
+	// Remove IPv6 DSCP filter
+	cmd = exec.Command("tc", "filter", "del", "dev", linkName,
+		"parent", fmt.Sprintf("%x:", qdiscHandle>>16),
+		"protocol", "ipv6",
+		"prio", "1")
+
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		klog.V(4).Infof("Failed to remove IPv6 DSCP filter on %s: %v, output: %s", linkName, err, string(output))
+	}
+
+	klog.V(4).Infof("Removed DSCP marking from interface %s", linkName)
 	return nil
 }

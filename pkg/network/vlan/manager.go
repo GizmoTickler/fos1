@@ -481,11 +481,20 @@ func (m *VLANManagerImpl) UpdateVLAN(name string, config VLANConfig) (*VLANInter
 	}
 
 	// Update DSCP marking if changed
-	if config.DSCP != oldConfig.DSCP && config.DSCP >= 0 && config.DSCP <= 63 {
-		klog.Infof("Updating DSCP marking to %d for VLAN interface %s", config.DSCP, name)
+	if config.DSCP != oldConfig.DSCP {
+		if config.DSCP >= 0 && config.DSCP <= 63 {
+			klog.Infof("Updating DSCP marking to %d for VLAN interface %s", config.DSCP, name)
 
-		if err := m.qosManager.SetDSCPMarking(name, config.DSCP); err != nil {
-			klog.Warningf("Failed to update DSCP marking for VLAN interface %s: %v", name, err)
+			if err := m.qosManager.SetDSCPMarking(name, config.DSCP); err != nil {
+				klog.Warningf("Failed to update DSCP marking for VLAN interface %s: %v", name, err)
+			}
+		} else if oldConfig.DSCP >= 0 && oldConfig.DSCP <= 63 {
+			// DSCP was set but now is being removed (set to -1 or invalid)
+			klog.Infof("Removing DSCP marking from VLAN interface %s", name)
+
+			if err := m.qosManager.RemoveDSCPMarking(name); err != nil {
+				klog.Warningf("Failed to remove DSCP marking for VLAN interface %s: %v", name, err)
+			}
 		}
 	}
 
