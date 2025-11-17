@@ -134,24 +134,89 @@ func (c *Client) ConfigureBGP(ctx context.Context, asNumber int, routerID string
 
 	// Configure neighbors
 	for _, neighbor := range neighbors {
-		commands.WriteString(fmt.Sprintf("neighbor %s remote-as %d\n", neighbor.Address, neighbor.RemoteASNumber))
-		
+		// If the neighbor belongs to a peer group, specify that first
+		if neighbor.PeerGroup != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s peer-group %s\n", neighbor.Address, neighbor.PeerGroup))
+		} else {
+			commands.WriteString(fmt.Sprintf("neighbor %s remote-as %d\n", neighbor.Address, neighbor.RemoteASNumber))
+		}
+
 		if neighbor.Description != "" {
 			commands.WriteString(fmt.Sprintf("neighbor %s description %s\n", neighbor.Address, neighbor.Description))
 		}
-		
+
 		if neighbor.KeepaliveInterval > 0 && neighbor.HoldTime > 0 {
-			commands.WriteString(fmt.Sprintf("neighbor %s timers %d %d\n", 
+			commands.WriteString(fmt.Sprintf("neighbor %s timers %d %d\n",
 				neighbor.Address, neighbor.KeepaliveInterval, neighbor.HoldTime))
 		}
-		
+
 		if neighbor.ConnectRetryInterval > 0 {
-			commands.WriteString(fmt.Sprintf("neighbor %s timers connect %d\n", 
+			commands.WriteString(fmt.Sprintf("neighbor %s timers connect %d\n",
 				neighbor.Address, neighbor.ConnectRetryInterval))
 		}
-		
+
 		if neighbor.BFDEnabled {
 			commands.WriteString(fmt.Sprintf("neighbor %s bfd\n", neighbor.Address))
+		}
+
+		if neighbor.RouteMapIn != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s route-map %s in\n", neighbor.Address, neighbor.RouteMapIn))
+		}
+
+		if neighbor.RouteMapOut != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s route-map %s out\n", neighbor.Address, neighbor.RouteMapOut))
+		}
+
+		if neighbor.PrefixListIn != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s prefix-list %s in\n", neighbor.Address, neighbor.PrefixListIn))
+		}
+
+		if neighbor.PrefixListOut != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s prefix-list %s out\n", neighbor.Address, neighbor.PrefixListOut))
+		}
+
+		if neighbor.FilterListIn != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s filter-list %s in\n", neighbor.Address, neighbor.FilterListIn))
+		}
+
+		if neighbor.FilterListOut != "" {
+			commands.WriteString(fmt.Sprintf("neighbor %s filter-list %s out\n", neighbor.Address, neighbor.FilterListOut))
+		}
+
+		if neighbor.MaxPrefixes > 0 {
+			commands.WriteString(fmt.Sprintf("neighbor %s maximum-prefix %d\n", neighbor.Address, neighbor.MaxPrefixes))
+		}
+
+		if neighbor.DefaultOriginate {
+			commands.WriteString(fmt.Sprintf("neighbor %s default-originate\n", neighbor.Address))
+		}
+
+		if neighbor.NextHopSelf {
+			commands.WriteString(fmt.Sprintf("neighbor %s next-hop-self\n", neighbor.Address))
+		}
+
+		if neighbor.RemovePrivateAS {
+			commands.WriteString(fmt.Sprintf("neighbor %s remove-private-AS\n", neighbor.Address))
+		}
+
+		if neighbor.SendCommunity {
+			commands.WriteString(fmt.Sprintf("neighbor %s send-community\n", neighbor.Address))
+		}
+
+		if neighbor.SendExtendedCommunity {
+			commands.WriteString(fmt.Sprintf("neighbor %s send-community extended\n", neighbor.Address))
+		}
+
+		if neighbor.SendLargeCommunity {
+			commands.WriteString(fmt.Sprintf("neighbor %s send-community large\n", neighbor.Address))
+		}
+
+		if neighbor.Weight > 0 {
+			commands.WriteString(fmt.Sprintf("neighbor %s weight %d\n", neighbor.Address, neighbor.Weight))
+		}
+
+		if neighbor.AllowASIn > 0 {
+			commands.WriteString(fmt.Sprintf("neighbor %s allowas-in %d\n", neighbor.Address, neighbor.AllowASIn))
 		}
 	}
 
@@ -162,27 +227,57 @@ func (c *Client) ConfigureBGP(ctx context.Context, asNumber int, routerID string
 		}
 
 		commands.WriteString(fmt.Sprintf("address-family %s\n", af.Type))
-		
+
 		// Configure networks
 		for _, network := range af.Networks {
-			commands.WriteString(fmt.Sprintf("network %s\n", network))
+			if network.RouteMap != "" {
+				commands.WriteString(fmt.Sprintf("network %s route-map %s\n", network.Prefix, network.RouteMap))
+			} else if network.Backdoor {
+				commands.WriteString(fmt.Sprintf("network %s backdoor\n", network.Prefix))
+			} else {
+				commands.WriteString(fmt.Sprintf("network %s\n", network.Prefix))
+			}
 		}
-		
+
+		// Configure aggregates
+		for _, aggregate := range af.Aggregates {
+			cmd := fmt.Sprintf("aggregate-address %s", aggregate.Prefix)
+			if aggregate.SummaryOnly {
+				cmd += " summary-only"
+			}
+			if aggregate.AsSet {
+				cmd += " as-set"
+			}
+			if aggregate.RouteMap != "" {
+				cmd += fmt.Sprintf(" route-map %s", aggregate.RouteMap)
+			}
+			commands.WriteString(cmd + "\n")
+		}
+
 		// Configure redistributions
 		for _, redist := range af.Redistributions {
 			if redist.RouteMapRef != "" {
-				commands.WriteString(fmt.Sprintf("redistribute %s route-map %s\n", 
+				commands.WriteString(fmt.Sprintf("redistribute %s route-map %s\n",
 					redist.Protocol, redist.RouteMapRef))
 			} else {
 				commands.WriteString(fmt.Sprintf("redistribute %s\n", redist.Protocol))
 			}
 		}
-		
+
+		// Configure maximum paths
+		if af.MaximumPaths > 0 {
+			commands.WriteString(fmt.Sprintf("maximum-paths %d\n", af.MaximumPaths))
+		}
+
+		if af.MaximumPathsIBGP > 0 {
+			commands.WriteString(fmt.Sprintf("maximum-paths ibgp %d\n", af.MaximumPathsIBGP))
+		}
+
 		// Activate neighbors for this address family
 		for _, neighbor := range neighbors {
 			commands.WriteString(fmt.Sprintf("neighbor %s activate\n", neighbor.Address))
 		}
-		
+
 		commands.WriteString("exit-address-family\n")
 	}
 
@@ -534,4 +629,271 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 // IsAvailable checks if FRR vtysh is available
 func (c *Client) IsAvailable(ctx context.Context) bool {
 	return c.HealthCheck(ctx) == nil
+}
+
+// ConfigureRouteMap configures a route map in FRR
+func (c *Client) ConfigureRouteMap(ctx context.Context, routeMap RouteMap) error {
+	var commands strings.Builder
+	commands.WriteString("configure terminal\n")
+
+	for _, entry := range routeMap.Entries {
+		// Create route map entry
+		commands.WriteString(fmt.Sprintf("route-map %s %s %d\n",
+			routeMap.Name, entry.Action, entry.Sequence))
+
+		// Add match conditions
+		if entry.Match.Prefix != "" {
+			commands.WriteString(fmt.Sprintf("match ip address prefix-list %s\n", entry.Match.Prefix))
+		}
+		if entry.Match.PrefixLen != "" {
+			commands.WriteString(fmt.Sprintf("match ip address prefix-len %s\n", entry.Match.PrefixLen))
+		}
+		if entry.Match.Protocol != "" {
+			commands.WriteString(fmt.Sprintf("match source-protocol %s\n", entry.Match.Protocol))
+		}
+		if entry.Match.Community != "" {
+			commands.WriteString(fmt.Sprintf("match community %s\n", entry.Match.Community))
+		}
+		if entry.Match.ASPath != "" {
+			commands.WriteString(fmt.Sprintf("match as-path %s\n", entry.Match.ASPath))
+		}
+		if entry.Match.Metric > 0 {
+			commands.WriteString(fmt.Sprintf("match metric %d\n", entry.Match.Metric))
+		}
+		if entry.Match.Tag != "" {
+			commands.WriteString(fmt.Sprintf("match tag %s\n", entry.Match.Tag))
+		}
+
+		// Add set actions
+		if entry.Set.Metric > 0 {
+			commands.WriteString(fmt.Sprintf("set metric %d\n", entry.Set.Metric))
+		}
+		if entry.Set.LocalPreference > 0 {
+			commands.WriteString(fmt.Sprintf("set local-preference %d\n", entry.Set.LocalPreference))
+		}
+		if entry.Set.Community != "" {
+			commands.WriteString(fmt.Sprintf("set community %s\n", entry.Set.Community))
+		}
+		if entry.Set.NextHop != "" {
+			commands.WriteString(fmt.Sprintf("set ip next-hop %s\n", entry.Set.NextHop))
+		}
+		if entry.Set.Weight > 0 {
+			commands.WriteString(fmt.Sprintf("set weight %d\n", entry.Set.Weight))
+		}
+		if entry.Set.ASPathPrepend != "" {
+			commands.WriteString(fmt.Sprintf("set as-path prepend %s\n", entry.Set.ASPathPrepend))
+		}
+
+		commands.WriteString("exit\n")
+	}
+
+	commands.WriteString("end\nwrite memory\n")
+	_, err := c.ExecuteVtyshCommand(ctx, commands.String())
+	return err
+}
+
+// ConfigurePrefixList configures an IP prefix list in FRR
+func (c *Client) ConfigurePrefixList(ctx context.Context, prefixList PrefixList) error {
+	var commands strings.Builder
+	commands.WriteString("configure terminal\n")
+
+	ipVersion := "ip"
+	if prefixList.AddressFamily == "ipv6" {
+		ipVersion = "ipv6"
+	}
+
+	// Add description if provided
+	if prefixList.Description != "" {
+		commands.WriteString(fmt.Sprintf("%s prefix-list %s description %s\n",
+			ipVersion, prefixList.Name, prefixList.Description))
+	}
+
+	for _, entry := range prefixList.Entries {
+		cmd := fmt.Sprintf("%s prefix-list %s seq %d %s %s",
+			ipVersion, prefixList.Name, entry.Sequence, entry.Action, entry.Prefix)
+
+		if entry.GE > 0 {
+			cmd += fmt.Sprintf(" ge %d", entry.GE)
+		}
+		if entry.LE > 0 {
+			cmd += fmt.Sprintf(" le %d", entry.LE)
+		}
+
+		commands.WriteString(cmd + "\n")
+	}
+
+	commands.WriteString("end\nwrite memory\n")
+	_, err := c.ExecuteVtyshCommand(ctx, commands.String())
+	return err
+}
+
+// ConfigureASPathList configures an AS path access list in FRR
+func (c *Client) ConfigureASPathList(ctx context.Context, asPathList ASPathAccessList) error {
+	var commands strings.Builder
+	commands.WriteString("configure terminal\n")
+
+	for _, entry := range asPathList.Entries {
+		commands.WriteString(fmt.Sprintf("bgp as-path access-list %s %s %s\n",
+			asPathList.Name, entry.Action, entry.Regex))
+	}
+
+	commands.WriteString("end\nwrite memory\n")
+	_, err := c.ExecuteVtyshCommand(ctx, commands.String())
+	return err
+}
+
+// ConfigureCommunityList configures a community list in FRR
+func (c *Client) ConfigureCommunityList(ctx context.Context, communityList CommunityList) error {
+	var commands strings.Builder
+	commands.WriteString("configure terminal\n")
+
+	listType := "standard"
+	if communityList.Type == "expanded" {
+		listType = "expanded"
+	}
+
+	for _, entry := range communityList.Entries {
+		communities := strings.Join(entry.Communities, " ")
+		commands.WriteString(fmt.Sprintf("bgp community-list %s %s %s %s\n",
+			listType, communityList.Name, entry.Action, communities))
+	}
+
+	commands.WriteString("end\nwrite memory\n")
+	_, err := c.ExecuteVtyshCommand(ctx, commands.String())
+	return err
+}
+
+// ConfigureBGPPeerGroup configures a BGP peer group in FRR
+func (c *Client) ConfigureBGPPeerGroup(ctx context.Context, asNumber int, peerGroup BGPPeerGroup) error {
+	var commands strings.Builder
+	commands.WriteString("configure terminal\n")
+	commands.WriteString(fmt.Sprintf("router bgp %d\n", asNumber))
+
+	// Configure peer group
+	commands.WriteString(fmt.Sprintf("neighbor %s peer-group\n", peerGroup.Name))
+
+	if peerGroup.RemoteASNumber > 0 {
+		commands.WriteString(fmt.Sprintf("neighbor %s remote-as %d\n", peerGroup.Name, peerGroup.RemoteASNumber))
+	}
+
+	if peerGroup.Description != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s description %s\n", peerGroup.Name, peerGroup.Description))
+	}
+
+	if peerGroup.KeepaliveInterval > 0 && peerGroup.HoldTime > 0 {
+		commands.WriteString(fmt.Sprintf("neighbor %s timers %d %d\n",
+			peerGroup.Name, peerGroup.KeepaliveInterval, peerGroup.HoldTime))
+	}
+
+	if peerGroup.ConnectRetryInterval > 0 {
+		commands.WriteString(fmt.Sprintf("neighbor %s timers connect %d\n",
+			peerGroup.Name, peerGroup.ConnectRetryInterval))
+	}
+
+	if peerGroup.BFDEnabled {
+		commands.WriteString(fmt.Sprintf("neighbor %s bfd\n", peerGroup.Name))
+	}
+
+	if peerGroup.RouteMapIn != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s route-map %s in\n", peerGroup.Name, peerGroup.RouteMapIn))
+	}
+
+	if peerGroup.RouteMapOut != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s route-map %s out\n", peerGroup.Name, peerGroup.RouteMapOut))
+	}
+
+	if peerGroup.PrefixListIn != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s prefix-list %s in\n", peerGroup.Name, peerGroup.PrefixListIn))
+	}
+
+	if peerGroup.PrefixListOut != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s prefix-list %s out\n", peerGroup.Name, peerGroup.PrefixListOut))
+	}
+
+	if peerGroup.FilterListIn != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s filter-list %s in\n", peerGroup.Name, peerGroup.FilterListIn))
+	}
+
+	if peerGroup.FilterListOut != "" {
+		commands.WriteString(fmt.Sprintf("neighbor %s filter-list %s out\n", peerGroup.Name, peerGroup.FilterListOut))
+	}
+
+	if peerGroup.MaxPrefixes > 0 {
+		commands.WriteString(fmt.Sprintf("neighbor %s maximum-prefix %d\n", peerGroup.Name, peerGroup.MaxPrefixes))
+	}
+
+	if peerGroup.DefaultOriginate {
+		commands.WriteString(fmt.Sprintf("neighbor %s default-originate\n", peerGroup.Name))
+	}
+
+	if peerGroup.NextHopSelf {
+		commands.WriteString(fmt.Sprintf("neighbor %s next-hop-self\n", peerGroup.Name))
+	}
+
+	if peerGroup.RemovePrivateAS {
+		commands.WriteString(fmt.Sprintf("neighbor %s remove-private-AS\n", peerGroup.Name))
+	}
+
+	if peerGroup.SendCommunity {
+		commands.WriteString(fmt.Sprintf("neighbor %s send-community\n", peerGroup.Name))
+	}
+
+	if peerGroup.SendExtendedCommunity {
+		commands.WriteString(fmt.Sprintf("neighbor %s send-community extended\n", peerGroup.Name))
+	}
+
+	if peerGroup.SendLargeCommunity {
+		commands.WriteString(fmt.Sprintf("neighbor %s send-community large\n", peerGroup.Name))
+	}
+
+	if peerGroup.Weight > 0 {
+		commands.WriteString(fmt.Sprintf("neighbor %s weight %d\n", peerGroup.Name, peerGroup.Weight))
+	}
+
+	if peerGroup.AllowASIn > 0 {
+		commands.WriteString(fmt.Sprintf("neighbor %s allowas-in %d\n", peerGroup.Name, peerGroup.AllowASIn))
+	}
+
+	commands.WriteString("end\nwrite memory\n")
+	_, err := c.ExecuteVtyshCommand(ctx, commands.String())
+	return err
+}
+
+// DeleteRouteMap deletes a route map from FRR
+func (c *Client) DeleteRouteMap(ctx context.Context, name string) error {
+	command := fmt.Sprintf("configure terminal\nno route-map %s\nend\nwrite memory", name)
+	_, err := c.ExecuteVtyshCommand(ctx, command)
+	return err
+}
+
+// DeletePrefixList deletes a prefix list from FRR
+func (c *Client) DeletePrefixList(ctx context.Context, name string, addressFamily string) error {
+	ipVersion := "ip"
+	if addressFamily == "ipv6" {
+		ipVersion = "ipv6"
+	}
+	command := fmt.Sprintf("configure terminal\nno %s prefix-list %s\nend\nwrite memory", ipVersion, name)
+	_, err := c.ExecuteVtyshCommand(ctx, command)
+	return err
+}
+
+// DeleteASPathList deletes an AS path access list from FRR
+func (c *Client) DeleteASPathList(ctx context.Context, name string) error {
+	command := fmt.Sprintf("configure terminal\nno bgp as-path access-list %s\nend\nwrite memory", name)
+	_, err := c.ExecuteVtyshCommand(ctx, command)
+	return err
+}
+
+// DeleteCommunityList deletes a community list from FRR
+func (c *Client) DeleteCommunityList(ctx context.Context, name string) error {
+	command := fmt.Sprintf("configure terminal\nno bgp community-list %s\nend\nwrite memory", name)
+	_, err := c.ExecuteVtyshCommand(ctx, command)
+	return err
+}
+
+// DeleteBGPPeerGroup deletes a BGP peer group from FRR
+func (c *Client) DeleteBGPPeerGroup(ctx context.Context, asNumber int, peerGroupName string) error {
+	command := fmt.Sprintf("configure terminal\nrouter bgp %d\nno neighbor %s peer-group\nend\nwrite memory", asNumber, peerGroupName)
+	_, err := c.ExecuteVtyshCommand(ctx, command)
+	return err
 }

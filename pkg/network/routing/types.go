@@ -115,16 +115,34 @@ type NeighborStatus struct {
 	PrefixesSent    int
 }
 
+// BGPConfederation represents BGP confederation configuration
+type BGPConfederation struct {
+	Identifier      int
+	Members         []int
+	Peers           []int
+}
+
 // BGPConfig represents BGP protocol configuration
 type BGPConfig struct {
-	ASNumber        int
-	RouterID        string
-	Neighbors       []BGPNeighbor
-	AddressFamilies []BGPAddressFamily
-	VRF             string
-	EBGPMultihop    int
-	DeterministicMED bool
-	Multipath       bool
+	ASNumber          int
+	RouterID          string
+	Neighbors         []BGPNeighbor
+	PeerGroups        []BGPPeerGroup
+	AddressFamilies   []BGPAddressFamily
+	RouteMaps         []RouteMap
+	PrefixLists       []PrefixList
+	ASPathLists       []ASPathAccessList
+	CommunityLists    []CommunityList
+	VRF               string
+	EBGPMultihop      int
+	DeterministicMED  bool
+	Multipath         bool
+	ClusterID         string
+	Confederation     BGPConfederation
+	GracefulRestart   bool
+	LogNeighborChanges bool
+	BestpathASPathMultipathRelax bool
+	BestpathCompareRouterid bool
 }
 
 // GetProtocolName implements ProtocolConfig
@@ -134,14 +152,30 @@ func (c BGPConfig) GetProtocolName() string {
 
 // BGPNeighbor represents a BGP neighbor configuration
 type BGPNeighbor struct {
-	Address            string
-	RemoteASNumber     int
-	Description        string
-	KeepaliveInterval  int
-	HoldTime           int
+	Address              string
+	RemoteASNumber       int
+	Description          string
+	KeepaliveInterval    int
+	HoldTime             int
 	ConnectRetryInterval int
-	Authentication     BGPAuthentication
-	BFDEnabled         bool
+	Authentication       BGPAuthentication
+	BFDEnabled           bool
+	PeerGroup            string
+	RouteMapIn           string
+	RouteMapOut          string
+	PrefixListIn         string
+	PrefixListOut        string
+	FilterListIn         string
+	FilterListOut        string
+	MaxPrefixes          int
+	DefaultOriginate     bool
+	NextHopSelf          bool
+	RemovePrivateAS      bool
+	SendCommunity        bool
+	SendExtendedCommunity bool
+	SendLargeCommunity   bool
+	Weight               int
+	AllowASIn            int
 }
 
 // BGPAuthentication represents BGP authentication configuration
@@ -158,16 +192,111 @@ type SecretRef struct {
 
 // BGPAddressFamily represents a BGP address family configuration
 type BGPAddressFamily struct {
-	Type             string // ipv4-unicast, ipv6-unicast, etc.
-	Enabled          bool
-	Redistributions  []Redistribution
-	Networks         []string
+	Type                string // ipv4-unicast, ipv6-unicast, etc.
+	Enabled             bool
+	Redistributions     []Redistribution
+	Networks            []BGPNetwork
+	Aggregates          []BGPAggregate
+	MaximumPaths        int
+	MaximumPathsIBGP    int
+	DistanceExternal    int
+	DistanceInternal    int
+	DistanceLocal       int
 }
 
 // Redistribution represents route redistribution configuration
 type Redistribution struct {
 	Protocol         string
 	RouteMapRef      string
+}
+
+// BGPNetwork represents a network to be advertised in BGP
+type BGPNetwork struct {
+	Prefix           string
+	RouteMap         string
+	Backdoor         bool
+}
+
+// BGPAggregate represents a BGP route aggregate
+type BGPAggregate struct {
+	Prefix           string
+	SummaryOnly      bool
+	AsSet            bool
+	RouteMap         string
+}
+
+// BGPCommunity represents a BGP community
+type BGPCommunity struct {
+	Value            string
+	Type             string // standard, extended, large
+}
+
+// BGPPeerGroup represents a BGP peer group
+type BGPPeerGroup struct {
+	Name                 string
+	RemoteASNumber       int
+	Description          string
+	KeepaliveInterval    int
+	HoldTime             int
+	ConnectRetryInterval int
+	BFDEnabled           bool
+	RouteMapIn           string
+	RouteMapOut          string
+	PrefixListIn         string
+	PrefixListOut        string
+	FilterListIn         string
+	FilterListOut        string
+	MaxPrefixes          int
+	DefaultOriginate     bool
+	NextHopSelf          bool
+	RemovePrivateAS      bool
+	SendCommunity        bool
+	SendExtendedCommunity bool
+	SendLargeCommunity   bool
+	Weight               int
+	AllowASIn            int
+}
+
+// PrefixList represents an IP prefix list for route filtering
+type PrefixList struct {
+	Name             string
+	Description      string
+	Entries          []PrefixListEntry
+	AddressFamily    string // ipv4, ipv6
+}
+
+// PrefixListEntry represents an entry in a prefix list
+type PrefixListEntry struct {
+	Sequence         int
+	Action           string // permit, deny
+	Prefix           string
+	GE               int    // greater than or equal
+	LE               int    // less than or equal
+}
+
+// ASPathAccessList represents an AS path access list
+type ASPathAccessList struct {
+	Name             string
+	Entries          []ASPathEntry
+}
+
+// ASPathEntry represents an entry in an AS path access list
+type ASPathEntry struct {
+	Action           string // permit, deny
+	Regex            string
+}
+
+// CommunityList represents a community list for route filtering
+type CommunityList struct {
+	Name             string
+	Type             string // standard, expanded
+	Entries          []CommunityListEntry
+}
+
+// CommunityListEntry represents an entry in a community list
+type CommunityListEntry struct {
+	Action           string // permit, deny
+	Communities      []string
 }
 
 // OSPFConfig represents OSPF protocol configuration
