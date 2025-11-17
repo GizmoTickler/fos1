@@ -1,4 +1,4 @@
-module github.com/varuntirumala1/fos1
+module github.com/GizmoTickler/fos1
 
 go 1.23.3
 
