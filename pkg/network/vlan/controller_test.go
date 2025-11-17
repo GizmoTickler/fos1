@@ -86,6 +86,12 @@ func (m *MockVLANManager) Unsubscribe(subscriptionID string) {
 
 // createVLANNetworkInterface creates a NetworkInterface CRD for a VLAN
 func createVLANNetworkInterface(name, parent string, vlanID int, addresses []string) *unstructured.Unstructured {
+	// Convert addresses to []interface{} for proper deep copying
+	addrs := make([]interface{}, len(addresses))
+	for i, addr := range addresses {
+		addrs[i] = addr
+	}
+
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "network.fos1.io/v1alpha1",
@@ -94,15 +100,15 @@ func createVLANNetworkInterface(name, parent string, vlanID int, addresses []str
 				"name": name,
 			},
 			"spec": map[string]interface{}{
-				"name":   name,
-				"type":   "vlan",
-				"parent": parent,
-				"vlanId": vlanID,
-				"mtu":    1500,
-				"addresses": addresses,
+				"name":      name,
+				"type":      "vlan",
+				"parent":    parent,
+				"vlanId":    float64(vlanID),
+				"mtu":       float64(1500),
+				"addresses": addrs,
 				"qos": map[string]interface{}{
-					"priority": 3,
-					"dscp":     0,
+					"priority": float64(3),
+					"dscp":     float64(0),
 				},
 			},
 		},

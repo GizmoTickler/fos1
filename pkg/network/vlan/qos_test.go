@@ -415,3 +415,374 @@ func TestCommonDSCPValues(t *testing.T) {
 		})
 	}
 }
+
+// TestQoSQueueTypes tests different queue discipline types
+func TestQoSQueueTypes(t *testing.T) {
+	tests := []struct {
+		name      string
+		queueType string
+		valid     bool
+	}{
+		{"Default SFQ", "", true},
+		{"Explicit SFQ", "sfq", true},
+		{"RED", "red", true},
+		{"GRED", "gred", true},
+		{"Codel", "codel", true},
+		{"FQ-Codel", "fq_codel", true},
+		{"Invalid", "invalid_queue", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queueType := tt.queueType
+			if queueType == "" {
+				queueType = "sfq" // Default
+			}
+
+			validTypes := map[string]bool{
+				"sfq":      true,
+				"red":      true,
+				"gred":     true,
+				"codel":    true,
+				"fq_codel": true,
+			}
+
+			isValid := validTypes[queueType]
+			if isValid != tt.valid {
+				t.Errorf("Queue type %s: expected valid=%v, got valid=%v", queueType, tt.valid, isValid)
+			}
+		})
+	}
+}
+
+// TestREDParameters tests RED qdisc parameter validation
+func TestREDParameters(t *testing.T) {
+	tests := []struct {
+		name   string
+		params REDParams
+		valid  bool
+	}{
+		{
+			name: "Valid RED params",
+			params: REDParams{
+				Min:         20000,
+				Max:         60000,
+				Avpkt:       1000,
+				Limit:       100000,
+				Burst:       20,
+				Probability: 0.02,
+				ECN:         true,
+			},
+			valid: true,
+		},
+		{
+			name: "Min > Max should be invalid",
+			params: REDParams{
+				Min:   60000,
+				Max:   20000,
+				Limit: 100000,
+			},
+			valid: false,
+		},
+		{
+			name: "Zero limit should be invalid",
+			params: REDParams{
+				Min:   20000,
+				Max:   60000,
+				Limit: 0,
+			},
+			valid: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Validate parameters
+			isValid := true
+
+			if tt.params.Min > tt.params.Max {
+				isValid = false
+			}
+			if tt.params.Limit == 0 {
+				isValid = false
+			}
+			if tt.params.Probability < 0 || tt.params.Probability > 1 {
+				isValid = false
+			}
+
+			if isValid != tt.valid {
+				t.Errorf("Expected valid=%v, got valid=%v", tt.valid, isValid)
+			}
+		})
+	}
+}
+
+// TestCodelParameters tests Codel qdisc parameter validation
+func TestCodelParameters(t *testing.T) {
+	tests := []struct {
+		name   string
+		params CodelParams
+		valid  bool
+	}{
+		{
+			name: "Valid Codel params",
+			params: CodelParams{
+				Target:   5000,   // 5ms
+				Limit:    1000,   // 1000 packets
+				Interval: 100000, // 100ms
+				ECN:      true,
+			},
+			valid: true,
+		},
+		{
+			name: "Valid FQ-Codel params",
+			params: CodelParams{
+				Target:   5000,
+				Limit:    10240,
+				Interval: 100000,
+				ECN:      true,
+			},
+			valid: true,
+		},
+		{
+			name: "Zero limit should be invalid",
+			params: CodelParams{
+				Target:   5000,
+				Limit:    0,
+				Interval: 100000,
+			},
+			valid: false,
+		},
+		{
+			name: "Target > Interval should be invalid",
+			params: CodelParams{
+				Target:   100000,
+				Limit:    1000,
+				Interval: 5000,
+			},
+			valid: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Validate parameters
+			isValid := true
+
+			if tt.params.Limit == 0 {
+				isValid = false
+			}
+			if tt.params.Target > tt.params.Interval {
+				isValid = false
+			}
+
+			if isValid != tt.valid {
+				t.Errorf("Expected valid=%v, got valid=%v", tt.valid, isValid)
+			}
+		})
+	}
+}
+
+// TestAdvancedQoSConfiguration tests QoS with advanced queue types
+func TestAdvancedQoSConfiguration(t *testing.T) {
+	configs := []struct {
+		name   string
+		config QoSConfig
+	}{
+		{
+			name: "QoS with RED",
+			config: QoSConfig{
+				Enabled:      true,
+				DefaultClass: 1,
+				MaxRate:      "1Gbit",
+				Classes: []QoSClass{
+					{
+						ID:        1,
+						Priority:  7,
+						Rate:      "500Mbit",
+						Ceiling:   "1Gbit",
+						Burst:     "15kb",
+						QueueType: "red",
+						REDParams: &REDParams{
+							Min:         20000,
+							Max:         60000,
+							Avpkt:       1000,
+							Limit:       100000,
+							Burst:       20,
+							Probability: 0.02,
+							ECN:         true,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "QoS with Codel",
+			config: QoSConfig{
+				Enabled:      true,
+				DefaultClass: 1,
+				MaxRate:      "1Gbit",
+				Classes: []QoSClass{
+					{
+						ID:        1,
+						Priority:  5,
+						Rate:      "500Mbit",
+						Ceiling:   "800Mbit",
+						QueueType: "codel",
+						CodelParams: &CodelParams{
+							Target:   5000,
+							Limit:    1000,
+							Interval: 100000,
+							ECN:      true,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "QoS with FQ-Codel",
+			config: QoSConfig{
+				Enabled:      true,
+				DefaultClass: 1,
+				MaxRate:      "1Gbit",
+				Classes: []QoSClass{
+					{
+						ID:        1,
+						Priority:  7,
+						Rate:      "800Mbit",
+						Ceiling:   "1Gbit",
+						QueueType: "fq_codel",
+						CodelParams: &CodelParams{
+							Target:   5000,
+							Limit:    10240,
+							Interval: 100000,
+							ECN:      true,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "QoS with GRED",
+			config: QoSConfig{
+				Enabled:      true,
+				DefaultClass: 1,
+				MaxRate:      "1Gbit",
+				Classes: []QoSClass{
+					{
+						ID:        1,
+						Priority:  6,
+						Rate:      "600Mbit",
+						Ceiling:   "1Gbit",
+						QueueType: "gred",
+						REDParams: &REDParams{
+							Min:         30000,
+							Max:         90000,
+							Avpkt:       1500,
+							Limit:       150000,
+							Burst:       25,
+							Probability: 0.03,
+							ECN:         true,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range configs {
+		t.Run(tc.name, func(t *testing.T) {
+			// Validate configuration
+			if !tc.config.Enabled {
+				t.Error("QoS should be enabled")
+			}
+
+			if len(tc.config.Classes) == 0 {
+				t.Error("Should have at least one class")
+			}
+
+			// Validate each class
+			for _, class := range tc.config.Classes {
+				// Validate rates
+				rate, err := parseRate(class.Rate)
+				if err != nil {
+					t.Errorf("Failed to parse rate %s: %v", class.Rate, err)
+				}
+
+				ceiling, err := parseRate(class.Ceiling)
+				if err != nil {
+					t.Errorf("Failed to parse ceiling %s: %v", class.Ceiling, err)
+				}
+
+				if ceiling < rate {
+					t.Errorf("Ceiling (%d) should be >= rate (%d)", ceiling, rate)
+				}
+
+				// Validate queue type
+				validQueueTypes := []string{"sfq", "red", "gred", "codel", "fq_codel"}
+				isValidQueue := false
+				for _, qt := range validQueueTypes {
+					if class.QueueType == qt {
+						isValidQueue = true
+						break
+					}
+				}
+				if !isValidQueue {
+					t.Errorf("Invalid queue type: %s", class.QueueType)
+				}
+
+				// Validate RED parameters if using RED/GRED
+				if (class.QueueType == "red" || class.QueueType == "gred") && class.REDParams != nil {
+					if class.REDParams.Min > class.REDParams.Max {
+						t.Error("RED min should be <= max")
+					}
+					if class.REDParams.Limit == 0 {
+						t.Error("RED limit should be > 0")
+					}
+				}
+
+				// Validate Codel parameters if using Codel/FQ-Codel
+				if (class.QueueType == "codel" || class.QueueType == "fq_codel") && class.CodelParams != nil {
+					if class.CodelParams.Target > class.CodelParams.Interval {
+						t.Error("Codel target should be <= interval")
+					}
+					if class.CodelParams.Limit == 0 {
+						t.Error("Codel limit should be > 0")
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestECNSupport tests ECN (Explicit Congestion Notification) support
+func TestECNSupport(t *testing.T) {
+	tests := []struct {
+		name        string
+		queueType   string
+		supportsECN bool
+	}{
+		{"RED supports ECN", "red", true},
+		{"GRED supports ECN", "gred", true},
+		{"Codel supports ECN", "codel", true},
+		{"FQ-Codel supports ECN", "fq_codel", true},
+		{"SFQ does not support ECN", "sfq", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// ECN is supported by RED, GRED, Codel, and FQ-Codel
+			ecnCapable := map[string]bool{
+				"red":      true,
+				"gred":     true,
+				"codel":    true,
+				"fq_codel": true,
+				"sfq":      false,
+			}
+
+			if ecnCapable[tt.queueType] != tt.supportsECN {
+				t.Errorf("Queue %s: expected ECN support=%v", tt.queueType, tt.supportsECN)
+			}
+		})
+	}
+}

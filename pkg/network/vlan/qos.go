@@ -223,22 +223,200 @@ func (q *QoSManager) addQoSClass(linkName string, ifindex int, class QoSClass) e
 		return fmt.Errorf("failed to add HTB class: %w", err)
 	}
 
-	// Add SFQ (Stochastic Fairness Queueing) as leaf qdisc for fairness
-	sfqAttrs := netlink.QdiscAttrs{
-		LinkIndex: ifindex,
-		Handle:    netlink.MakeHandle(uint16(class.ID+10), 0),
-		Parent:    netlink.MakeHandle(1, uint16(class.ID+10)),
+	// Add leaf qdisc based on QueueType (default: SFQ)
+	queueType := class.QueueType
+	if queueType == "" {
+		queueType = "sfq" // Default to SFQ for backward compatibility
 	}
 
-	sfq := &netlink.Sfq{
-		QdiscAttrs: sfqAttrs,
-	}
-	if err := netlink.QdiscAdd(sfq); err != nil {
-		return fmt.Errorf("failed to add SFQ qdisc: %w", err)
+	leafHandle := netlink.MakeHandle(uint16(class.ID+10), 0)
+	parentHandle := netlink.MakeHandle(1, uint16(class.ID+10))
+
+	var leafErr error
+	switch queueType {
+	case "sfq":
+		leafErr = q.addSFQQdisc(ifindex, leafHandle, parentHandle)
+	case "red":
+		leafErr = q.addREDQdisc(ifindex, leafHandle, parentHandle, class.REDParams)
+	case "gred":
+		leafErr = q.addGREDQdisc(ifindex, leafHandle, parentHandle, class.REDParams)
+	case "codel":
+		leafErr = q.addCodelQdisc(ifindex, leafHandle, parentHandle, class.CodelParams)
+	case "fq_codel":
+		leafErr = q.addFQCodelQdisc(ifindex, leafHandle, parentHandle, class.CodelParams)
+	default:
+		return fmt.Errorf("unsupported queue type: %s", queueType)
 	}
 
-	klog.V(4).Infof("Added QoS class %d with rate %d bps, ceiling %d bps, priority %d",
-		class.ID, rateBits, ceilBits, class.Priority)
+	if leafErr != nil {
+		return fmt.Errorf("failed to add %s qdisc: %w", queueType, leafErr)
+	}
+
+	klog.V(4).Infof("Added QoS class %d with rate %d bps, ceiling %d bps, priority %d, queue: %s",
+		class.ID, rateBits, ceilBits, class.Priority, queueType)
+
+	return nil
+}
+
+// ConfigureIngressQoS configures ingress QoS using IFB (Intermediate Functional Block) device
+// IFB allows applying egress QoS to ingress traffic by redirecting to a virtual device
+func (q *QoSManager) ConfigureIngressQoS(linkName string, config QoSConfig) error {
+	if !config.Enabled {
+		return q.RemoveIngressQoS(linkName)
+	}
+
+	klog.Infof("Configuring ingress QoS for interface %s using IFB device", linkName)
+
+	// Get the link
+	link, err := netlink.LinkByName(linkName)
+	if err != nil {
+		return fmt.Errorf("failed to get link %s: %w", linkName, err)
+	}
+
+	ifindex := link.Attrs().Index
+
+	// Create IFB device name based on the interface
+	ifbName := fmt.Sprintf("ifb-%s", linkName)
+	if len(ifbName) > 15 {
+		// Interface names are limited to 15 characters
+		ifbName = fmt.Sprintf("ifb%d", ifindex)
+	}
+
+	// Check if IFB device exists, create if not
+	ifbLink, err := netlink.LinkByName(ifbName)
+	if err != nil {
+		// IFB device doesn't exist, create it
+		klog.V(4).Infof("Creating IFB device %s for ingress QoS", ifbName)
+
+		// First, ensure IFB module is loaded
+		if err := q.ensureIFBModule(); err != nil {
+			return fmt.Errorf("failed to ensure IFB module: %w", err)
+		}
+
+		// Create IFB device
+		ifb := &netlink.Ifb{
+			LinkAttrs: netlink.LinkAttrs{
+				Name: ifbName,
+			},
+		}
+
+		if err := netlink.LinkAdd(ifb); err != nil {
+			return fmt.Errorf("failed to create IFB device %s: %w", ifbName, err)
+		}
+
+		// Get the newly created IFB device
+		ifbLink, err = netlink.LinkByName(ifbName)
+		if err != nil {
+			return fmt.Errorf("failed to get IFB device %s: %w", ifbName, err)
+		}
+	}
+
+	// Bring up the IFB device
+	if err := netlink.LinkSetUp(ifbLink); err != nil {
+		return fmt.Errorf("failed to bring up IFB device %s: %w", ifbName, err)
+	}
+
+	klog.V(4).Infof("IFB device %s is ready", ifbName)
+
+	// Remove existing ingress qdisc on main interface
+	qdiscs, _ := netlink.QdiscList(link)
+	for _, qd := range qdiscs {
+		if qd.Attrs().Parent == netlink.HANDLE_INGRESS {
+			netlink.QdiscDel(qd)
+		}
+	}
+
+	// Add ingress qdisc to the main interface
+	ingressQdisc := &netlink.Ingress{
+		QdiscAttrs: netlink.QdiscAttrs{
+			LinkIndex: ifindex,
+			Handle:    netlink.MakeHandle(0xffff, 0),
+			Parent:    netlink.HANDLE_INGRESS,
+		},
+	}
+
+	if err := netlink.QdiscAdd(ingressQdisc); err != nil {
+		return fmt.Errorf("failed to add ingress qdisc: %w", err)
+	}
+
+	// Add filter to redirect ingress traffic to IFB device
+	// We use tc command for this as netlink filter support is limited
+	cmd := exec.Command("tc", "filter", "add", "dev", linkName,
+		"parent", "ffff:",
+		"protocol", "all",
+		"u32",
+		"match", "u32", "0", "0",
+		"action", "mirred", "egress", "redirect", "dev", ifbName)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add ingress redirect filter: %w, output: %s", err, string(output))
+	}
+
+	klog.V(4).Infof("Added ingress redirect from %s to %s", linkName, ifbName)
+
+	// Now configure egress QoS on the IFB device
+	// This affects the ingress traffic of the original interface
+	if err := q.ConfigureQoS(ifbName, config); err != nil {
+		return fmt.Errorf("failed to configure QoS on IFB device %s: %w", ifbName, err)
+	}
+
+	klog.Infof("Successfully configured ingress QoS for %s via IFB device %s", linkName, ifbName)
+	return nil
+}
+
+// RemoveIngressQoS removes ingress QoS configuration and IFB device
+func (q *QoSManager) RemoveIngressQoS(linkName string) error {
+	link, err := netlink.LinkByName(linkName)
+	if err != nil {
+		return fmt.Errorf("failed to get link %s: %w", linkName, err)
+	}
+
+	ifindex := link.Attrs().Index
+
+	// Calculate IFB device name
+	ifbName := fmt.Sprintf("ifb-%s", linkName)
+	if len(ifbName) > 15 {
+		ifbName = fmt.Sprintf("ifb%d", ifindex)
+	}
+
+	// Remove ingress qdisc (this also removes filters)
+	qdiscs, _ := netlink.QdiscList(link)
+	for _, qd := range qdiscs {
+		if qd.Attrs().Parent == netlink.HANDLE_INGRESS {
+			if err := netlink.QdiscDel(qd); err != nil {
+				klog.V(4).Infof("Failed to delete ingress qdisc on %s: %v", linkName, err)
+			}
+		}
+	}
+
+	// Delete IFB device if it exists
+	ifbLink, err := netlink.LinkByName(ifbName)
+	if err == nil {
+		// Remove QoS from IFB device first
+		q.RemoveQoS(ifbName)
+
+		// Delete the IFB device
+		if err := netlink.LinkDel(ifbLink); err != nil {
+			klog.V(4).Infof("Failed to delete IFB device %s: %v", ifbName, err)
+		} else {
+			klog.V(4).Infof("Deleted IFB device %s", ifbName)
+		}
+	}
+
+	klog.V(4).Infof("Removed ingress QoS from interface %s", linkName)
+	return nil
+}
+
+// ensureIFBModule ensures the IFB kernel module is loaded
+func (q *QoSManager) ensureIFBModule() error {
+	// Try to load the IFB module
+	cmd := exec.Command("modprobe", "ifb")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Module might already be loaded, which is fine
+		klog.V(4).Infof("modprobe ifb: %v, output: %s (may already be loaded)", err, string(output))
+	}
 
 	return nil
 }
@@ -507,5 +685,245 @@ func (q *QoSManager) RemoveDSCPMarking(linkName string) error {
 	}
 
 	klog.V(4).Infof("Removed DSCP marking from interface %s", linkName)
+	return nil
+}
+
+// addSFQQdisc adds a Stochastic Fairness Queueing (SFQ) qdisc
+func (q *QoSManager) addSFQQdisc(ifindex int, handle, parent uint32) error {
+	sfqAttrs := netlink.QdiscAttrs{
+		LinkIndex: ifindex,
+		Handle:    handle,
+		Parent:    parent,
+	}
+
+	sfq := &netlink.Sfq{
+		QdiscAttrs: sfqAttrs,
+	}
+
+	if err := netlink.QdiscAdd(sfq); err != nil {
+		return fmt.Errorf("failed to add SFQ qdisc: %w", err)
+	}
+
+	klog.V(4).Infof("Added SFQ qdisc with handle %x:%x", handle>>16, handle&0xffff)
+	return nil
+}
+
+// addREDQdisc adds a Random Early Detection (RED) qdisc
+func (q *QoSManager) addREDQdisc(ifindex int, handle, parent uint32, params *REDParams) error {
+	// Set default RED parameters if not provided
+	if params == nil {
+		params = &REDParams{
+			Min:         20000,  // 20KB
+			Max:         60000,  // 60KB
+			Avpkt:       1000,   // 1KB average packet size
+			Limit:       100000, // 100KB queue limit
+			Burst:       20,     // 20 packet burst
+			Probability: 0.02,   // 2% mark probability
+			ECN:         true,   // Enable ECN by default
+			Adaptive:    false,
+		}
+	}
+
+	// Use tc command for RED as netlink has limited support
+	link, err := netlink.LinkByIndex(ifindex)
+	if err != nil {
+		return fmt.Errorf("failed to get link by index %d: %w", ifindex, err)
+	}
+
+	args := []string{"qdisc", "add", "dev", link.Attrs().Name,
+		"parent", fmt.Sprintf("%x:%x", parent>>16, parent&0xffff),
+		"handle", fmt.Sprintf("%x:", handle>>16),
+		"red",
+		"limit", fmt.Sprintf("%d", params.Limit),
+		"min", fmt.Sprintf("%d", params.Min),
+		"max", fmt.Sprintf("%d", params.Max),
+		"avpkt", fmt.Sprintf("%d", params.Avpkt),
+		"burst", fmt.Sprintf("%d", params.Burst),
+		"probability", fmt.Sprintf("%f", params.Probability),
+	}
+
+	if params.ECN {
+		args = append(args, "ecn")
+	}
+
+	if params.Adaptive {
+		args = append(args, "adaptive")
+	}
+
+	cmd := exec.Command("tc", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add RED qdisc: %w, output: %s", err, string(output))
+	}
+
+	klog.V(4).Infof("Added RED qdisc with min=%d, max=%d, limit=%d, ecn=%v",
+		params.Min, params.Max, params.Limit, params.ECN)
+	return nil
+}
+
+// addGREDQdisc adds a Generalized Random Early Detection (GRED) qdisc
+// GRED provides multiple RED queues for different traffic classes
+func (q *QoSManager) addGREDQdisc(ifindex int, handle, parent uint32, params *REDParams) error {
+	// Note: vishvananda/netlink has limited GRED support
+	// We'll use tc command for full GRED functionality
+
+	// Set default GRED parameters if not provided
+	if params == nil {
+		params = &REDParams{
+			Min:         20000,
+			Max:         60000,
+			Avpkt:       1000,
+			Limit:       100000,
+			Burst:       20,
+			Probability: 0.02,
+			ECN:         true,
+			Adaptive:    false,
+		}
+	}
+
+	// Use tc command to add GRED qdisc
+	// GRED requires DPs (Drop Priorities) configuration
+	// We'll configure it with 8 DPs for 8 priority levels
+	cmd := exec.Command("tc", "qdisc", "add", "dev", fmt.Sprintf("ifindex_%d", ifindex),
+		"parent", fmt.Sprintf("%x:%x", parent>>16, parent&0xffff),
+		"handle", fmt.Sprintf("%x:", handle>>16),
+		"gred", "setup", "DPs", "8", "default", "0")
+
+	// Note: We need to find the interface name from ifindex
+	// For now, we'll use netlink.LinkByIndex
+	link, err := netlink.LinkByIndex(ifindex)
+	if err != nil {
+		return fmt.Errorf("failed to get link by index %d: %w", ifindex, err)
+	}
+
+	cmd = exec.Command("tc", "qdisc", "add", "dev", link.Attrs().Name,
+		"parent", fmt.Sprintf("%x:%x", parent>>16, parent&0xffff),
+		"handle", fmt.Sprintf("%x:", handle>>16),
+		"gred", "setup", "DPs", "8", "default", "0")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add GRED qdisc: %w, output: %s", err, string(output))
+	}
+
+	// Configure each DP with RED parameters
+	for dp := 0; dp < 8; dp++ {
+		cmd = exec.Command("tc", "qdisc", "change", "dev", link.Attrs().Name,
+			"handle", fmt.Sprintf("%x:", handle>>16),
+			"gred",
+			"limit", fmt.Sprintf("%d", params.Limit),
+			"min", fmt.Sprintf("%d", params.Min),
+			"max", fmt.Sprintf("%d", params.Max),
+			"avpkt", fmt.Sprintf("%d", params.Avpkt),
+			"burst", fmt.Sprintf("%d", params.Burst),
+			"probability", fmt.Sprintf("%f", params.Probability),
+			"DP", fmt.Sprintf("%d", dp),
+			"prio", fmt.Sprintf("%d", dp))
+
+		if params.ECN {
+			cmd.Args = append(cmd.Args, "ecn")
+		}
+
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			klog.Warningf("Failed to configure GRED DP %d: %v, output: %s", dp, err, string(output))
+		}
+	}
+
+	klog.V(4).Infof("Added GRED qdisc with 8 DPs, min=%d, max=%d, ecn=%v",
+		params.Min, params.Max, params.ECN)
+	return nil
+}
+
+// addCodelQdisc adds a Controlled Delay (Codel) qdisc
+func (q *QoSManager) addCodelQdisc(ifindex int, handle, parent uint32, params *CodelParams) error {
+	// Set default Codel parameters if not provided
+	if params == nil {
+		params = &CodelParams{
+			Target:   5000,   // 5ms target delay
+			Limit:    1000,   // 1000 packet limit
+			Interval: 100000, // 100ms interval
+			ECN:      true,   // Enable ECN by default
+		}
+	}
+
+	// Use tc command as netlink doesn't have full Codel support
+	link, err := netlink.LinkByIndex(ifindex)
+	if err != nil {
+		return fmt.Errorf("failed to get link by index %d: %w", ifindex, err)
+	}
+
+	args := []string{"qdisc", "add", "dev", link.Attrs().Name,
+		"parent", fmt.Sprintf("%x:%x", parent>>16, parent&0xffff),
+		"handle", fmt.Sprintf("%x:", handle>>16),
+		"codel",
+		"target", fmt.Sprintf("%dus", params.Target),
+		"limit", fmt.Sprintf("%d", params.Limit),
+		"interval", fmt.Sprintf("%dus", params.Interval),
+	}
+
+	if params.ECN {
+		args = append(args, "ecn")
+	}
+
+	if params.CE > 0 {
+		args = append(args, "ce_threshold", fmt.Sprintf("%dus", params.CE))
+	}
+
+	cmd := exec.Command("tc", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add Codel qdisc: %w, output: %s", err, string(output))
+	}
+
+	klog.V(4).Infof("Added Codel qdisc with target=%dus, limit=%d, interval=%dus, ecn=%v",
+		params.Target, params.Limit, params.Interval, params.ECN)
+	return nil
+}
+
+// addFQCodelQdisc adds a Fair Queue Controlled Delay (FQ-Codel) qdisc
+// FQ-Codel combines Fair Queueing with Codel AQM for improved performance
+func (q *QoSManager) addFQCodelQdisc(ifindex int, handle, parent uint32, params *CodelParams) error {
+	// Set default FQ-Codel parameters if not provided
+	if params == nil {
+		params = &CodelParams{
+			Target:   5000,   // 5ms target delay
+			Limit:    10240,  // 10240 packet limit (typical for FQ-Codel)
+			Interval: 100000, // 100ms interval
+			ECN:      true,
+		}
+	}
+
+	// Use tc command for FQ-Codel
+	link, err := netlink.LinkByIndex(ifindex)
+	if err != nil {
+		return fmt.Errorf("failed to get link by index %d: %w", ifindex, err)
+	}
+
+	args := []string{"qdisc", "add", "dev", link.Attrs().Name,
+		"parent", fmt.Sprintf("%x:%x", parent>>16, parent&0xffff),
+		"handle", fmt.Sprintf("%x:", handle>>16),
+		"fq_codel",
+		"target", fmt.Sprintf("%dus", params.Target),
+		"limit", fmt.Sprintf("%d", params.Limit),
+		"interval", fmt.Sprintf("%dus", params.Interval),
+	}
+
+	if params.ECN {
+		args = append(args, "ecn")
+	}
+
+	if params.CE > 0 {
+		args = append(args, "ce_threshold", fmt.Sprintf("%dus", params.CE))
+	}
+
+	cmd := exec.Command("tc", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add FQ-Codel qdisc: %w, output: %s", err, string(output))
+	}
+
+	klog.V(4).Infof("Added FQ-Codel qdisc with target=%dus, limit=%d, interval=%dus, ecn=%v",
+		params.Target, params.Limit, params.Interval, params.ECN)
 	return nil
 }

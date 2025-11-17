@@ -186,10 +186,13 @@ func (m *VLANManagerImpl) CreateVLAN(parent string, vlanID int, name string, con
 		}
 	}
 
-	// Note: Ingress QoS typically requires different mechanisms (e.g., IFB devices, police)
-	// For now, we focus on egress QoS which is more commonly used
+	// Configure ingress QoS if specified (using IFB device)
 	if config.Ingress.Enabled {
-		klog.Infof("Ingress QoS requested for VLAN interface %s (not yet fully implemented)", name)
+		klog.Infof("Configuring ingress QoS for VLAN interface %s", name)
+
+		if err := m.qosManager.ConfigureIngressQoS(name, config.Ingress); err != nil {
+			klog.Warningf("Failed to configure ingress QoS for VLAN interface %s: %v", name, err)
+		}
 	}
 
 	// Set DSCP marking if specified
@@ -477,6 +480,30 @@ func (m *VLANManagerImpl) UpdateVLAN(name string, config VLANConfig) (*VLANInter
 
 		if err := m.qosManager.ConfigureQoS(name, config.Egress); err != nil {
 			klog.Warningf("Failed to update egress QoS for VLAN interface %s: %v", name, err)
+		}
+	}
+
+	// Update ingress QoS if changed
+	if config.Ingress.Enabled != oldConfig.Ingress.Enabled {
+		if config.Ingress.Enabled {
+			klog.Infof("Enabling ingress QoS for VLAN interface %s", name)
+
+			if err := m.qosManager.ConfigureIngressQoS(name, config.Ingress); err != nil {
+				klog.Warningf("Failed to configure ingress QoS for VLAN interface %s: %v", name, err)
+			}
+		} else {
+			klog.Infof("Disabling ingress QoS for VLAN interface %s", name)
+
+			if err := m.qosManager.RemoveIngressQoS(name); err != nil {
+				klog.Warningf("Failed to remove ingress QoS for VLAN interface %s: %v", name, err)
+			}
+		}
+	} else if config.Ingress.Enabled {
+		// Ingress QoS is enabled, but configuration may have changed
+		klog.Infof("Updating ingress QoS configuration for VLAN interface %s", name)
+
+		if err := m.qosManager.ConfigureIngressQoS(name, config.Ingress); err != nil {
+			klog.Warningf("Failed to update ingress QoS for VLAN interface %s: %v", name, err)
 		}
 	}
 

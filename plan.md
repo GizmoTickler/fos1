@@ -146,7 +146,9 @@ This document provides a **comprehensive implementation roadmap** to transform t
 **Features Implemented:**
 - **802.1p VLAN Priority**: Egress QoS mapping via `ip link` commands (priority 0-7)
 - **Traffic Control (TC)**: HTB qdisc with rate limiting, ceiling, and burst control
-- **QoS Classes**: Multiple classes with SFQ leaf qdiscs for fairness
+- **QoS Classes**: Multiple classes with configurable leaf qdiscs (SFQ/RED/GRED/Codel/FQ-Codel)
+- **Advanced Queue Disciplines**: RED, GRED, Codel, FQ-Codel with ECN support
+- **Ingress QoS**: IFB device-based ingress traffic shaping
 - **DSCP Marking**: TC u32 filters with skbedit action for both IPv4 and IPv6
 - **Statistics Collection**: Real-time stats from netlink and /sys/class/net/
 - **Rate Parsing**: Support for Gbit, Mbit, Kbit rate strings
@@ -183,10 +185,30 @@ This document provides a **comprehensive implementation roadmap** to transform t
 **Completed:** 2025-11-17
 **Actual Effort:** 1 day
 
-**Follow-up Tasks:**
-- Consider implementing ingress QoS using IFB (Intermediate Functional Block) devices
-- Add integration tests with real network interfaces (requires privileged environment)
-- Consider implementing more advanced TC features (RED, GRED, Codel)
+**Follow-up Tasks:** ✅ All Complete
+- [x] **Ingress QoS with IFB Devices** - Implemented IFB device creation, ingress qdisc, traffic redirection, and automatic kernel module loading
+- [x] **Integration Tests** - Added 6 comprehensive integration tests requiring root privileges (VLAN creation, QoS, statistics, DSCP, trunk, ingress QoS)
+- [x] **Advanced TC Features** - Implemented RED, GRED, Codel, and FQ-Codel queueing disciplines with full parameter support and ECN capability
+
+**Advanced QoS Features Added (Follow-up):**
+- **IFB Devices**: Ingress traffic shaping by redirecting to virtual IFB interface
+- **RED (Random Early Detection)**: Congestion avoidance with adaptive mode and ECN support
+- **GRED (Generalized RED)**: Multi-class RED with 8 Drop Priorities for DiffServ
+- **Codel**: Controlled Delay AQM algorithm with target/interval parameters
+- **FQ-Codel**: Fair Queue + Codel for improved performance under load
+- **Queue Type Selection**: Per-class queue discipline selection (SFQ/RED/GRED/Codel/FQ-Codel)
+- **ECN Support**: Explicit Congestion Notification for RED/GRED/Codel/FQ-Codel
+- **Integration Tests**: Real kernel verification with dummy interfaces (requires root)
+
+**Additional Files Created/Modified (Follow-up):**
+- `pkg/network/vlan/qos.go` - Added RED/GRED/Codel/FQ-Codel implementations, IFB support
+- `pkg/network/vlan/types.go` - Added QueueType, REDParams, CodelParams structures
+- `pkg/network/vlan/integration_test.go` - 6 integration tests (510+ lines)
+- `pkg/network/vlan/qos_test.go` - Added 5 advanced TC test suites (370+ additional lines)
+- `pkg/network/vlan/controller_test.go` - Fixed deep copy issues for unstructured objects
+
+**Follow-up Completed:** 2025-11-17
+**Follow-up Effort:** 2 hours
 
 ---
 
