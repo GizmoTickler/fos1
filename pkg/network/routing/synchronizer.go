@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -200,30 +199,43 @@ func routesEqual(a, b *Route) bool {
 	if a.Destination != b.Destination {
 		return false
 	}
-	
-	if a.NextHop != b.NextHop {
+
+	// Compare next hops
+	if len(a.NextHops) != len(b.NextHops) {
 		return false
 	}
-	
+
+	for i := range a.NextHops {
+		if a.NextHops[i].Address != b.NextHops[i].Address {
+			return false
+		}
+		if a.NextHops[i].Interface != b.NextHops[i].Interface {
+			return false
+		}
+		if a.NextHops[i].Weight != b.NextHops[i].Weight {
+			return false
+		}
+	}
+
 	if a.Metric != b.Metric {
 		return false
 	}
-	
+
 	if a.Protocol != b.Protocol {
 		return false
 	}
-	
+
 	if a.Preference != b.Preference {
 		return false
 	}
-	
+
 	if a.Table != b.Table {
 		return false
 	}
-	
+
 	if a.VRF != b.VRF {
 		return false
 	}
-	
+
 	return true
 }

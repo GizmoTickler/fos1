@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -8,55 +9,89 @@ import (
 
 // routeManager implements the RouteManager interface
 type routeManager struct {
-	mutex   sync.RWMutex
-	routes  map[string]map[string]*Route // table -> destination -> route
-	
-	// Would normally have actual routing configuration dependencies here
-	// netlink library, FRRouting client, etc.
+	mutex         sync.RWMutex
+	routes        map[string]map[string]*Route // table -> destination -> route (cache)
+	kernelManager *KernelRouteManager
+	ctx           context.Context
 }
 
 // NewRouteManager creates a new instance of the route manager
 func NewRouteManager() RouteManager {
 	return &routeManager{
-		routes: make(map[string]map[string]*Route),
+		routes:        make(map[string]map[string]*Route),
+		kernelManager: NewKernelRouteManager(),
+		ctx:           context.Background(),
 	}
+}
+
+// NewRouteManagerWithContext creates a new instance of the route manager with a context
+func NewRouteManagerWithContext(ctx context.Context) (RouteManager, error) {
+	kernelManager := NewKernelRouteManager()
+
+	// Start the kernel manager to monitor route changes
+	if err := kernelManager.Start(ctx); err != nil {
+		return nil, fmt.Errorf("failed to start kernel route manager: %w", err)
+	}
+
+	return &routeManager{
+		routes:        make(map[string]map[string]*Route),
+		kernelManager: kernelManager,
+		ctx:           ctx,
+	}, nil
 }
 
 // AddRoute adds a new route
 func (m *routeManager) AddRoute(route Route) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
+	// Validate the route
+	if err := m.validateRoute(route); err != nil {
+		return fmt.Errorf("invalid route: %w", err)
+	}
+
 	// Create table if it doesn't exist
 	tableName := route.Table
 	if tableName == "" {
 		tableName = "main"
 	}
-	
+
 	if _, exists := m.routes[tableName]; !exists {
 		m.routes[tableName] = make(map[string]*Route)
 	}
-	
-	// Check if route already exists
-	if _, exists := m.routes[tableName][route.Destination]; exists {
-		return fmt.Errorf("route to %s already exists in table %s", route.Destination, tableName)
+
+	// Add the route to the kernel routing table
+	if err := m.kernelManager.AddRoute(route); err != nil {
+		return fmt.Errorf("failed to add route to kernel: %w", err)
 	}
-	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Validate the route
-	// 2. Add the route to the kernel routing table
-	// 3. If in a VRF, add to the VRF's routing table
-	// 4. Synchronize with Cilium
-	
+
 	// Clone the route to avoid external modification
 	newRoute := route
-	newRoute.InstalledIn = []string{"kernel"} // Would actually check
+	newRoute.InstalledIn = []string{"kernel"}
 	newRoute.LastUpdated = time.Now()
-	
-	// Store the route
+
+	// Store the route in cache
 	m.routes[tableName][route.Destination] = &newRoute
-	
+
+	return nil
+}
+
+// validateRoute validates a route before adding it
+func (m *routeManager) validateRoute(route Route) error {
+	if route.Destination == "" {
+		return fmt.Errorf("destination is required")
+	}
+
+	if len(route.NextHops) == 0 {
+		return fmt.Errorf("at least one next hop is required")
+	}
+
+	for i, nextHop := range route.NextHops {
+		if nextHop.Address == "" && nextHop.Interface == "" {
+			return fmt.Errorf("next hop %d must have either an address or interface", i)
+		}
+	}
+
 	return nil
 }
 
@@ -64,32 +99,23 @@ func (m *routeManager) AddRoute(route Route) error {
 func (m *routeManager) DeleteRoute(destination string, routeParams RouteParams) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
 	// Determine table
 	tableName := routeParams.Table
 	if tableName == "" {
 		tableName = "main"
 	}
-	
-	// Check if table exists
-	if _, exists := m.routes[tableName]; !exists {
-		return fmt.Errorf("routing table %s does not exist", tableName)
+
+	// Remove the route from the kernel routing table
+	if err := m.kernelManager.DeleteRoute(destination, routeParams); err != nil {
+		return fmt.Errorf("failed to delete route from kernel: %w", err)
 	}
-	
-	// Check if route exists
-	if _, exists := m.routes[tableName][destination]; !exists {
-		return fmt.Errorf("route to %s does not exist in table %s", destination, tableName)
+
+	// Remove the route from cache if it exists
+	if table, exists := m.routes[tableName]; exists {
+		delete(table, destination)
 	}
-	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Remove the route from the kernel routing table
-	// 2. If in a VRF, remove from the VRF's routing table
-	// 3. Synchronize with Cilium
-	
-	// Remove the route
-	delete(m.routes[tableName], destination)
-	
+
 	return nil
 }
 
@@ -97,154 +123,67 @@ func (m *routeManager) DeleteRoute(destination string, routeParams RouteParams) 
 func (m *routeManager) GetRoute(destination string, routeParams RouteParams) (*Route, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	
-	// Determine table
-	tableName := routeParams.Table
-	if tableName == "" {
-		tableName = "main"
+
+	// Get route from kernel
+	route, err := m.kernelManager.GetRoute(destination, routeParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get route from kernel: %w", err)
 	}
-	
-	// Check if table exists
-	if _, exists := m.routes[tableName]; !exists {
-		return nil, fmt.Errorf("routing table %s does not exist", tableName)
-	}
-	
-	// Check if route exists
-	route, exists := m.routes[tableName][destination]
-	if !exists {
-		return nil, fmt.Errorf("route to %s does not exist in table %s", destination, tableName)
-	}
-	
-	// Clone the route to avoid external modification
-	result := *route
-	
-	return &result, nil
+
+	return route, nil
 }
 
 // ListRoutes lists all routes, optionally filtered
 func (m *routeManager) ListRoutes(filter RouteFilter) ([]*Route, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	
-	var routes []*Route
-	
-	// Determine if we're filtering by table
-	tableFilter := filter.Table
-	if tableFilter == "" {
-		// No table filter, search all tables
-		for _, table := range m.routes {
-			for _, route := range table {
-				if m.routeMatchesFilter(route, filter) {
-					// Clone the route to avoid external modification
-					result := *route
-					routes = append(routes, &result)
-				}
-			}
-		}
-	} else {
-		// Table filter specified
-		if table, exists := m.routes[tableFilter]; exists {
-			for _, route := range table {
-				if m.routeMatchesFilter(route, filter) {
-					// Clone the route to avoid external modification
-					result := *route
-					routes = append(routes, &result)
-				}
-			}
-		}
+
+	// Get routes from kernel
+	routes, err := m.kernelManager.ListRoutes(filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list routes from kernel: %w", err)
 	}
-	
+
 	return routes, nil
 }
 
-// routeMatchesFilter checks if a route matches the given filter
-func (m *routeManager) routeMatchesFilter(route *Route, filter RouteFilter) bool {
-	// If any filter criteria doesn't match, return false
-	
-	// Destination filter
-	if filter.Destination != "" && route.Destination != filter.Destination {
-		return false
-	}
-	
-	// NextHop filter
-	if filter.NextHop != "" {
-		match := false
-		for _, nextHop := range route.NextHops {
-			if nextHop.Address == filter.NextHop {
-				match = true
-				break
-			}
-		}
-		if !match {
-			return false
-		}
-	}
-	
-	// Protocol filter
-	if filter.Protocol != "" && route.Protocol != filter.Protocol {
-		return false
-	}
-	
-	// VRF filter
-	if filter.VRF != "" && route.VRF != filter.VRF {
-		return false
-	}
-	
-	// Tag filter
-	if filter.Tag != "" {
-		match := false
-		for _, tag := range route.Tags {
-			if tag == filter.Tag {
-				match = true
-				break
-			}
-		}
-		if !match {
-			return false
-		}
-	}
-	
-	// All filters passed
-	return true
-}
 
 // UpdateRoute updates an existing route
 func (m *routeManager) UpdateRoute(destination string, routeParams RouteParams, newRoute Route) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
+	// Validate the new route
+	if err := m.validateRoute(newRoute); err != nil {
+		return fmt.Errorf("invalid route: %w", err)
+	}
+
 	// Determine table
 	tableName := routeParams.Table
 	if tableName == "" {
 		tableName = "main"
 	}
-	
-	// Check if table exists
-	if _, exists := m.routes[tableName]; !exists {
-		return fmt.Errorf("routing table %s does not exist", tableName)
+
+	// Delete the old route from the kernel
+	if err := m.kernelManager.DeleteRoute(destination, routeParams); err != nil {
+		return fmt.Errorf("failed to delete old route from kernel: %w", err)
 	}
-	
-	// Check if route exists
-	_, exists := m.routes[tableName][destination]
-	if !exists {
-		return fmt.Errorf("route to %s does not exist in table %s", destination, tableName)
+
+	// Add the new route to the kernel
+	if err := m.kernelManager.AddRoute(newRoute); err != nil {
+		return fmt.Errorf("failed to add new route to kernel: %w", err)
 	}
-	
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Validate the route
-	// 2. Update the route in the kernel routing table
-	// 3. If in a VRF, update in the VRF's routing table
-	// 4. Synchronize with Cilium
-	
-	// Update the route
+
+	// Update the route in cache
 	updatedRoute := newRoute
-	updatedRoute.InstalledIn = []string{"kernel"} // Would actually check
+	updatedRoute.InstalledIn = []string{"kernel"}
 	updatedRoute.LastUpdated = time.Now()
-	
-	// Store the updated route
+
+	if _, exists := m.routes[tableName]; !exists {
+		m.routes[tableName] = make(map[string]*Route)
+	}
 	m.routes[tableName][destination] = &updatedRoute
-	
+
 	return nil
 }
 
@@ -252,37 +191,17 @@ func (m *routeManager) UpdateRoute(destination string, routeParams RouteParams, 
 func (m *routeManager) GetRoutingTable(tableName string, vrf string) ([]*Route, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	
+
 	// Default to main table if not specified
 	if tableName == "" {
 		tableName = "main"
 	}
-	
-	// Check if table exists
-	table, exists := m.routes[tableName]
-	if !exists {
-		return nil, fmt.Errorf("routing table %s does not exist", tableName)
+
+	// Get routes from kernel
+	routes, err := m.kernelManager.GetRoutingTable(tableName, vrf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get routing table from kernel: %w", err)
 	}
-	
-	var routes []*Route
-	
-	// If VRF is specified, filter by VRF
-	if vrf != "" {
-		for _, route := range table {
-			if route.VRF == vrf {
-				// Clone the route to avoid external modification
-				result := *route
-				routes = append(routes, &result)
-			}
-		}
-	} else {
-		// No VRF filter, return all routes in the table
-		for _, route := range table {
-			// Clone the route to avoid external modification
-			result := *route
-			routes = append(routes, &result)
-		}
-	}
-	
+
 	return routes, nil
 }
