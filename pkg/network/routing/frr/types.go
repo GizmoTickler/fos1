@@ -9,16 +9,116 @@ type BGPNeighbor struct {
 	HoldTime             int
 	ConnectRetryInterval int
 	BFDEnabled           bool
+	PeerGroup            string
 	RouteMapIn           string
 	RouteMapOut          string
+	PrefixListIn         string
+	PrefixListOut        string
+	FilterListIn         string
+	FilterListOut        string
+	MaxPrefixes          int
+	DefaultOriginate     bool
+	NextHopSelf          bool
+	RemovePrivateAS      bool
+	SendCommunity        bool
+	SendExtendedCommunity bool
+	SendLargeCommunity   bool
+	Weight               int
+	AllowASIn            int
 }
 
 // BGPAddressFamily represents a BGP address family configuration for FRR
 type BGPAddressFamily struct {
-	Type           string // ipv4-unicast, ipv6-unicast, etc.
-	Enabled        bool
-	Redistributions []Redistribution
-	Networks       []string
+	Type                string // ipv4-unicast, ipv6-unicast, etc.
+	Enabled             bool
+	Redistributions     []Redistribution
+	Networks            []BGPNetwork
+	Aggregates          []BGPAggregate
+	MaximumPaths        int
+	MaximumPathsIBGP    int
+}
+
+// BGPNetwork represents a network to be advertised in BGP
+type BGPNetwork struct {
+	Prefix      string
+	RouteMap    string
+	Backdoor    bool
+}
+
+// BGPAggregate represents a BGP route aggregate
+type BGPAggregate struct {
+	Prefix      string
+	SummaryOnly bool
+	AsSet       bool
+	RouteMap    string
+}
+
+// BGPPeerGroup represents a BGP peer group
+type BGPPeerGroup struct {
+	Name                 string
+	RemoteASNumber       int
+	Description          string
+	KeepaliveInterval    int
+	HoldTime             int
+	ConnectRetryInterval int
+	BFDEnabled           bool
+	RouteMapIn           string
+	RouteMapOut          string
+	PrefixListIn         string
+	PrefixListOut        string
+	FilterListIn         string
+	FilterListOut        string
+	MaxPrefixes          int
+	DefaultOriginate     bool
+	NextHopSelf          bool
+	RemovePrivateAS      bool
+	SendCommunity        bool
+	SendExtendedCommunity bool
+	SendLargeCommunity   bool
+	Weight               int
+	AllowASIn            int
+}
+
+// PrefixList represents an IP prefix list for route filtering
+type PrefixList struct {
+	Name          string
+	Description   string
+	Entries       []PrefixListEntry
+	AddressFamily string // ipv4, ipv6
+}
+
+// PrefixListEntry represents an entry in a prefix list
+type PrefixListEntry struct {
+	Sequence int
+	Action   string // permit, deny
+	Prefix   string
+	GE       int    // greater than or equal
+	LE       int    // less than or equal
+}
+
+// ASPathAccessList represents an AS path access list
+type ASPathAccessList struct {
+	Name    string
+	Entries []ASPathEntry
+}
+
+// ASPathEntry represents an entry in an AS path access list
+type ASPathEntry struct {
+	Action string // permit, deny
+	Regex  string
+}
+
+// CommunityList represents a community list for route filtering
+type CommunityList struct {
+	Name    string
+	Type    string // standard, expanded
+	Entries []CommunityListEntry
+}
+
+// CommunityListEntry represents an entry in a community list
+type CommunityListEntry struct {
+	Action      string // permit, deny
+	Communities []string
 }
 
 // Redistribution represents route redistribution configuration for FRR
