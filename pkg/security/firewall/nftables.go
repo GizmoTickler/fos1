@@ -485,25 +485,25 @@ func (f *NFTablesFirewall) buildRuleCommand(rule FirewallRule) ([]string, error)
 
 // FirewallRule represents a firewall rule
 type FirewallRule struct {
-	Name              string
-	Description       string
-	Enabled           bool
-	Action            string // accept, drop, reject, log
-	Protocol          string // tcp, udp, icmp, icmpv6, any
-	SourceType        string // interface, zone, network, ipset, any
-	Source            string
-	SourcePort        string
-	DestinationType   string // interface, zone, network, ipset, any
-	Destination       string
-	DestinationPort   string
-	IPVersion         string // ipv4, ipv6, both
-	State             *ConnectionState
-	Application       string // DPI-based application match
+	Name                string
+	Description         string
+	Enabled             bool
+	Action              string // accept, drop, reject, log
+	Protocol            string // tcp, udp, icmp, icmpv6, any
+	SourceType          string // interface, zone, network, ipset, any
+	Source              string
+	SourcePort          string
+	DestinationType     string // interface, zone, network, ipset, any
+	Destination         string
+	DestinationPort     string
+	IPVersion           string // ipv4, ipv6, both
+	State               *ConnectionState
+	Application         string // DPI-based application match
 	ApplicationCategory string // DPI-based application category match
-	DSCP              int
-	Logging           bool
-	Priority          int
-	TimeSchedule      string
+	DSCP                int
+	Logging             bool
+	Priority            int
+	TimeSchedule        string
 }
 
 // ConnectionState represents connection tracking states
