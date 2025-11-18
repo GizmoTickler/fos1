@@ -680,3 +680,191 @@ func TestOSPFAuthenticationTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestOSPFInterfaceTimers tests OSPF interface timer configuration
+func TestOSPFInterfaceTimers(t *testing.T) {
+	tests := []struct {
+		name      string
+		intf      routing.OSPFInterface
+		wantHello int
+		wantDead  int
+		wantRetx  int
+		wantDelay int
+	}{
+		{
+			name: "Default timers (zeros)",
+			intf: routing.OSPFInterface{
+				Name: "eth0",
+			},
+			wantHello: 0,
+			wantDead:  0,
+			wantRetx:  0,
+			wantDelay: 0,
+		},
+		{
+			name: "Custom timers",
+			intf: routing.OSPFInterface{
+				Name:               "eth1",
+				HelloInterval:      5,
+				DeadInterval:       20,
+				RetransmitInterval: 3,
+				TransmitDelay:      2,
+			},
+			wantHello: 5,
+			wantDead:  20,
+			wantRetx:  3,
+			wantDelay: 2,
+		},
+		{
+			name: "Fast timers for point-to-point",
+			intf: routing.OSPFInterface{
+				Name:               "tun0",
+				NetworkType:        "point-to-point",
+				HelloInterval:      1,
+				DeadInterval:       3,
+				RetransmitInterval: 1,
+				TransmitDelay:      1,
+			},
+			wantHello: 1,
+			wantDead:  3,
+			wantRetx:  1,
+			wantDelay: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.intf.HelloInterval != tt.wantHello {
+				t.Errorf("HelloInterval = %v, want %v", tt.intf.HelloInterval, tt.wantHello)
+			}
+			if tt.intf.DeadInterval != tt.wantDead {
+				t.Errorf("DeadInterval = %v, want %v", tt.intf.DeadInterval, tt.wantDead)
+			}
+			if tt.intf.RetransmitInterval != tt.wantRetx {
+				t.Errorf("RetransmitInterval = %v, want %v", tt.intf.RetransmitInterval, tt.wantRetx)
+			}
+			if tt.intf.TransmitDelay != tt.wantDelay {
+				t.Errorf("TransmitDelay = %v, want %v", tt.intf.TransmitDelay, tt.wantDelay)
+			}
+		})
+	}
+}
+
+// TestOSPFInterfaceNetwork tests OSPF interface network configuration
+func TestOSPFInterfaceNetwork(t *testing.T) {
+	tests := []struct {
+		name    string
+		network string
+	}{
+		{
+			name:    "IPv4 /24 network",
+			network: "10.0.1.0/24",
+		},
+		{
+			name:    "IPv4 /16 network",
+			network: "172.16.0.0/16",
+		},
+		{
+			name:    "IPv4 /30 point-to-point",
+			network: "192.168.1.0/30",
+		},
+		{
+			name:    "IPv6 network",
+			network: "2001:db8::/64",
+		},
+		{
+			name:    "Empty network",
+			network: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intf := routing.OSPFInterface{
+				Name:    "eth0",
+				Network: tt.network,
+			}
+
+			if intf.Network != tt.network {
+				t.Errorf("Network = %v, want %v", intf.Network, tt.network)
+			}
+		})
+	}
+}
+
+// TestOSPFConversionWithTimersAndNetwork tests conversion with all fields populated
+func TestOSPFConversionWithTimersAndNetwork(t *testing.T) {
+	area := routing.OSPFArea{
+		AreaID: "0.0.0.0",
+		Interfaces: []routing.OSPFInterface{
+			{
+				Name:        "eth0",
+				Network:     "10.0.1.0/24",
+				NetworkType: "broadcast",
+				Priority:    100,
+				Cost:        10,
+				Authentication: routing.OSPFAuthentication{
+					Type:  "md5",
+					Key:   "secret",
+					KeyID: 1,
+				},
+				HelloInterval:      5,
+				DeadInterval:       20,
+				RetransmitInterval: 3,
+				TransmitDelay:      2,
+			},
+		},
+		StubArea: false,
+		NSSAArea: false,
+	}
+
+	result := convertOSPFAreasToFRR([]routing.OSPFArea{area})
+
+	if len(result) != 1 {
+		t.Fatalf("Expected 1 area, got %d", len(result))
+	}
+
+	if len(result[0].Interfaces) != 1 {
+		t.Fatalf("Expected 1 interface, got %d", len(result[0].Interfaces))
+	}
+
+	intf := result[0].Interfaces[0]
+
+	// Verify all fields are correctly converted
+	if intf.Name != "eth0" {
+		t.Errorf("Name = %v, want eth0", intf.Name)
+	}
+	if intf.Network != "10.0.1.0/24" {
+		t.Errorf("Network = %v, want 10.0.1.0/24", intf.Network)
+	}
+	if intf.NetworkType != "broadcast" {
+		t.Errorf("NetworkType = %v, want broadcast", intf.NetworkType)
+	}
+	if intf.Priority != 100 {
+		t.Errorf("Priority = %v, want 100", intf.Priority)
+	}
+	if intf.Cost != 10 {
+		t.Errorf("Cost = %v, want 10", intf.Cost)
+	}
+	if intf.HelloInterval != 5 {
+		t.Errorf("HelloInterval = %v, want 5", intf.HelloInterval)
+	}
+	if intf.DeadInterval != 20 {
+		t.Errorf("DeadInterval = %v, want 20", intf.DeadInterval)
+	}
+	if intf.RetransmitInterval != 3 {
+		t.Errorf("RetransmitInterval = %v, want 3", intf.RetransmitInterval)
+	}
+	if intf.TransmitDelay != 2 {
+		t.Errorf("TransmitDelay = %v, want 2", intf.TransmitDelay)
+	}
+	if intf.Authentication.Type != "md5" {
+		t.Errorf("Authentication.Type = %v, want md5", intf.Authentication.Type)
+	}
+	if intf.Authentication.Key != "secret" {
+		t.Errorf("Authentication.Key = %v, want secret", intf.Authentication.Key)
+	}
+	if intf.Authentication.KeyID != 1 {
+		t.Errorf("Authentication.KeyID = %v, want 1", intf.Authentication.KeyID)
+	}
+}

@@ -1,6 +1,7 @@
 package protocols
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -159,7 +160,55 @@ func (m *Manager) UpdateProtocolConfig(protocolName string, config routing.Proto
 
 // GetProtocolRoutes retrieves routes learned via a specific protocol
 func (m *Manager) GetProtocolRoutes(protocolName string) ([]*routing.Route, error) {
-	// This would typically query the routing table for routes with the specified protocol
-	// For now, return an error indicating this is not yet implemented
-	return nil, fmt.Errorf("GetProtocolRoutes not yet implemented for protocol: %s", protocolName)
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	// Check if the protocol is running
+	if _, exists := m.handlers[protocolName]; !exists {
+		return nil, fmt.Errorf("protocol not running: %s", protocolName)
+	}
+
+	// Query FRR for routes from this protocol
+	ctx := context.Background()
+	output, err := m.frrClient.GetRoutesByProtocol(ctx, protocolName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get routes for protocol %s: %w", protocolName, err)
+	}
+
+	// Parse the routing table output
+	frrRoutes, err := m.frrClient.ParseRoutingTable(output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse routing table: %w", err)
+	}
+
+	// Convert FRR routes to routing.Route format
+	routes := make([]*routing.Route, 0, len(frrRoutes))
+	for _, frrRoute := range frrRoutes {
+		// Only include routes from the requested protocol
+		if frrRoute.Protocol != protocolName {
+			continue
+		}
+
+		// Create next hop
+		nextHop := routing.NextHop{
+			Address:   frrRoute.NextHop,
+			Interface: frrRoute.Interface,
+			Weight:    1, // FRR doesn't provide weight in show output
+		}
+
+		route := &routing.Route{
+			Destination: frrRoute.Prefix,
+			NextHops:    []routing.NextHop{nextHop},
+			Metric:      frrRoute.Metric,
+			Preference:  frrRoute.Distance,
+			Protocol:    frrRoute.Protocol,
+			Scope:       "global",
+			VRF:         "main",
+			Table:       "main",
+		}
+
+		routes = append(routes, route)
+	}
+
+	return routes, nil
 }
