@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/varuntirumala1/fos1/pkg/cilium"
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 )
 
 // ZeekConnector integrates Zeek with Cilium and implements the ZeekConnectorInterface

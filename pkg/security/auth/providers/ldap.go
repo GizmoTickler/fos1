@@ -11,7 +11,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/security/auth"
+	"github.com/GizmoTickler/fos1/pkg/security/auth"
 )
 
 // LDAPProvider implements the auth.Provider interface for LDAP authentication

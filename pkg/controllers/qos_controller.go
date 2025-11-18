@@ -15,8 +15,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/security/qos"
-	"github.com/varuntirumala1/fos1/pkg/traffic"
+	"github.com/GizmoTickler/fos1/pkg/security/qos"
+	"github.com/GizmoTickler/fos1/pkg/traffic"
 )
 
 const (

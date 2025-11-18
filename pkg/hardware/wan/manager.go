@@ -14,7 +14,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
-	"github.com/varuntirumala1/fos1/pkg/hardware/types"
+	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
 // Manager implements the types.WANManager interface.

@@ -2,7 +2,7 @@
 package ebpf
 
 import (
-	"github.com/varuntirumala1/fos1/pkg/hardware/types"
+	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
 // NewEBPFManager creates a new eBPF Manager.

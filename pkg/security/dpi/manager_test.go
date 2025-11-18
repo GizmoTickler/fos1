@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varuntirumala1/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
 )
 
 // MockCiliumClient is a mock implementation of the CiliumClient interface

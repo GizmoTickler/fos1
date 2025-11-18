@@ -8,8 +8,8 @@ import (
 	"time"
 
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	"github.com/varuntirumala1/fos1/pkg/cilium"
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"

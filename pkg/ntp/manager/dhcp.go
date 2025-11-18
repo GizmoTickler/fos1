@@ -9,8 +9,8 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
-	"github.com/varuntirumala1/fos1/pkg/ntp"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
+	"github.com/GizmoTickler/fos1/pkg/ntp"
 )
 
 // DHCPIntegration handles the integration between NTP and DHCP

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/varuntirumala1/fos1/pkg/dhcp/controller"
-	"github.com/varuntirumala1/fos1/pkg/dhcp/types"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/controller"
+	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
 )
 
 // MockDNSManager is a mock for the DNS manager

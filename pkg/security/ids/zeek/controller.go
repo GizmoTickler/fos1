@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	securityv1alpha1 "github.com/varuntirumala1/fos1/pkg/apis/security/v1alpha1"
+	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
 )
 
 // ZeekController reconciles ZeekInstance objects

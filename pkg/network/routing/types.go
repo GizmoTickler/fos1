@@ -98,12 +98,13 @@ type ProtocolConfig interface {
 
 // ProtocolStatus represents the status of a routing protocol
 type ProtocolStatus struct {
-	Name            string
-	State           string
-	Uptime          time.Duration
+	Name             string
+	State            string
+	Uptime           time.Duration
+	StartTime        time.Time
 	PrefixesReceived int
-	PrefixesSent    int
-	Neighbors       []NeighborStatus
+	PrefixesSent     int
+	Neighbors        []NeighborStatus
 }
 
 // NeighborStatus represents the status of a routing protocol neighbor
@@ -323,11 +324,16 @@ type OSPFArea struct {
 
 // OSPFInterface represents an OSPF interface configuration
 type OSPFInterface struct {
-	Name             string
-	NetworkType      string // broadcast, point-to-point, etc.
-	Priority         int
-	Cost             int
-	Authentication   OSPFAuthentication
+	Name               string
+	Network            string // CIDR network for this interface (e.g., "10.0.1.0/24")
+	NetworkType        string // broadcast, point-to-point, point-to-multipoint, non-broadcast
+	Priority           int
+	Cost               int
+	Authentication     OSPFAuthentication
+	HelloInterval      int // Hello packet interval in seconds (default: 10)
+	DeadInterval       int // Router dead interval in seconds (default: 40)
+	RetransmitInterval int // LSA retransmit interval in seconds (default: 5)
+	TransmitDelay      int // LSA transmit delay in seconds (default: 1)
 }
 
 // OSPFAuthentication represents OSPF authentication configuration

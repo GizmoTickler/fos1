@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/varuntirumala1/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
 )
 
 // SuricataConnector integrates Suricata with Cilium

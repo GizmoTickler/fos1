@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varuntirumala1/fos1/pkg/dns/adguard"
-	"github.com/varuntirumala1/fos1/pkg/dns/coredns"
-	"github.com/varuntirumala1/fos1/pkg/dns/mdns"
+	"github.com/GizmoTickler/fos1/pkg/dns/adguard"
+	"github.com/GizmoTickler/fos1/pkg/dns/coredns"
+	"github.com/GizmoTickler/fos1/pkg/dns/mdns"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )

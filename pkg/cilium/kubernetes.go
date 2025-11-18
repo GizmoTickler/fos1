@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/varuntirumala1/fos1/pkg/kubernetes"
+	"github.com/GizmoTickler/fos1/pkg/kubernetes"
 )
 
 // KubernetesCiliumClient implements the CiliumClient interface using Kubernetes

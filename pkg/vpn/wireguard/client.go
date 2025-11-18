@@ -9,7 +9,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/vpn"
+	"github.com/GizmoTickler/fos1/pkg/vpn"
 )
 
 // Client implements the vpn.WireGuardClient interface

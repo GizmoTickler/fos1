@@ -291,6 +291,11 @@ func (c *Client) ConfigureBGP(ctx context.Context, asNumber int, routerID string
 
 // ConfigureOSPF configures OSPF
 func (c *Client) ConfigureOSPF(ctx context.Context, routerID string, areas []OSPFArea, redistributions []Redistribution) error {
+	return c.ConfigureOSPFWithParams(ctx, routerID, areas, redistributions, 0)
+}
+
+// ConfigureOSPFWithParams configures OSPF with additional parameters
+func (c *Client) ConfigureOSPFWithParams(ctx context.Context, routerID string, areas []OSPFArea, redistributions []Redistribution, referenceBandwidth int) error {
 	var commands strings.Builder
 
 	// Start configuration
@@ -299,6 +304,11 @@ func (c *Client) ConfigureOSPF(ctx context.Context, routerID string, areas []OSP
 	// Configure OSPF router
 	commands.WriteString("router ospf\n")
 	commands.WriteString(fmt.Sprintf("ospf router-id %s\n", routerID))
+
+	// Set reference bandwidth if specified
+	if referenceBandwidth > 0 {
+		commands.WriteString(fmt.Sprintf("auto-cost reference-bandwidth %d\n", referenceBandwidth))
+	}
 
 	// Configure areas
 	for _, area := range areas {
@@ -317,15 +327,78 @@ func (c *Client) ConfigureOSPF(ctx context.Context, routerID string, areas []OSP
 		if area.NSSAArea {
 			commands.WriteString(fmt.Sprintf("area %s nssa\n", area.AreaID))
 		}
+
+		// Configure area authentication if specified on first interface
+		if len(area.Interfaces) > 0 && area.Interfaces[0].Authentication.Type != "" && area.Interfaces[0].Authentication.Type != "none" {
+			if area.Interfaces[0].Authentication.Type == "md5" {
+				commands.WriteString(fmt.Sprintf("area %s authentication message-digest\n", area.AreaID))
+			} else if area.Interfaces[0].Authentication.Type == "simple" {
+				commands.WriteString(fmt.Sprintf("area %s authentication\n", area.AreaID))
+			}
+		}
 	}
 
 	// Configure redistributions
 	for _, redist := range redistributions {
 		if redist.RouteMapRef != "" {
-			commands.WriteString(fmt.Sprintf("redistribute %s route-map %s\n", 
+			commands.WriteString(fmt.Sprintf("redistribute %s route-map %s\n",
 				redist.Protocol, redist.RouteMapRef))
 		} else {
 			commands.WriteString(fmt.Sprintf("redistribute %s\n", redist.Protocol))
+		}
+	}
+
+	// Exit router configuration
+	commands.WriteString("exit\n")
+
+	// Configure interface-specific settings
+	for _, area := range areas {
+		for _, intf := range area.Interfaces {
+			if intf.Name != "" {
+				commands.WriteString(fmt.Sprintf("interface %s\n", intf.Name))
+
+				// Configure cost
+				if intf.Cost > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf cost %d\n", intf.Cost))
+				}
+
+				// Configure priority
+				if intf.Priority > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf priority %d\n", intf.Priority))
+				}
+
+				// Configure network type
+				if intf.NetworkType != "" {
+					commands.WriteString(fmt.Sprintf("ip ospf network %s\n", intf.NetworkType))
+				}
+
+				// Configure authentication
+				if intf.Authentication.Type != "" && intf.Authentication.Type != "none" {
+					if intf.Authentication.Type == "md5" {
+						commands.WriteString(fmt.Sprintf("ip ospf message-digest-key %d md5 %s\n",
+							intf.Authentication.KeyID, intf.Authentication.Key))
+					} else if intf.Authentication.Type == "simple" {
+						commands.WriteString(fmt.Sprintf("ip ospf authentication-key %s\n",
+							intf.Authentication.Key))
+					}
+				}
+
+				// Configure timers
+				if intf.HelloInterval > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf hello-interval %d\n", intf.HelloInterval))
+				}
+				if intf.DeadInterval > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf dead-interval %d\n", intf.DeadInterval))
+				}
+				if intf.RetransmitInterval > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf retransmit-interval %d\n", intf.RetransmitInterval))
+				}
+				if intf.TransmitDelay > 0 {
+					commands.WriteString(fmt.Sprintf("ip ospf transmit-delay %d\n", intf.TransmitDelay))
+				}
+
+				commands.WriteString("exit\n")
+			}
 		}
 	}
 
@@ -378,6 +451,100 @@ func (c *Client) GetRoutes(ctx context.Context) (string, error) {
 	return c.ExecuteVtyshCommand(ctx, "show ip route")
 }
 
+// GetRoutesByProtocol gets routes learned from a specific protocol
+func (c *Client) GetRoutesByProtocol(ctx context.Context, protocol string) (string, error) {
+	return c.ExecuteVtyshCommand(ctx, fmt.Sprintf("show ip route %s", protocol))
+}
+
+// ParseRoutingTable parses the output of "show ip route" commands into Route structures
+func (c *Client) ParseRoutingTable(output string) ([]Route, error) {
+	routes := []Route{}
+	lines := strings.Split(output, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Codes:") || strings.HasPrefix(line, "VRF") {
+			continue
+		}
+
+		// Parse route lines - FRR format: "O>* 10.0.1.0/24 [110/10] via 192.168.1.1, eth0, 00:05:23"
+		// or simpler: "O   10.0.2.0/24 [110/20] via 192.168.1.2, eth1"
+
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+
+		// First field contains protocol code and flags
+		protocolField := fields[0]
+		if len(protocolField) == 0 {
+			continue
+		}
+
+		// Extract protocol from first character
+		protocol := ""
+		switch protocolField[0] {
+		case 'O':
+			protocol = "ospf"
+		case 'B':
+			protocol = "bgp"
+		case 'C':
+			protocol = "connected"
+		case 'S':
+			protocol = "static"
+		case 'K':
+			protocol = "kernel"
+		default:
+			continue // Skip unknown protocols
+		}
+
+		// Check if route is selected (contains '>')
+		selected := strings.Contains(protocolField, ">")
+		fibInstalled := strings.Contains(protocolField, "*")
+
+		// Second field is the destination prefix
+		if len(fields) < 2 {
+			continue
+		}
+		prefix := fields[1]
+
+		// Parse metric and distance from [distance/metric] format
+		var distance, metric int
+		if len(fields) >= 3 && strings.HasPrefix(fields[2], "[") {
+			metricStr := strings.Trim(fields[2], "[]")
+			fmt.Sscanf(metricStr, "%d/%d", &distance, &metric)
+		}
+
+		// Parse next hop - look for "via" keyword
+		nextHop := ""
+		iface := ""
+		for i := 3; i < len(fields); i++ {
+			if fields[i] == "via" && i+1 < len(fields) {
+				nextHop = strings.TrimRight(fields[i+1], ",")
+			} else if fields[i] != "via" && !strings.HasPrefix(fields[i], "[") &&
+			          !strings.Contains(fields[i], ":") && strings.Contains(fields[i], ",") {
+				// Likely an interface
+				iface = strings.TrimRight(fields[i], ",")
+			}
+		}
+
+		route := Route{
+			Prefix:       prefix,
+			NextHop:      nextHop,
+			Interface:    iface,
+			Protocol:     protocol,
+			Metric:       metric,
+			Distance:     distance,
+			Selected:     selected,
+			FIBInstalled: fibInstalled,
+		}
+
+		routes = append(routes, route)
+	}
+
+	return routes, nil
+}
+
 // ClearBGP clears BGP connections
 func (c *Client) ClearBGP(ctx context.Context) error {
 	_, err := c.ExecuteVtyshCommand(ctx, "clear ip bgp *")
@@ -393,6 +560,24 @@ func (c *Client) RestartBGP(ctx context.Context) error {
 // RestartOSPF restarts the OSPF daemon
 func (c *Client) RestartOSPF(ctx context.Context) error {
 	_, err := c.ExecuteVtyshCommand(ctx, "service restart ospfd")
+	return err
+}
+
+// DisableOSPF disables OSPF routing
+func (c *Client) DisableOSPF(ctx context.Context) error {
+	var commands strings.Builder
+
+	// Start configuration
+	commands.WriteString("configure terminal\n")
+
+	// Remove OSPF router configuration
+	commands.WriteString("no router ospf\n")
+
+	// End configuration
+	commands.WriteString("end\nwrite memory\n")
+
+	// Execute the commands
+	_, err := c.ExecuteVtyshCommand(ctx, commands.String())
 	return err
 }
 

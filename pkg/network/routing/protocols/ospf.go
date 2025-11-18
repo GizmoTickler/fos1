@@ -7,8 +7,8 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/network/routing"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/frr"
+	"github.com/GizmoTickler/fos1/pkg/network/routing"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/frr"
 )
 
 // OSPFHandler implements the protocol handler for OSPF
@@ -42,37 +42,18 @@ func (h *OSPFHandler) Start(config routing.ProtocolConfig) error {
 	h.config = &ospfConfig
 
 	// Convert the config to FRR format
-	areas := make([]frr.OSPFArea, 0, len(ospfConfig.Areas))
-	for _, a := range ospfConfig.Areas {
-		interfaces := make([]frr.OSPFInterface, 0, len(a.Interfaces))
-		for _, i := range a.Interfaces {
-			interfaces = append(interfaces, frr.OSPFInterface{
-				Name:     i.Name,
-				Network:  "", // Would need to determine network from interface
-				Cost:     i.Cost,
-				Priority: i.Priority,
-			})
-		}
-
-		areas = append(areas, frr.OSPFArea{
-			AreaID:    a.AreaID,
-			Interfaces: interfaces,
-			StubArea:   a.StubArea,
-			NSSAArea:   a.NSSAArea,
-		})
-	}
-
-	redistributions := make([]frr.Redistribution, 0, len(ospfConfig.Redistributions))
-	for _, r := range ospfConfig.Redistributions {
-		redistributions = append(redistributions, frr.Redistribution{
-			Protocol:    r.Protocol,
-			RouteMapRef: r.RouteMapRef,
-		})
-	}
+	areas := convertOSPFAreasToFRR(ospfConfig.Areas)
+	redistributions := convertRedistributionsToFRR(ospfConfig.Redistributions)
 
 	// Configure OSPF in FRR
 	ctx := context.Background()
-	err := h.frrClient.ConfigureOSPF(ctx, ospfConfig.RouterID, areas, redistributions)
+	err := h.frrClient.ConfigureOSPFWithParams(
+		ctx,
+		ospfConfig.RouterID,
+		areas,
+		redistributions,
+		ospfConfig.ReferenceBandwidth,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to configure OSPF: %v", err)
 	}
@@ -88,10 +69,62 @@ func (h *OSPFHandler) Start(config routing.ProtocolConfig) error {
 	return nil
 }
 
+// convertOSPFAreasToFRR converts routing.OSPFArea to frr.OSPFArea
+func convertOSPFAreasToFRR(areas []routing.OSPFArea) []frr.OSPFArea {
+	frrAreas := make([]frr.OSPFArea, 0, len(areas))
+	for _, a := range areas {
+		interfaces := make([]frr.OSPFInterface, 0, len(a.Interfaces))
+		for _, i := range a.Interfaces {
+			interfaces = append(interfaces, frr.OSPFInterface{
+				Name:        i.Name,
+				Network:     i.Network,
+				Cost:        i.Cost,
+				Priority:    i.Priority,
+				NetworkType: i.NetworkType,
+				Authentication: frr.OSPFAuthentication{
+					Type:  i.Authentication.Type,
+					Key:   i.Authentication.Key,
+					KeyID: i.Authentication.KeyID,
+				},
+				HelloInterval:      i.HelloInterval,
+				DeadInterval:       i.DeadInterval,
+				RetransmitInterval: i.RetransmitInterval,
+				TransmitDelay:      i.TransmitDelay,
+			})
+		}
+
+		frrAreas = append(frrAreas, frr.OSPFArea{
+			AreaID:     a.AreaID,
+			Interfaces: interfaces,
+			StubArea:   a.StubArea,
+			NSSAArea:   a.NSSAArea,
+		})
+	}
+	return frrAreas
+}
+
+// convertRedistributionsToFRR converts routing.Redistribution to frr.Redistribution
+func convertRedistributionsToFRR(redistributions []routing.Redistribution) []frr.Redistribution {
+	frrRedists := make([]frr.Redistribution, 0, len(redistributions))
+	for _, r := range redistributions {
+		frrRedists = append(frrRedists, frr.Redistribution{
+			Protocol:    r.Protocol,
+			RouteMapRef: r.RouteMapRef,
+		})
+	}
+	return frrRedists
+}
+
 // Stop stops the OSPF protocol
 func (h *OSPFHandler) Stop() error {
-	// In a real implementation, we would disable OSPF in FRR
-	// For now, just update the status
+	// Disable OSPF in FRR
+	ctx := context.Background()
+	err := h.frrClient.DisableOSPF(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to disable OSPF: %v", err)
+	}
+
+	// Update status
 	h.status.State = "stopped"
 	h.status.Uptime = 0
 	h.status.Neighbors = []routing.NeighborStatus{}

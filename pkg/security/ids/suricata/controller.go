@@ -23,7 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	securityv1alpha1 "github.com/varuntirumala1/fos1/pkg/apis/security/v1alpha1"
+	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
 )
 
 // SuricataController reconciles SuricataInstance objects

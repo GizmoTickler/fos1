@@ -7,7 +7,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 )
 
 var (

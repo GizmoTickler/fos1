@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 )
 
 // PolicyController manages Cilium network policies based on DPI events

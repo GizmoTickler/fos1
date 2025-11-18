@@ -137,10 +137,23 @@ type OSPFArea struct {
 
 // OSPFInterface represents an OSPF interface configuration for FRR
 type OSPFInterface struct {
-	Name       string
-	Network    string
-	Cost       int
-	Priority   int
+	Name           string
+	Network        string
+	Cost           int
+	Priority       int
+	NetworkType    string // broadcast, point-to-point, point-to-multipoint, non-broadcast
+	Authentication OSPFAuthentication
+	HelloInterval  int
+	DeadInterval   int
+	RetransmitInterval int
+	TransmitDelay  int
+}
+
+// OSPFAuthentication represents OSPF authentication configuration for FRR
+type OSPFAuthentication struct {
+	Type  string // none, simple, md5
+	Key   string
+	KeyID int
 }
 
 // BFDPeer represents a BFD peer configuration for FRR

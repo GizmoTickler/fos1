@@ -14,8 +14,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/vpn"
-	"github.com/varuntirumala1/fos1/pkg/vpn/wireguard"
+	"github.com/GizmoTickler/fos1/pkg/vpn"
+	"github.com/GizmoTickler/fos1/pkg/vpn/wireguard"
 )
 
 // WireGuardController is the controller for WireGuard VPNs

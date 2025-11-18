@@ -12,7 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/security/auth"
+	"github.com/GizmoTickler/fos1/pkg/security/auth"
 )
 
 // LocalProvider implements the auth.Provider interface for local authentication

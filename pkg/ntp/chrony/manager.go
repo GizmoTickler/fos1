@@ -12,7 +12,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/ntp"
+	"github.com/GizmoTickler/fos1/pkg/ntp"
 )
 
 // Manager handles the management of Chrony NTP server

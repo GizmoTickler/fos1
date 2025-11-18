@@ -3,8 +3,8 @@ package protocols
 import (
 	"testing"
 
-	"github.com/varuntirumala1/fos1/pkg/network/routing"
-	"github.com/varuntirumala1/fos1/pkg/network/routing/frr"
+	"github.com/GizmoTickler/fos1/pkg/network/routing"
+	"github.com/GizmoTickler/fos1/pkg/network/routing/frr"
 )
 
 func TestBGPHandler_convertRouteMapToFRR(t *testing.T) {
@@ -25,7 +25,7 @@ func TestBGPHandler_convertRouteMapToFRR(t *testing.T) {
 					Metric:          100,
 					LocalPreference: 200,
 					Community:       "100:300",
-					ASPathPrepend:   "65001 65001",
+					AsPathPrepend:   "65001 65001",
 				},
 			},
 		},
