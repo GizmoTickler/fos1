@@ -171,3 +171,67 @@ type PacketInfo struct {
 	// VRF is the VRF the packet is in
 	VRF string
 }
+
+// IPRule represents a Linux IP rule for policy-based routing
+type IPRule struct {
+	// Priority is the priority of the rule (lower number = higher priority)
+	Priority int
+
+	// Table is the routing table to use
+	Table int
+
+	// Src is the source network to match (CIDR notation)
+	Src string
+
+	// Dst is the destination network to match (CIDR notation)
+	Dst string
+
+	// IifName is the input interface name to match
+	IifName string
+
+	// OifName is the output interface name to match
+	OifName string
+
+	// Mark is the fwmark to match
+	Mark int
+
+	// Mask is the fwmark mask
+	Mask int
+
+	// Tos is the TOS/DSCP value to match
+	Tos int
+
+	// Family is the address family (ipv4, ipv6, all)
+	Family string
+
+	// Action is the action to take (table, blacklist, prohibit, unreachable)
+	Action string
+}
+
+// Address family constants
+const (
+	FamilyIPv4 = "ipv4"
+	FamilyIPv6 = "ipv6"
+	FamilyAll  = "all"
+)
+
+// Action constants
+const (
+	ActionToTable     = "table"
+	ActionBlacklist   = "blacklist"
+	ActionProhibit    = "prohibit"
+	ActionUnreachable = "unreachable"
+)
+
+// Reserved routing table IDs
+const (
+	// Standard Linux routing tables
+	TableUnspec  = 0   // RT_TABLE_UNSPEC
+	TableDefault = 253 // RT_TABLE_DEFAULT
+	TableMain    = 254 // RT_TABLE_MAIN
+	TableLocal   = 255 // RT_TABLE_LOCAL
+
+	// Custom routing tables start at 1
+	TableCustomStart = 1
+	TableCustomEnd   = 252
+)
