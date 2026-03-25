@@ -16,7 +16,7 @@ type Clientset struct {
 
 // NewForConfig creates a new Clientset for the given config
 func NewForConfig(c *rest.Config) (*Clientset, error) {
-	configShallowCopy := *c
+	_ = *c
 
 	// Create a new clientset
 	cs := &Clientset{}

@@ -79,7 +79,7 @@ func NewDPIController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			
@@ -267,13 +267,13 @@ func (c *DPIController) handleDPIPolicyCreateOrUpdate(obj *unstructured.Unstruct
 	}
 	
 	// Create DPI integration config
-	dpiConfig := &cilium.DPIIntegrationConfig{
+	dpiConfig := &cilium.CiliumDPIIntegrationConfig{
 		Enabled:               enabled,
 		ApplicationsToMonitor: applications,
 		EnforcementMode:       enforcementMode,
 		TargetInterfaces:      interfaces,
 	}
-	
+
 	// Apply the DPI configuration to Cilium
 	ctx := context.Background()
 	if err := c.ciliumClient.ConfigureDPIIntegration(ctx, dpiConfig); err != nil {

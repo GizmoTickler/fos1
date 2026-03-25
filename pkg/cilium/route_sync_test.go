@@ -2,10 +2,13 @@ package cilium
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
 )
+
+var errRouteTestFailed = fmt.Errorf("operation failed")
 
 // MockCiliumClientForRouting is a mock implementation for testing the RouteSynchronizer
 type MockCiliumClientForRouting struct {
@@ -48,7 +51,7 @@ func (m *MockCiliumClientForRouting) ConfigureDPIIntegration(ctx context.Context
 // addRouteToCilium is called by the RouteSynchronizer to add a route
 func (m *MockCiliumClientForRouting) addRouteToCilium(route Route) error {
 	if m.shouldError {
-		return ErrOperationFailed
+		return errRouteTestFailed
 	}
 	m.routesAdded = append(m.routesAdded, route)
 	return nil
@@ -57,7 +60,7 @@ func (m *MockCiliumClientForRouting) addRouteToCilium(route Route) error {
 // removeRouteFromCilium is called by the RouteSynchronizer to remove a route
 func (m *MockCiliumClientForRouting) removeRouteFromCilium(route Route) error {
 	if m.shouldError {
-		return ErrOperationFailed
+		return errRouteTestFailed
 	}
 	m.routesRemoved = append(m.routesRemoved, route)
 	return nil
@@ -66,7 +69,7 @@ func (m *MockCiliumClientForRouting) removeRouteFromCilium(route Route) error {
 // addVRFRouteToCilium is called by the RouteSynchronizer to add a VRF route
 func (m *MockCiliumClientForRouting) addVRFRouteToCilium(route Route, vrfID int) error {
 	if m.shouldError {
-		return ErrOperationFailed
+		return errRouteTestFailed
 	}
 	if _, exists := m.vrfRoutesAdded[vrfID]; !exists {
 		m.vrfRoutesAdded[vrfID] = make([]Route, 0)
@@ -236,12 +239,3 @@ func TestRouteSynchronizer_SyncRoutesForVRF(t *testing.T) {
 	}
 }
 
-// Define RouteSync to add the struct required for testing
-type RouteSync struct {
-	Destination string
-	Gateway     net.IP
-	Interface   string
-	Metric      int
-	TableID     int
-	VRF         string
-}

@@ -1,3 +1,5 @@
+//go:build linux
+
 package vlan
 
 import (
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"k8s.io/klog/v2"
 )
 
@@ -390,7 +393,7 @@ func (m *VLANManagerImpl) UpdateVLAN(name string, config VLANConfig) (*VLANInter
 	}
 	
 	// Update addresses if changed
-	currentAddrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+	currentAddrs, err := netlink.AddrList(link, nl.FAMILY_ALL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list addresses for VLAN interface %s: %w", name, err)
 	}

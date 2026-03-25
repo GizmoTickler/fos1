@@ -182,7 +182,7 @@ func (m *manager) applySNAT(config Config) error {
 	klog.Infof("Applying SNAT policy %s/%s", config.Namespace, config.Name)
 
 	// Create a Cilium NAT configuration
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
@@ -222,7 +222,7 @@ func (m *manager) applyMasquerade(config Config) error {
 	klog.Infof("Applying Masquerade policy %s/%s", config.Namespace, config.Name)
 
 	// Create a Cilium NAT configuration with masquerade
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
@@ -254,7 +254,7 @@ func (m *manager) applyNAT66(config Config) error {
 	klog.Infof("Applying NAT66 policy %s/%s", config.Namespace, config.Name)
 
 	// Create a Cilium NAT configuration with IPv6
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
 		DestinationIface: config.Interface,
 		IPv6:             true,
@@ -283,7 +283,7 @@ func (m *manager) removeSNAT(config Config) error {
 	klog.Infof("Removing SNAT policy %s/%s", config.Namespace, config.Name)
 
 	// Create a Cilium NAT configuration
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
@@ -322,7 +322,7 @@ func (m *manager) removeMasquerade(config Config) error {
 	klog.Infof("Removing Masquerade policy %s/%s", config.Namespace, config.Name)
 
 	// Create a Cilium NAT configuration with masquerade
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
@@ -354,7 +354,7 @@ func (m *manager) removeNAT66(config Config) error {
 	klog.Infof("Removing NAT66 policy %s/%s", config.Namespace, config.Name)
 
 	// Create a Cilium NAT configuration with IPv6
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
 		DestinationIface: config.Interface,
 		IPv6:             true,

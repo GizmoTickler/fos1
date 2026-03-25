@@ -2,8 +2,6 @@ package traffic
 
 import (
 	"fmt"
-	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"

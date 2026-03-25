@@ -90,9 +90,9 @@ func (m *Manager) ConfigureOffload(ifName string, features types.OffloadFeatures
 	}
 
 	// Apply changes
-	for feature, enabled := range changes {
-		if err := m.ethtool.Change(ifName, feature, enabled); err != nil {
-			return fmt.Errorf("failed to change feature %s to %v: %w", feature, enabled, err)
+	if len(changes) > 0 {
+		if err := m.ethtool.Change(ifName, changes); err != nil {
+			return fmt.Errorf("failed to change offload features: %w", err)
 		}
 	}
 
@@ -121,16 +121,14 @@ func (m *Manager) GetOffloadCapabilities(ifName string) (*types.OffloadCapabilit
 
 	// Determine which features are supported by checking if they exist in the feature map
 	// Note: This only checks if the feature exists, not if it can be enabled/disabled
-	_, capabilities.SupportsTxChecksum = featureMap["tx-checksumming"]
-	_, capabilities.SupportsRxChecksum = featureMap["rx-checksumming"]
-	_, capabilities.SupportsTSO = featureMap["tcp-segmentation-offload"]
-	_, capabilities.SupportsGSO = featureMap["generic-segmentation-offload"]
-	_, capabilities.SupportsGRO = featureMap["generic-receive-offload"]
-	_, capabilities.SupportsLRO = featureMap["large-receive-offload"]
-	_, capabilities.SupportsRPS = featureMap["rx-packet-steering"]
-	_, capabilities.SupportsXPS = featureMap["tx-packet-steering"]
-	_, capabilities.SupportsNTUPLE = featureMap["rx-flow-hash-filter"]
-	_, capabilities.SupportsRFS = featureMap["receive-flow-steering"]
+	_, capabilities.TxChecksumTCP = featureMap["tx-checksumming"]
+	_, capabilities.RxChecksumTCP = featureMap["rx-checksumming"]
+	_, capabilities.TxTCPSegmentation = featureMap["tcp-segmentation-offload"]
+	_, capabilities.TxUDPFragmentation = featureMap["generic-segmentation-offload"]
+	_, capabilities.RxGRO = featureMap["generic-receive-offload"]
+	_, capabilities.RxLRO = featureMap["large-receive-offload"]
+	_, capabilities.NTuple = featureMap["rx-flow-hash-filter"]
+	_, capabilities.RSSHash = featureMap["receive-flow-steering"]
 
 	// Cache capabilities
 	m.capabilitiesMu.Lock()
@@ -138,6 +136,28 @@ func (m *Manager) GetOffloadCapabilities(ifName string) (*types.OffloadCapabilit
 	m.capabilitiesMu.Unlock()
 
 	return capabilities, nil
+}
+
+// SetOffloadFeature enables or disables an offload feature for an interface.
+func (m *Manager) SetOffloadFeature(name string, feature string, enabled bool) error {
+	changes := map[string]bool{feature: enabled}
+	if err := m.ethtool.Change(name, changes); err != nil {
+		return fmt.Errorf("failed to set feature %s to %v on %s: %w", feature, enabled, name, err)
+	}
+	// Invalidate cached capabilities
+	m.capabilitiesMu.Lock()
+	delete(m.capabilities, name)
+	m.capabilitiesMu.Unlock()
+	return nil
+}
+
+// GetOffloadStatistics gets statistics for offloaded operations on an interface.
+func (m *Manager) GetOffloadStatistics(name string) (*types.OffloadStatistics, error) {
+	// This is a placeholder implementation
+	// In a real implementation, we would query ethtool statistics
+	return &types.OffloadStatistics{
+		Interface: name,
+	}, nil
 }
 
 // ResetOffload resets all hardware offloading features for an interface to their default values.
@@ -164,11 +184,15 @@ func (m *Manager) ResetOffload(ifName string) error {
 	}
 
 	// Apply defaults where features exist
+	changes := make(map[string]bool)
 	for feature, defaultValue := range defaults {
 		if _, ok := featureMap[feature]; ok {
-			if err := m.ethtool.Change(ifName, feature, defaultValue); err != nil {
-				return fmt.Errorf("failed to reset feature %s to %v: %w", feature, defaultValue, err)
-			}
+			changes[feature] = defaultValue
+		}
+	}
+	if len(changes) > 0 {
+		if err := m.ethtool.Change(ifName, changes); err != nil {
+			return fmt.Errorf("failed to reset offload features: %w", err)
 		}
 	}
 
@@ -196,15 +220,15 @@ func (m *Manager) GetOptimalOffloadConfiguration(ifName string) (types.OffloadFe
 
 	// Create optimal configuration based on capabilities
 	features := types.OffloadFeatures{
-		TxChecksum: capabilities.SupportsTxChecksum,
-		RxChecksum: capabilities.SupportsRxChecksum,
-		TSO:        capabilities.SupportsTSO,
-		GSO:        capabilities.SupportsGSO,
-		GRO:        capabilities.SupportsGRO,
+		TxChecksum: capabilities.TxChecksumTCP,
+		RxChecksum: capabilities.RxChecksumTCP,
+		TSO:        capabilities.TxTCPSegmentation,
+		GSO:        capabilities.TxUDPFragmentation,
+		GRO:        capabilities.RxGRO,
 		// LRO is often not recommended due to potential issues with packet reordering
 		LRO:        false,
-		RPS:        capabilities.SupportsRPS,
-		XPS:        capabilities.SupportsXPS,
+		RPS:        false,
+		XPS:        false,
 		// NTUPLE and RFS are more advanced and may require specific configuration
 		NTUPLE:     false,
 		RFS:        false,

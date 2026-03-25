@@ -7,7 +7,7 @@ Thank you for your interest in contributing to this project! We welcome contribu
 Before you begin:
 
 1. Make sure you have a [GitHub account](https://github.com/signup/free)
-2. Check if your issue already exists in our [issue tracker](https://github.com/varuntirumala1/fos1/issues)
+2. Check if your issue already exists in our [issue tracker](https://github.com/GizmoTickler/fos1/issues)
 3. Fork the repository on GitHub
 
 ## Development Environment Setup

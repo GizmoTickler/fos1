@@ -19,7 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
 )
@@ -76,7 +75,7 @@ func (r *AuthController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	r.updateStatusCondition(ctx, instance, "DeploymentReady", "True", "DeploymentCreated", "Deployment created successfully")
 
 	// Handle Service
-	service, err := r.reconcileService(ctx, instance)
+	_, err = r.reconcileService(ctx, instance)
 	if err != nil {
 		log.Error(err, "Failed to reconcile Service")
 		r.updateStatusCondition(ctx, instance, "ServiceReady", "False", "ServiceError", err.Error())

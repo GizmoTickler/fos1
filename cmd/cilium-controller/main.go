@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,8 +13,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/cilium"
-	"github.com/varuntirumala1/fos1/pkg/cilium/controllers"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/cilium/controllers"
 )
 
 func main() {

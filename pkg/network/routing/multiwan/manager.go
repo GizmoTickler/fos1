@@ -182,7 +182,6 @@ func (m *manager) applyRoutes(config Configuration) error {
 			Protocol:  "multiwan",
 			VRF:       "main",
 			Tags:      []string{"multiwan", fmt.Sprintf("wan-%s", wan.Name)},
-			Temporary: true,
 		}
 
 		// Add the route
@@ -200,8 +199,8 @@ func (m *manager) removeRoutes(config Configuration) error {
 	for _, wan := range config.WANInterfaces {
 		// Create route parameters
 		routeParams := routing.RouteParams{
-			VRF:  "main",
-			Tags: []string{"multiwan", fmt.Sprintf("wan-%s", wan.Name)},
+			VRF:      "main",
+			Protocol: "multiwan",
 		}
 
 		// Delete the route

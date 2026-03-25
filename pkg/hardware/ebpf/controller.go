@@ -4,6 +4,7 @@ package ebpf
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 )

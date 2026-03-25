@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git stash:*)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/**)",
+      "Bash(done)",
+      "Bash(grep -r varuntirumala1/fos1 --include=*.go /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/)",
+      "Bash(find . -name '*.go' -exec cat {} +)",
+      "Bash(find . -name '*.go' -exec grep -l 'varuntirumala1/fos1' {})",
+      "Bash(xargs sed:*)",
+      "Bash(while read:*)",
+      "Bash(do sed:*)",
+      "Bash(go build:*)",
+      "Bash(go get:*)",
+      "Bash(go mod:*)",
+      "Bash(for id:*)",
+      "Read(//private/tmp/claude-501/-Users-varuntirumalareddy-Documents-Code-Playgroud-fos1/87e8ab4d-48e7-485c-8ade-2f8b5570bdfb/tasks/**)",
+      "Bash(grep -rn 'k8serrors' pkg/controllers/*.go)",
+      "Bash(do grep:*)",
+      "Bash(go vet:*)",
+      "Bash(go list:*)",
+      "Bash(go test:*)",
+      "Bash(grep -c '\"\"type\"\":\"\"assistant\"\"' /private/tmp/claude-501/-Users-varuntirumalareddy-Documents-Code-Playgroud-fos1/87e8ab4d-48e7-485c-8ade-2f8b5570bdfb/tasks/ae7340b07663a6f22.output)",
+      "Bash(grep -c '\"\"type\"\":\"\"assistant\"\"' /private/tmp/claude-501/-Users-varuntirumalareddy-Documents-Code-Playgroud-fos1/87e8ab4d-48e7-485c-8ade-2f8b5570bdfb/tasks/a4a70cf99050dd995.output)",
+      "Bash(wc -l /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/hardware/ebpf/*.go)",
+      "Bash(wc -l /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/security/dpi/*.go /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/security/dpi/connectors/*.go)",
+      "Bash(wc -l /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/dhcp/*.go /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/dns/**/*.go /Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/ntp/**/*.go)",
+      "Bash(for dir:*)",
+      "Read(//Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/pkg/**)",
+      "Bash(git add:*)"
+    ]
+  }
+}

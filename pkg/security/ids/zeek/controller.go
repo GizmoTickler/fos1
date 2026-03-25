@@ -19,7 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
 )
@@ -75,7 +74,7 @@ func (r *ZeekController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	r.updateStatusCondition(ctx, instance, "DeploymentReady", "True", "DeploymentCreated", "Deployment created successfully")
 
 	// Handle Service
-	service, err := r.reconcileService(ctx, instance)
+	_, err = r.reconcileService(ctx, instance)
 	if err != nil {
 		log.Error(err, "Failed to reconcile Service")
 		r.updateStatusCondition(ctx, instance, "ServiceReady", "False", "ServiceError", err.Error())
@@ -532,22 +531,23 @@ func generateLocalZeek(instance *securityv1alpha1.ZeekInstance) (string, error) 
 `
 
 	// Add custom scripts
-	for _, script := range instance.Spec.Scripts {
-		if script.Enabled {
-			script := fmt.Sprintf("\n# Load custom script: %s\n", script.Name)
-			if script.Path != "" {
-				script += fmt.Sprintf("@load %s\n", script.Path)
+	for _, s := range instance.Spec.Scripts {
+		if s.Enabled {
+			scriptText := fmt.Sprintf("\n# Load custom script: %s\n", s.Name)
+			if s.Path != "" {
+				scriptText += fmt.Sprintf("@load %s\n", s.Path)
 			} else {
-				script += fmt.Sprintf("@load %s\n", script.Name)
+				scriptText += fmt.Sprintf("@load %s\n", s.Name)
 			}
 
 			// Add script configuration
-			if len(script.Config) > 0 {
-				script += "redef "
-				for key, value := range script.Config {
-					script += fmt.Sprintf("%s = %s;\n", key, value)
+			if len(s.Config) > 0 {
+				scriptText += "redef "
+				for key, value := range s.Config {
+					scriptText += fmt.Sprintf("%s = %s;\n", key, value)
 				}
 			}
+			script += scriptText
 		}
 	}
 

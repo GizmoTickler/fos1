@@ -2,8 +2,10 @@ package providers
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"sync"
 	"time"
@@ -577,7 +579,7 @@ func (p *LDAPProvider) ListGroups(filter *auth.GroupFilter) ([]*auth.GroupInfo, 
 		// Apply member filter
 		if filter.Member != "" {
 			// Get the user's DN
-			userDN, err := p.getUserDN(conn, filter.Member)
+			_, err := p.getUserDN(conn, filter.Member)
 			if err != nil {
 				klog.Warningf("Failed to get user DN: %v", err)
 				continue
@@ -797,12 +799,14 @@ func (p *LDAPProvider) mapLDAPEntryToGroup(entry *ldap.Entry) *auth.GroupInfo {
 		// This is a simplified implementation
 		// In a real implementation, you would extract the username from the DN
 		// based on the user filter
-		parts := ldap.ParseDN(memberDN)
-		if len(parts) > 0 {
-			for _, part := range parts {
-				if part.Type == "uid" {
-					group.Members = append(group.Members, part.Value)
-					break
+		dn, err := ldap.ParseDN(memberDN)
+		if err == nil && len(dn.RDNs) > 0 {
+			for _, rdn := range dn.RDNs {
+				for _, attr := range rdn.Attributes {
+					if attr.Type == "uid" {
+						group.Members = append(group.Members, attr.Value)
+						break
+					}
 				}
 			}
 		}

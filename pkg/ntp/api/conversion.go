@@ -115,7 +115,7 @@ func convertSecurity(src *v1alpha1.SecurityConfig) ntp.SecurityConfig {
 		NTS: ntp.NTSConfig{
 			Enabled: src.NTS.Enabled,
 		},
-		Authentication: ntp.AuthConfig{
+		Authentication: ntp.AuthenticationConfig{
 			Enabled: src.Authentication.Enabled,
 			Keys:    keys,
 		},

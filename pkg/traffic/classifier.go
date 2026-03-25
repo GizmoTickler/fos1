@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
-	"k8s.io/klog/v2"
 )
 
 // classifier implements the Classifier interface

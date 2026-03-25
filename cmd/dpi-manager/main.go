@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/varuntirumala1/fos1/pkg/cilium"
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 )
 
 func main() {

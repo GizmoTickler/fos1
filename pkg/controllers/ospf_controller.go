@@ -1,12 +1,12 @@
 package controllers
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"context"
 	"fmt"
 	"reflect"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -76,7 +76,7 @@ func NewOSPFController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			
@@ -357,8 +357,8 @@ func (c *OSPFController) handleOSPFConfigCreateOrUpdate(obj *unstructured.Unstru
 func (c *OSPFController) updateOSPFConfigStatus(obj *unstructured.Unstructured) error {
 	// Get the namespace and name
 	namespace := obj.GetNamespace()
-	name := obj.GetName()
-	
+	_ = obj.GetName()
+
 	// Get the OSPF status
 	status, err := c.protocolManager.GetProtocolStatus("ospf")
 	if err != nil {
@@ -402,7 +402,7 @@ func (c *OSPFController) updateOSPFConfigStatus(obj *unstructured.Unstructured) 
 		Resource: "ospfconfigs",
 	}
 	
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, nil)
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update OSPFConfig status: %w", err)
 	}

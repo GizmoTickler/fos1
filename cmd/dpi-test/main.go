@@ -10,15 +10,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varuntirumala1/fos1/pkg/cilium"
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 )
 
 // SimpleCiliumClient is a simple implementation of the CiliumClient interface
 type SimpleCiliumClient struct{}
 
 // ConfigureDPIIntegration is a simple implementation
-func (s *SimpleCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *cilium.DPIIntegrationConfig) error {
+func (s *SimpleCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *cilium.CiliumDPIIntegrationConfig) error {
 	log.Printf("Configuring DPI integration: %+v", config)
 	return nil
 }
@@ -26,6 +27,41 @@ func (s *SimpleCiliumClient) ConfigureDPIIntegration(ctx context.Context, config
 // ApplyNetworkPolicy is a simple implementation
 func (s *SimpleCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *cilium.NetworkPolicy) error {
 	log.Printf("Applying network policy: %s", policy.Name)
+	return nil
+}
+
+// CreateNAT is a stub implementation
+func (s *SimpleCiliumClient) CreateNAT(ctx context.Context, config *cilium.CiliumNATConfig) error {
+	return nil
+}
+
+// RemoveNAT is a stub implementation
+func (s *SimpleCiliumClient) RemoveNAT(ctx context.Context, config *cilium.CiliumNATConfig) error {
+	return nil
+}
+
+// CreateNAT64 is a stub implementation
+func (s *SimpleCiliumClient) CreateNAT64(ctx context.Context, config *cilium.NAT64Config) error {
+	return nil
+}
+
+// RemoveNAT64 is a stub implementation
+func (s *SimpleCiliumClient) RemoveNAT64(ctx context.Context, config *cilium.NAT64Config) error {
+	return nil
+}
+
+// CreatePortForward is a stub implementation
+func (s *SimpleCiliumClient) CreatePortForward(ctx context.Context, config *cilium.PortForwardConfig) error {
+	return nil
+}
+
+// RemovePortForward is a stub implementation
+func (s *SimpleCiliumClient) RemovePortForward(ctx context.Context, config *cilium.PortForwardConfig) error {
+	return nil
+}
+
+// ConfigureVLANRouting is a stub implementation
+func (s *SimpleCiliumClient) ConfigureVLANRouting(ctx context.Context, config *cilium.CiliumVLANRoutingConfig) error {
 	return nil
 }
 
@@ -52,7 +88,7 @@ func main() {
 	}
 
 	// Register event handler
-	manager.RegisterEventHandler(func(event dpi.DPIEvent) {
+	manager.RegisterEventHandler(func(event common.DPIEvent) {
 		log.Printf("Event: %s - %s", event.EventType, event.Description)
 	})
 
@@ -145,7 +181,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 	log.Println("Simulating DPI events...")
 
 	// Simulate a flow event
-	flowEvent := dpi.DPIEvent{
+	flowEvent := common.DPIEvent{
 		Timestamp:   time.Now(),
 		SourceIP:    "192.168.1.10",
 		DestIP:      "10.0.0.10",
@@ -163,14 +199,14 @@ func simulateEvents(manager *dpi.DPIManager) {
 			"packets": int64(10),
 		},
 	}
-	manager.eventChan <- flowEvent
+	manager.EventChan() <-flowEvent
 	log.Println("Sent flow event")
 
 	// Wait a moment
 	time.Sleep(2 * time.Second)
 
 	// Simulate an alert event
-	alertEvent := dpi.DPIEvent{
+	alertEvent := common.DPIEvent{
 		Timestamp:   time.Now(),
 		SourceIP:    "192.168.1.20",
 		DestIP:      "10.0.0.20",
@@ -186,14 +222,14 @@ func simulateEvents(manager *dpi.DPIManager) {
 		SessionID:   "sim-session-2",
 		RawData:     map[string]interface{}{},
 	}
-	manager.eventChan <- alertEvent
+	manager.EventChan() <-alertEvent
 	log.Println("Sent alert event")
 
 	// Wait a moment
 	time.Sleep(2 * time.Second)
 
 	// Simulate a notice event
-	noticeEvent := dpi.DPIEvent{
+	noticeEvent := common.DPIEvent{
 		Timestamp:   time.Now(),
 		SourceIP:    "192.168.1.30",
 		DestIP:      "10.0.0.30",
@@ -209,7 +245,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 		SessionID:   "sim-session-3",
 		RawData:     map[string]interface{}{},
 	}
-	manager.eventChan <- noticeEvent
+	manager.EventChan() <-noticeEvent
 	log.Println("Sent notice event")
 
 	// Simulate periodic events
@@ -220,7 +256,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 		select {
 		case <-ticker.C:
 			// Simulate a random event
-			event := dpi.DPIEvent{
+			event := common.DPIEvent{
 				Timestamp:   time.Now(),
 				SourceIP:    fmt.Sprintf("192.168.1.%d", time.Now().Second()%254+1),
 				DestIP:      fmt.Sprintf("10.0.0.%d", time.Now().Second()%254+1),
@@ -238,7 +274,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 					"packets": int64(10 * (time.Now().Second() % 10 + 1)),
 				},
 			}
-			manager.eventChan <- event
+			manager.EventChan() <-event
 			log.Println("Sent periodic flow event")
 		}
 	}

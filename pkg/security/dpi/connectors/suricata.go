@@ -13,6 +13,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 )
 
 // SuricataConnector integrates Suricata with Cilium
@@ -27,7 +28,7 @@ type SuricataConnector struct {
 
 	// State
 	watcher        *fsnotify.Watcher
-	alertRules     map[string]*cilium.NetworkPolicy
+	alertRules     map[string]*cilium.CiliumPolicy
 	ipLists        map[string][]string
 
 	// Event handling
@@ -89,7 +90,7 @@ func NewSuricataConnector(opts SuricataOptions) (*SuricataConnector, error) {
 		ciliumClient: opts.CiliumClient,
 		networkCtrl:  cilium.NewNetworkController(opts.CiliumClient),
 		watcher:      watcher,
-		alertRules:   make(map[string]*cilium.NetworkPolicy),
+		alertRules:   make(map[string]*cilium.CiliumPolicy),
 		ipLists:      make(map[string][]string),
 		eventChan:    make(chan map[string]interface{}, 1000), // Buffer for 1000 events
 		ctx:          ctx,
@@ -279,7 +280,7 @@ func (c *SuricataConnector) createBlockingPolicy(signature, category, src, dest 
 	}
 
 	// Create a policy that denies the specific traffic
-	policy := &cilium.NetworkPolicy{
+	policy := &cilium.CiliumPolicy{
 		Name: policyName,
 		Labels: map[string]string{
 			"app":       "suricata",
@@ -298,15 +299,17 @@ func (c *SuricataConnector) createBlockingPolicy(signature, category, src, dest 
 		srcCIDR = src + "/32"
 	}
 
-	destCIDR := dest
+	// Convert destination IP to CIDR notation if needed
+	// destCIDR := dest
 	if !strings.Contains(dest, "/") {
-		destCIDR = dest + "/32"
+		// destCIDR = dest + "/32"
+		// Using dest directly in rules below
 	}
 
 	// Create rules for both directions since attacks can be bidirectional
 
 	// Rule to block traffic from source to destination
-	policy.Ingress = append(policy.Ingress, cilium.PolicyRule{
+	policy.Rules = append(policy.Rules, cilium.CiliumRule{
 		FromCIDR: []string{srcCIDR},
 		ToPorts: []cilium.PortRule{
 			{
@@ -322,8 +325,8 @@ func (c *SuricataConnector) createBlockingPolicy(signature, category, src, dest 
 	})
 
 	// Rule to block traffic from destination to source
-	policy.Egress = append(policy.Egress, cilium.PolicyRule{
-		ToCIDR: []string{srcCIDR},
+	policy.Rules = append(policy.Rules, cilium.CiliumRule{
+		FromCIDR: []string{srcCIDR},
 		ToPorts: []cilium.PortRule{
 			{
 				Ports: []cilium.Port{
@@ -341,7 +344,7 @@ func (c *SuricataConnector) createBlockingPolicy(signature, category, src, dest 
 	c.alertRules[policyName] = policy
 
 	// Apply the policy
-	if err := c.networkCtrl.ApplyDynamicPolicy(c.ctx, policy); err != nil {
+	if err := c.ciliumClient.ApplyNetworkPolicy(c.ctx, policy); err != nil {
 		fmt.Printf("Failed to apply blocking policy: %v\n", err)
 	} else {
 		fmt.Printf("Applied blocking policy %s for alert: %s\n", policyName, signature)
@@ -505,9 +508,9 @@ func (c *SuricataConnector) GetIPList(listName string) ([]string, error) {
 }
 
 // GetEvents returns a channel of Suricata events
-func (c *SuricataConnector) GetEvents(ctx context.Context) (<-chan DPIEvent, error) {
+func (c *SuricataConnector) GetEvents(ctx context.Context) (<-chan common.DPIEvent, error) {
 	// Create a channel for DPI events
-	eventChan := make(chan DPIEvent, 100)
+	eventChan := make(chan common.DPIEvent, 100)
 
 	// Start a goroutine to convert Suricata events to DPI events
 	go func() {
@@ -543,10 +546,10 @@ func (c *SuricataConnector) GetEvents(ctx context.Context) (<-chan DPIEvent, err
 }
 
 // convertToDPIEvent converts a Suricata event to a DPI event
-func (c *SuricataConnector) convertToDPIEvent(event map[string]interface{}) DPIEvent {
+func (c *SuricataConnector) convertToDPIEvent(event map[string]interface{}) common.DPIEvent {
 	// Create a new DPI event
-	dpiEvent := DPIEvent{
-		Timestamp:   time.Now().Format(time.RFC3339),
+	dpiEvent := common.DPIEvent{
+		Timestamp:   time.Now(),
 		EventType:   "alert",
 		RawData:     event,
 	}

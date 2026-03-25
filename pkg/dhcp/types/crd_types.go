@@ -188,6 +188,12 @@ type Lease struct {
 	// VLANRef is a reference to the VLAN
 	VLANRef string `json:"vlanRef"`
 
+	// Domain is the domain suffix for the lease
+	Domain string `json:"domain,omitempty"`
+
+	// TTL is the DNS record TTL in seconds
+	TTL uint32 `json:"ttl,omitempty"`
+
 	// ExpiresAt is the lease expiration time
 	ExpiresAt time.Time `json:"expiresAt"`
 

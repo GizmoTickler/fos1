@@ -193,8 +193,7 @@ func (d *DHCPIntegration) updateDHCPv4Option(ntpServers []string) error {
 
 	// Create the DHCPv4 option
 	option := types.DHCPOption{
-		Code: 42, // NTP servers
-		Name: "ntp-servers",
+		Code:  42, // NTP servers
 		Value: strings.Join(ipv4Servers, ","),
 	}
 
@@ -221,8 +220,7 @@ func (d *DHCPIntegration) updateDHCPv6Option(ntpServers []string) error {
 
 	// Create the DHCPv6 option
 	option := types.DHCPOption{
-		Code: 56, // NTP servers
-		Name: "ntp-servers",
+		Code:  56, // NTP servers
 		Value: strings.Join(ipv6Servers, ","),
 	}
 

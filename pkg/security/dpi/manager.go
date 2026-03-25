@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi/connectors"
 )
 
@@ -30,8 +31,8 @@ type DPIManager struct {
 	suricataConnector *connectors.SuricataConnector
 
 	// Event processing
-	eventChan        chan DPIEvent
-	eventHandlers    []func(DPIEvent)
+	eventChan        chan common.DPIEvent
+	eventHandlers    []func(common.DPIEvent)
 
 	// Control
 	ctx              context.Context
@@ -56,7 +57,7 @@ type DPIManagerOptions struct {
 	KubernetesMode   bool   // Whether running in Kubernetes
 	Namespace        string // Kubernetes namespace
 	VLANAware        bool   // Whether to process VLAN tags
-	VLANs            map[int]VLANConfig // VLAN configurations
+	VLANs            map[int]connectors.VLANConfig // VLAN configurations
 }
 
 // VLANConfig represents configuration for a VLAN
@@ -94,29 +95,31 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 		appDetector:  NewApplicationDetector(),
 		ciliumClient: opts.CiliumClient,
 		networkCtrl:  cilium.NewNetworkController(opts.CiliumClient),
-		eventChan:    make(chan DPIEvent, 1000),
-		eventHandlers: make([]func(DPIEvent), 0),
+		eventChan:    make(chan common.DPIEvent, 1000),
+		eventHandlers: make([]func(common.DPIEvent), 0),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
 
-	// Initialize Zeek connector
-	zeekOpts := connectors.ZeekOptions{
-		LogsPath:       opts.ZeekLogsPath,
-		PolicyPath:     opts.ZeekPolicyPath,
-		CiliumClient:   opts.CiliumClient,
-		KubernetesMode: opts.KubernetesMode,
-		Namespace:      opts.Namespace,
-		VLANAware:      opts.VLANAware,
-		VLANs:          opts.VLANs,
-	}
+	// Initialize Zeek connector if paths are provided
+	if opts.ZeekLogsPath != "" && opts.ZeekPolicyPath != "" {
+		zeekOpts := connectors.ZeekOptions{
+			LogsPath:       opts.ZeekLogsPath,
+			PolicyPath:     opts.ZeekPolicyPath,
+			CiliumClient:   opts.CiliumClient,
+			KubernetesMode: opts.KubernetesMode,
+			Namespace:      opts.Namespace,
+			VLANAware:      opts.VLANAware,
+			VLANs:          opts.VLANs,
+		}
 
-	zeekConnector, err := connectors.NewZeekConnector(zeekOpts)
-	if err != nil {
-		cancel() // Cancel the context if we fail to initialize
-		return nil, fmt.Errorf("failed to initialize Zeek connector: %w", err)
+		zeekConnector, err := connectors.NewZeekConnector(zeekOpts)
+		if err != nil {
+			cancel() // Cancel the context if we fail to initialize
+			return nil, fmt.Errorf("failed to initialize Zeek connector: %w", err)
+		}
+		manager.zeekConnector = zeekConnector
 	}
-	manager.zeekConnector = zeekConnector
 
 	// Initialize Suricata connector if options are provided
 	if opts.SuricataEvePath != "" {
@@ -272,6 +275,10 @@ func (m *DPIManager) GetFlowStatistics(sourceNetwork, destinationNetwork string)
 func (m *DPIManager) Start() error {
 	// Start Zeek connector
 	if m.zeekConnector != nil {
+		// Register Zeek as a DPI engine with the application detector
+		// Note: Zeek connector now implements the DPIEngineConnector interface directly
+
+		// Start the Zeek connector
 		if err := m.zeekConnector.Start(); err != nil {
 			return fmt.Errorf("failed to start Zeek connector: %w", err)
 		}
@@ -285,10 +292,24 @@ func (m *DPIManager) Start() error {
 
 		// Forward events to our event channel
 		go m.forwardEvents(events, "zeek")
+
+		// Wait a moment for Zeek to initialize
+		fmt.Println("Waiting for Zeek to initialize...")
+		time.Sleep(2 * time.Second)
+
+		// Check Zeek status
+		status, err := m.zeekConnector.Status()
+		if err != nil {
+			fmt.Printf("Warning: Failed to get Zeek status: %v\n", err)
+		} else {
+			fmt.Printf("Zeek status: Running=%v, Uptime=%v, LogsProcessed=%d\n",
+				status.Running, status.Uptime, status.LogsProcessed)
+		}
 	}
 
 	// Start Suricata connector
 	if m.suricataConnector != nil {
+		// Start the Suricata connector
 		if err := m.suricataConnector.Start(); err != nil {
 			return fmt.Errorf("failed to start Suricata connector: %w", err)
 		}
@@ -302,10 +323,22 @@ func (m *DPIManager) Start() error {
 
 		// Forward events to our event channel
 		go m.forwardEvents(events, "suricata")
+
+		// Check Suricata status
+		status, err := m.suricataConnector.Status()
+		if err != nil {
+			fmt.Printf("Warning: Failed to get Suricata status: %v\n", err)
+		} else {
+			fmt.Printf("Suricata status: Mode=%s, Running=%v\n",
+				status.Mode, status.Running)
+		}
 	}
 
 	// Apply DPI profiles and flows to configure what to inspect
 	m.applyProfilesToEngines()
+
+	// Start a goroutine to periodically update protocol statistics
+	go m.periodicStatsUpdate()
 
 	fmt.Println("DPI manager started successfully")
 	return nil
@@ -344,14 +377,34 @@ func (m *DPIManager) applyProfilesToEngines() {
 		// Generate Zeek configuration from profiles
 		fmt.Println("Applying profiles to Zeek")
 
+		// Get applications from profiles
+		applications := getApplicationsFromProfiles(m.profiles)
+
+		// Ensure we're monitoring the secure DNS protocols
+		secureDNSProtocols := []string{"dns-over-tls", "dns-over-https", "dnscrypt"}
+		for _, proto := range secureDNSProtocols {
+			if !containsString(applications, proto) {
+				applications = append(applications, proto)
+			}
+		}
+
+		// Ensure we're monitoring MQTT
+		if !containsString(applications, "mqtt") {
+			applications = append(applications, "mqtt")
+		}
+
 		// Create configuration for Zeek
 		config := map[string]interface{}{
-			"applications": getApplicationsFromProfiles(m.profiles),
+			"applications": applications,
+			"logs_path": m.zeekConnector.GetLogsPath(),
+			"policy_path": m.zeekConnector.GetPolicyPath(),
 		}
 
 		// Apply configuration
 		if err := m.zeekConnector.Configure(config); err != nil {
 			fmt.Printf("Error configuring Zeek: %v\n", err)
+		} else {
+			fmt.Printf("Configured Zeek to monitor applications: %v\n", applications)
 		}
 	}
 
@@ -364,16 +417,35 @@ func (m *DPIManager) applyProfilesToEngines() {
 		// Extract categories from profiles that should be monitored
 		categories := getCategoriesFromProfiles(m.profiles)
 
-		// In a real implementation, we would configure Suricata rules based on these categories
-		// For now, we'll just log the categories
-		fmt.Printf("Would configure Suricata to monitor categories: %v\n", categories)
+		// Create configuration for Suricata
+		config := map[string]interface{}{
+			"categories": categories,
+			"mode": m.suricataConnector.GetMode(),
+		}
+
+		// Apply configuration
+		if err := m.suricataConnector.Configure(config); err != nil {
+			fmt.Printf("Error configuring Suricata: %v\n", err)
+		} else {
+			fmt.Printf("Configured Suricata to monitor categories: %v\n", categories)
+		}
 	}
 
 	fmt.Println("Applied DPI profiles to all engines")
 }
 
+// containsString checks if a string slice contains a specific string
+func containsString(slice []string, str string) bool {
+	for _, s := range slice {
+		if s == str {
+			return true
+		}
+	}
+	return false
+}
+
 // GetApplicationInfo gets information about an application
-func (m *DPIManager) GetApplicationInfo(applicationName string) (*ApplicationInfo, error) {
+func (m *DPIManager) GetApplicationInfo(applicationName string) (*common.ApplicationInfo, error) {
 	return m.appDetector.GetApplicationInfo(applicationName)
 }
 
@@ -433,7 +505,7 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 
 	// Create a routing policy based on application
 	// This would create Cilium policies that route specific application traffic
-	policy := &cilium.NetworkPolicy{
+	policy := &cilium.CiliumPolicy{
 		Name: fmt.Sprintf("app-routing-%s", applicationName),
 		Labels: map[string]string{
 			"app":       applicationName,
@@ -443,12 +515,10 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 	}
 
 	// Add rules to redirect the application traffic
-	policy.Egress = append(policy.Egress, cilium.PolicyRule{
+	policy.Rules = append(policy.Rules, cilium.CiliumRule{
 		ToPorts: []cilium.PortRule{
 			{
-				Rules: map[string]string{
-					"l7proto": applicationName,
-				},
+
 			},
 		},
 		ToEndpoints: []cilium.Endpoint{
@@ -461,7 +531,7 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 	})
 
 	// Apply the policy
-	if err := m.networkCtrl.ApplyDynamicPolicy(m.ctx, policy); err != nil {
+	if err := m.ciliumClient.ApplyNetworkPolicy(m.ctx, policy); err != nil {
 		return fmt.Errorf("failed to configure policy-based routing: %w", err)
 	}
 
@@ -488,9 +558,9 @@ func (m *DPIManager) GetProtocolStats(protocol string) (map[string]interface{}, 
 }
 
 // GetZeekStatus gets the status of the Zeek engine
-func (m *DPIManager) GetZeekStatus() (ZeekStatus, error) {
+func (m *DPIManager) GetZeekStatus() (common.ZeekStatus, error) {
 	if m.zeekConnector == nil {
-		return ZeekStatus{}, fmt.Errorf("Zeek connector not initialized")
+		return common.ZeekStatus{}, fmt.Errorf("Zeek connector not initialized")
 	}
 
 	return m.zeekConnector.Status()
@@ -589,7 +659,7 @@ func (m *DPIManager) processEvents() {
 }
 
 // forwardEvents forwards events from a DPI engine to the main event channel
-func (m *DPIManager) forwardEvents(events <-chan DPIEvent, source string) {
+func (m *DPIManager) forwardEvents(events <-chan common.DPIEvent, source string) {
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -621,7 +691,7 @@ func (m *DPIManager) forwardEvents(events <-chan DPIEvent, source string) {
 }
 
 // handleEvent handles a DPI event
-func (m *DPIManager) handleEvent(event DPIEvent) {
+func (m *DPIManager) handleEvent(event common.DPIEvent) {
 	// Update flow statistics
 	if event.SourceIP != "" && event.DestIP != "" {
 		m.updateFlowStats(event)
@@ -649,7 +719,7 @@ func (m *DPIManager) handleEvent(event DPIEvent) {
 }
 
 // updateFlowStats updates flow statistics based on an event
-func (m *DPIManager) updateFlowStats(event DPIEvent) {
+func (m *DPIManager) updateFlowStats(event common.DPIEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -675,18 +745,111 @@ func (m *DPIManager) updateFlowStats(event DPIEvent) {
 }
 
 // handleFlowEvent handles a flow event
-func (m *DPIManager) handleFlowEvent(event DPIEvent) {
-	// Process flow event
-	// In a real implementation, would update application statistics,
-	// trigger policy updates, etc.
+func (m *DPIManager) handleFlowEvent(event common.DPIEvent) {
+	// Process flow event based on the application type
+	switch event.Application {
+	case "dns", "dns-over-tls", "dns-over-https", "dnscrypt":
+		// Handle DNS-related traffic
+		m.handleDNSFlow(event)
 
-	// For now, just log the event
-	fmt.Printf("Flow event: %s application from %s:%d to %s:%d\n",
+	case "mqtt":
+		// Handle MQTT traffic
+		m.handleMQTTFlow(event)
+
+	case "http", "https":
+		// Handle HTTP/HTTPS traffic
+		m.handleHTTPFlow(event)
+
+	default:
+		// Handle other applications
+		fmt.Printf("Flow event: %s application from %s:%d to %s:%d\n",
+			event.Application, event.SourceIP, event.SourcePort, event.DestIP, event.DestPort)
+	}
+}
+
+// handleDNSFlow handles DNS-related flow events
+func (m *DPIManager) handleDNSFlow(event common.DPIEvent) {
+	// Extract DNS-specific information from the event
+	protocolType := "Standard DNS"
+	switch event.Application {
+	case "dns-over-tls":
+		protocolType = "DNS over TLS"
+	case "dns-over-https":
+		protocolType = "DNS over HTTPS"
+	case "dnscrypt":
+		protocolType = "DNSCrypt"
+	}
+
+	// Log the DNS event with protocol type
+	fmt.Printf("%s flow detected from %s:%d to %s:%d\n",
+		protocolType, event.SourceIP, event.SourcePort, event.DestIP, event.DestPort)
+
+	// Extract query information if available
+	if event.RawData != nil {
+		if query, ok := event.RawData["query"].(string); ok && query != "-" {
+			fmt.Printf("  Query: %s\n", query)
+		}
+
+		if qtype, ok := event.RawData["qtype"].(string); ok && qtype != "-" {
+			fmt.Printf("  Type: %s\n", qtype)
+		}
+
+		if isDNSCrypt, ok := event.RawData["is_dnscrypt"].(bool); ok && isDNSCrypt {
+			fmt.Println("  DNSCrypt detected")
+		}
+	}
+}
+
+// handleMQTTFlow handles MQTT flow events
+func (m *DPIManager) handleMQTTFlow(event common.DPIEvent) {
+	// Log the MQTT event
+	fmt.Printf("MQTT flow detected from %s:%d to %s:%d\n",
+		event.SourceIP, event.SourcePort, event.DestIP, event.DestPort)
+
+	// Extract MQTT-specific information if available
+	if event.RawData != nil {
+		if topic, ok := event.RawData["topic"].(string); ok {
+			fmt.Printf("  Topic: %s\n", topic)
+		}
+
+		if qos, ok := event.RawData["qos"].(float64); ok {
+			fmt.Printf("  QoS: %d\n", int(qos))
+		}
+
+		if clientId, ok := event.RawData["client_id"].(string); ok {
+			fmt.Printf("  Client ID: %s\n", clientId)
+		}
+	}
+}
+
+// handleHTTPFlow handles HTTP/HTTPS flow events
+func (m *DPIManager) handleHTTPFlow(event common.DPIEvent) {
+	// Log the HTTP/HTTPS event
+	fmt.Printf("%s flow detected from %s:%d to %s:%d\n",
 		event.Application, event.SourceIP, event.SourcePort, event.DestIP, event.DestPort)
+
+	// Extract HTTP-specific information if available
+	if event.RawData != nil {
+		if method, ok := event.RawData["method"].(string); ok {
+			fmt.Printf("  Method: %s\n", method)
+		}
+
+		if host, ok := event.RawData["host"].(string); ok {
+			fmt.Printf("  Host: %s\n", host)
+		}
+
+		if uri, ok := event.RawData["uri"].(string); ok {
+			fmt.Printf("  URI: %s\n", uri)
+		}
+
+		if userAgent, ok := event.RawData["user_agent"].(string); ok {
+			fmt.Printf("  User-Agent: %s\n", userAgent)
+		}
+	}
 }
 
 // handleAlertEvent handles an alert event
-func (m *DPIManager) handleAlertEvent(event DPIEvent) {
+func (m *DPIManager) handleAlertEvent(event common.DPIEvent) {
 	// Process alert event
 	// In a real implementation, would trigger policy updates,
 	// send notifications, etc.
@@ -716,7 +879,7 @@ func (m *DPIManager) handleAlertEvent(event DPIEvent) {
 }
 
 // handleNoticeEvent handles a notice event
-func (m *DPIManager) handleNoticeEvent(event DPIEvent) {
+func (m *DPIManager) handleNoticeEvent(event common.DPIEvent) {
 	// Process notice event
 	// In a real implementation, would log, send notifications, etc.
 
@@ -725,9 +888,9 @@ func (m *DPIManager) handleNoticeEvent(event DPIEvent) {
 }
 
 // createBlockingPolicy creates a blocking policy for an event
-func (m *DPIManager) createBlockingPolicy(event DPIEvent) {
+func (m *DPIManager) createBlockingPolicy(event common.DPIEvent) {
 	// Create a policy to block traffic related to the event
-	policy := &cilium.NetworkPolicy{
+	policy := &cilium.CiliumPolicy{
 		Name: fmt.Sprintf("dpi-block-%s-%s", event.EventType, normalizeString(event.Signature)),
 		Labels: map[string]string{
 			"app":       "dpi",
@@ -739,29 +902,34 @@ func (m *DPIManager) createBlockingPolicy(event DPIEvent) {
 
 	// Add rules based on the event
 	if event.SourceIP != "" {
-		policy.Ingress = append(policy.Ingress, cilium.PolicyRule{
-			FromCIDRs: []string{event.SourceIP + "/32"},
+		policy.Rules = append(policy.Rules, cilium.CiliumRule{
+			FromCIDR: []string{event.SourceIP + "/32"},
 			Denied:   true,
 		})
 	}
 
 	if event.DestIP != "" {
-		policy.Egress = append(policy.Egress, cilium.PolicyRule{
-			ToCIDRs: []string{event.DestIP + "/32"},
+		policy.Rules = append(policy.Rules, cilium.CiliumRule{
+			ToCIDR: []string{event.DestIP + "/32"},
 			Denied:  true,
 		})
 	}
 
 	// Apply the policy
-	if err := m.networkCtrl.ApplyDynamicPolicy(m.ctx, policy); err != nil {
+	if err := m.ciliumClient.ApplyNetworkPolicy(m.ctx, policy); err != nil {
 		fmt.Printf("Failed to apply blocking policy: %v\n", err)
 	} else {
 		fmt.Printf("Applied blocking policy for %s\n", event.Signature)
 	}
 }
 
+// EventChan returns the event channel for sending events to the DPI manager
+func (m *DPIManager) EventChan() chan common.DPIEvent {
+	return m.eventChan
+}
+
 // RegisterEventHandler registers a handler for DPI events
-func (m *DPIManager) RegisterEventHandler(handler func(DPIEvent)) {
+func (m *DPIManager) RegisterEventHandler(handler func(common.DPIEvent)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -808,6 +976,66 @@ func getCategoriesFromProfiles(profiles map[string]*DPIProfile) []string {
 	}
 
 	return result
+}
+
+// periodicStatsUpdate periodically updates protocol statistics
+func (m *DPIManager) periodicStatsUpdate() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return // Context canceled, exit
+
+		case <-ticker.C:
+			// Update protocol statistics
+			if m.zeekConnector != nil {
+				// Get detected protocols
+				protocols, err := m.zeekConnector.ExtractProtocols()
+				if err != nil {
+					fmt.Printf("Error extracting protocols: %v\n", err)
+					continue
+				}
+
+				// Log detected protocols
+				fmt.Println("Detected protocols:")
+				for proto, count := range protocols {
+					fmt.Printf("  %s: %d\n", proto, count)
+
+					// For important protocols, get detailed stats
+					if count > 0 && isImportantProtocol(proto) {
+						stats, err := m.zeekConnector.GetProtocolStats(proto)
+						if err != nil {
+							fmt.Printf("Error getting stats for %s: %v\n", proto, err)
+							continue
+						}
+
+						// Log detailed stats
+						fmt.Printf("    Details: %v\n", stats)
+					}
+				}
+			}
+		}
+	}
+}
+
+// isImportantProtocol determines if a protocol is important enough for detailed stats
+func isImportantProtocol(proto string) bool {
+	importantProtocols := map[string]bool{
+		"http":           true,
+		"https":          true,
+		"dns":            true,
+		"dns-over-tls":   true,
+		"dns-over-https": true,
+		"dnscrypt":       true,
+		"mqtt":           true,
+		"ssh":            true,
+		"ftp":            true,
+		"smtp":           true,
+	}
+
+	return importantProtocols[proto]
 }
 
 // normalizeString normalizes a string for use in policy names

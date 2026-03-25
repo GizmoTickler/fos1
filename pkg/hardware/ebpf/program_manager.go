@@ -92,7 +92,6 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 	}
 
 	var loadedProg *ebpf.Program
-	var err error
 
 	// Check if we're loading from object file or code
 	if len(program.Code) > 0 {
@@ -249,8 +248,7 @@ func (p *ProgramManager) AttachProgram(programName string, hookName string) erro
 		l, err = link.AttachTCX(link.TCXOptions{
 			Program:   prog.InnerProg,
 			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCIngress,
-			Priority:  uint32(prog.Priority),
+			Attach:    ebpf.AttachTCXIngress,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to attach TC ingress program: %w", err)
@@ -265,8 +263,7 @@ func (p *ProgramManager) AttachProgram(programName string, hookName string) erro
 		l, err = link.AttachTCX(link.TCXOptions{
 			Program:   prog.InnerProg,
 			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCEgress,
-			Priority:  uint32(prog.Priority),
+			Attach:    ebpf.AttachTCXEgress,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to attach TC egress program: %w", err)
@@ -374,7 +371,6 @@ func (p *ProgramManager) ReplaceProgram(oldName, newName string) error {
 
 	// Attach the new program
 	var l link.Link
-	var err error
 
 	switch HookType(oldHookType) {
 	case HookTypeXDP:
@@ -401,8 +397,7 @@ func (p *ProgramManager) ReplaceProgram(oldName, newName string) error {
 		l, err = link.AttachTCX(link.TCXOptions{
 			Program:   newProg.InnerProg,
 			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCIngress,
-			Priority:  uint32(newProg.Priority),
+			Attach:    ebpf.AttachTCXIngress,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to attach TC ingress program: %w", err)
@@ -417,8 +412,7 @@ func (p *ProgramManager) ReplaceProgram(oldName, newName string) error {
 		l, err = link.AttachTCX(link.TCXOptions{
 			Program:   newProg.InnerProg,
 			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCEgress,
-			Priority:  uint32(newProg.Priority),
+			Attach:    ebpf.AttachTCXEgress,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to attach TC egress program: %w", err)

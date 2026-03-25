@@ -80,7 +80,7 @@ func NewRoutingController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			
@@ -216,95 +216,6 @@ func (c *RoutingController) handleRouteDelete(key string) error {
 	}
 	
 	klog.Infof("Route %s deleted", key)
-	return nil
-}
-
-// handleRouteCreateOrUpdate handles creation or update of a Route CRD
-func (c *RoutingController) handleRouteCreateOrUpdate(obj *unstructured.Unstructured) error {
-	// Get the Route spec
-	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
-	if err != nil || !found {
-		return fmt.Errorf("error getting spec from Route: %v", err)
-	}
-	
-	// Extract fields from the spec
-	destination, found, err := unstructured.NestedString(spec, "destination")
-	if err != nil || !found {
-		return fmt.Errorf("error getting destination from Route: %v", err)
-	}
-	
-	gatewayStr, found, err := unstructured.NestedString(spec, "gateway")
-	if err != nil || !found {
-		return fmt.Errorf("error getting gateway from Route: %v", err)
-	}
-	
-	// Parse the gateway IP
-	gateway := net.ParseIP(gatewayStr)
-	if gateway == nil {
-		return fmt.Errorf("invalid gateway IP: %s", gatewayStr)
-	}
-	
-	// Get the interface
-	iface, found, err := unstructured.NestedString(spec, "interface")
-	if err != nil || !found {
-		return fmt.Errorf("error getting interface from Route: %v", err)
-	}
-	
-	// Get optional VRF
-	vrf, found, err := unstructured.NestedString(spec, "vrf")
-	if err != nil {
-		vrf = ""
-	}
-	
-	// Get optional metric
-	metricFloat, found, err := unstructured.NestedFloat64(spec, "metric")
-	if err != nil || !found {
-		metricFloat = 0
-	}
-	metric := int(metricFloat)
-	
-	// Get optional table ID
-	tableIDFloat, found, err := unstructured.NestedFloat64(spec, "tableId")
-	if err != nil || !found {
-		tableIDFloat = 0
-	}
-	tableID := int(tableIDFloat)
-	
-	// Get optional labels
-	labelsUntyped, found, err := unstructured.NestedMap(spec, "labels")
-	if err != nil {
-		labelsUntyped = nil
-	}
-	
-	// Convert labels to map[string]string
-	labels := make(map[string]string)
-	if labelsUntyped != nil {
-		for k, v := range labelsUntyped {
-			if strValue, ok := v.(string); ok {
-				labels[k] = strValue
-			}
-		}
-	}
-	
-	// Create a RouteSync object
-	routeSync := &cilium.RouteSync{
-		Destination: destination,
-		Gateway:     gateway,
-		Interface:   iface,
-		VRF:         vrf,
-		Metric:      metric,
-		TableID:     tableID,
-		Labels:      labels,
-	}
-	
-	// Synchronize the route with Cilium
-	// This will add or update the route in Cilium
-	ctx := context.Background()
-	if err := c.routeSynchronizer.SyncRoute(ctx, routeSync); err != nil {
-		return fmt.Errorf("error synchronizing route with Cilium: %w", err)
-	}
-	
-	klog.Infof("Successfully synchronized route %s with Cilium", destination)
 	return nil
 }
 

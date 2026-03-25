@@ -2,7 +2,6 @@ package multiwan
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"os/exec"

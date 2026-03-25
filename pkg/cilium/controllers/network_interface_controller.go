@@ -7,7 +7,6 @@ import (
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
@@ -80,7 +79,7 @@ func NewNetworkInterfaceController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			

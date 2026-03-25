@@ -79,7 +79,7 @@ func NewFirewallController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			

@@ -1,12 +1,12 @@
 package controllers
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"context"
 	"fmt"
 	"reflect"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -76,7 +76,7 @@ func NewNATController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			
@@ -379,7 +379,7 @@ func (c *NATController) extractDNATConfig(spec map[string]interface{}, name, nam
 // extractMasqueradeConfig extracts masquerade configuration from the spec
 func (c *NATController) extractMasqueradeConfig(spec map[string]interface{}, name, namespace, iface string) (nat.Config, error) {
 	// Extract source addresses
-	sourceAddressesUntyped, found, err := unstructured.NestedSlice(spec, "sourceAddresses")
+	sourceAddressesUntyped, _, err := unstructured.NestedSlice(spec, "sourceAddresses")
 	if err != nil {
 		return nat.Config{}, fmt.Errorf("error getting sourceAddresses: %w", err)
 	}
@@ -550,7 +550,7 @@ func (c *NATController) updateNATPolicyStatus(obj *unstructured.Unstructured) er
 		Resource: "ebpfnatpolicies",
 	}
 	
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, nil)
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update NATPolicy status: %w", err)
 	}

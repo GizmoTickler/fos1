@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
+	cmacme "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	certmanagerclientset "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -211,7 +213,7 @@ func (m *CertManager) CreateCertificate(config *CertificateConfig) (*Certificate
 			SecretName: config.SecretName,
 			CommonName: config.CommonName,
 			DNSNames:   config.DNSNames,
-			IssuerRef: certmanagerv1.ObjectReference{
+			IssuerRef: cmmeta.ObjectReference{
 				Name:  config.IssuerRef.Name,
 				Kind:  config.IssuerRef.Kind,
 				Group: config.IssuerRef.Group,
@@ -446,11 +448,11 @@ func (m *CertManager) CreateIssuer(config *IssuerConfig) (*Issuer, error) {
 		}
 
 		// Create ACME issuer
-		acmeIssuer := &certmanagerv1.ACMEIssuer{
+		acmeIssuer := &cmacme.ACMEIssuer{
 			Server: config.ACME.Server,
 			Email:  config.ACME.Email,
-			PrivateKey: certmanagerv1.SecretKeySelector{
-				LocalObjectReference: certmanagerv1.LocalObjectReference{
+			PrivateKey: cmmeta.SecretKeySelector{
+				LocalObjectReference: cmmeta.LocalObjectReference{
 					Name: config.ACME.PrivateKeySecretRef.Name,
 				},
 				Key: config.ACME.PrivateKeySecretRef.Key,
@@ -460,15 +462,15 @@ func (m *CertManager) CreateIssuer(config *IssuerConfig) (*Issuer, error) {
 		// Add solvers if specified
 		if len(config.ACME.Solvers) > 0 {
 			for _, solver := range config.ACME.Solvers {
-				acmeSolver := certmanagerv1.ACMEChallengeSolver{}
+				acmeSolver := cmacme.ACMEChallengeSolver{}
 
 				// Add HTTP01 solver if specified
 				if solver.HTTP01 != nil {
-					acmeSolver.HTTP01 = &certmanagerv1.ACMEChallengeSolverHTTP01{}
+					acmeSolver.HTTP01 = &cmacme.ACMEChallengeSolverHTTP01{}
 
 					// Add ingress solver if specified
 					if solver.HTTP01.Ingress != nil {
-						acmeSolver.HTTP01.Ingress = &certmanagerv1.ACMEChallengeSolverHTTP01Ingress{}
+						acmeSolver.HTTP01.Ingress = &cmacme.ACMEChallengeSolverHTTP01Ingress{}
 
 						// Add class if specified
 						if solver.HTTP01.Ingress.Class != "" {
@@ -477,14 +479,14 @@ func (m *CertManager) CreateIssuer(config *IssuerConfig) (*Issuer, error) {
 
 						// Add name if specified
 						if solver.HTTP01.Ingress.Name != "" {
-							acmeSolver.HTTP01.Ingress.Name = &solver.HTTP01.Ingress.Name
+							acmeSolver.HTTP01.Ingress.Name = solver.HTTP01.Ingress.Name
 						}
 					}
 				}
 
 				// Add DNS01 solver if specified
 				if solver.DNS01 != nil {
-					acmeSolver.DNS01 = &certmanagerv1.ACMEChallengeSolverDNS01{
+					acmeSolver.DNS01 = &cmacme.ACMEChallengeSolverDNS01{
 						// Add provider-specific configuration
 						// This is a simplified implementation
 						// In a real implementation, you would add provider-specific configuration
@@ -493,7 +495,7 @@ func (m *CertManager) CreateIssuer(config *IssuerConfig) (*Issuer, error) {
 
 				// Add selector if specified
 				if solver.Selector != nil {
-					acmeSolver.Selector = &certmanagerv1.CertificateDNSNameSelector{}
+					acmeSolver.Selector = &cmacme.CertificateDNSNameSelector{}
 
 					// Add DNS names if specified
 					if len(solver.Selector.DNSNames) > 0 {
@@ -528,8 +530,8 @@ func (m *CertManager) CreateIssuer(config *IssuerConfig) (*Issuer, error) {
 
 		// Add authentication configuration
 		if config.Vault.Auth.TokenSecretRef.Name != "" {
-			vaultIssuer.Auth.TokenSecretRef = &certmanagerv1.SecretKeySelector{
-				LocalObjectReference: certmanagerv1.LocalObjectReference{
+			vaultIssuer.Auth.TokenSecretRef = &cmmeta.SecretKeySelector{
+				LocalObjectReference: cmmeta.LocalObjectReference{
 					Name: config.Vault.Auth.TokenSecretRef.Name,
 				},
 				Key: config.Vault.Auth.TokenSecretRef.Key,
@@ -538,8 +540,8 @@ func (m *CertManager) CreateIssuer(config *IssuerConfig) (*Issuer, error) {
 			vaultIssuer.Auth.AppRole = &certmanagerv1.VaultAppRole{
 				Path:   config.Vault.Auth.AppRole.Path,
 				RoleId: config.Vault.Auth.AppRole.RoleID,
-				SecretRef: certmanagerv1.SecretKeySelector{
-					LocalObjectReference: certmanagerv1.LocalObjectReference{
+				SecretRef: cmmeta.SecretKeySelector{
+					LocalObjectReference: cmmeta.LocalObjectReference{
 						Name: config.Vault.Auth.AppRole.SecretIDSecretRef.Name,
 					},
 					Key: config.Vault.Auth.AppRole.SecretIDSecretRef.Key,

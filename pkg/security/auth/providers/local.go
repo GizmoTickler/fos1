@@ -3,7 +3,6 @@ package providers
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"sync"

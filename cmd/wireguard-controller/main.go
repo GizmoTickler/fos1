@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/vpn/controller"
+	_ "github.com/GizmoTickler/fos1/pkg/vpn/controller"
 )
 
 func main() {
@@ -48,7 +48,7 @@ func main() {
 		klog.Fatalf("Failed to create config: %v", err)
 	}
 
-	kubeClient, err := kubernetes.NewForConfig(config)
+	_, err = kubernetes.NewForConfig(config)
 	if err != nil {
 		klog.Fatalf("Failed to create client: %v", err)
 	}

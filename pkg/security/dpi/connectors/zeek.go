@@ -3,9 +3,9 @@ package connectors
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +15,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/GizmoTickler/fos1/pkg/cilium"
-	"github.com/GizmoTickler/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 )
 
 // ZeekConnector integrates Zeek with Cilium and implements the ZeekConnectorInterface
@@ -30,7 +30,7 @@ type ZeekConnector struct {
 
 	// State
 	watcher       *fsnotify.Watcher
-	policies      map[string]*cilium.NetworkPolicy
+	policies      map[string]*cilium.CiliumPolicy
 	protocolStats map[string]*ProtocolStats
 	applicationMap map[string]string // Maps service names to application names
 
@@ -38,7 +38,7 @@ type ZeekConnector struct {
 	mu            sync.RWMutex
 
 	// Event handling
-	eventChan     chan dpi.DPIEvent
+	eventChan     chan common.DPIEvent
 
 	// Control
 	ctx           context.Context
@@ -46,6 +46,7 @@ type ZeekConnector struct {
 	startTime     time.Time
 	logsProcessed int64
 	lastError     string
+	running       bool
 }
 
 // ZeekOptions configures the Zeek connector
@@ -129,10 +130,10 @@ func NewZeekConnector(opts ZeekOptions) (*ZeekConnector, error) {
 		vlanAware:     opts.VLANAware,
 		vlans:         opts.VLANs,
 		watcher:       watcher,
-		policies:      make(map[string]*cilium.NetworkPolicy),
+		policies:      make(map[string]*cilium.CiliumPolicy),
 		protocolStats: make(map[string]*ProtocolStats),
 		applicationMap: initApplicationMap(),
-		eventChan:     make(chan dpi.DPIEvent, 1000),
+		eventChan:     make(chan common.DPIEvent, 1000),
 		ctx:           ctx,
 		cancel:        cancel,
 		startTime:     time.Now(),
@@ -182,12 +183,14 @@ func (c *ZeekConnector) Start() error {
 	// Start processing events
 	go c.processEvents()
 
+	c.running = true
 	return nil
 }
 
 // Stop stops the Zeek connector
 func (c *ZeekConnector) Stop() error {
 	c.cancel()
+	c.running = false
 	return c.watcher.Close()
 }
 
@@ -301,8 +304,8 @@ func (c *ZeekConnector) processNoticeEntry(line string) {
 
 	// Extract fields
 	// Format: ts\tuid\tid.orig_h\tid.orig_p\tid.resp_h\tid.resp_p\tfqdn\tproto\tnote\tmsg\tsub\tsrc
-	ts := fields[0]
-	uid := fields[1]
+	// ts := fields[0]
+	// uid := fields[1]
 	srcIP := fields[2]
 	srcPort := fields[3]
 	destIP := fields[4]
@@ -312,7 +315,7 @@ func (c *ZeekConnector) processNoticeEntry(line string) {
 	noteType := fields[8]
 	msg := fields[9]
 	sub := fields[10]
-	src := fields[11]
+	// src := fields[11]
 
 	// Create policy for significant notices
 	if isSignificantNotice(noteType) {
@@ -359,7 +362,7 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 	defer c.mu.Unlock()
 
 	// Normalize policy name
-	policyName := fmt.Sprintf("zeek-notice-%s", normalizeString(noteType))
+	policyName := fmt.Sprintf("zeek-notice-%s", zeekNormalizeString(noteType))
 
 	// Check if we already have a policy for this notice type
 	if _, exists := c.policies[policyName]; exists {
@@ -368,11 +371,11 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 	}
 
 	// Create a policy that denies the specific traffic
-	policy := &cilium.NetworkPolicy{
+	policy := &cilium.CiliumPolicy{
 		Name: policyName,
 		Labels: map[string]string{
 			"app":       "zeek",
-			"notice":    normalizeString(noteType),
+			"notice":    zeekNormalizeString(noteType),
 			"component": "security",
 		},
 	}
@@ -387,9 +390,11 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 		srcCIDR = srcIP + "/32"
 	}
 
-	destCIDR := destIP
+	// Convert destination IP to CIDR notation if needed
+	// destCIDR := destIP
 	if !strings.Contains(destIP, "/") && destIP != "-" {
-		destCIDR = destIP + "/32"
+		// destCIDR = destIP + "/32"
+		// Using destIP directly in rules below
 	}
 
 	// Only create rules if we have valid IPs
@@ -402,7 +407,7 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 			destPortNum, destPortErr := strconv.Atoi(destPort)
 
 			if destPortErr == nil {
-				policy.Ingress = append(policy.Ingress, cilium.PolicyRule{
+				policy.Rules = append(policy.Rules, cilium.CiliumRule{
 					FromCIDR: []string{srcCIDR},
 					ToPorts: []cilium.PortRule{
 						{
@@ -420,7 +425,7 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 
 			// Rule to block traffic from destination to source
 			if srcPortErr == nil {
-				policy.Egress = append(policy.Egress, cilium.PolicyRule{
+				policy.Rules = append(policy.Rules, cilium.CiliumRule{
 					ToCIDR: []string{srcCIDR},
 					ToPorts: []cilium.PortRule{
 						{
@@ -440,7 +445,7 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 
 	// Add domain-based rules if available
 	if fqdn != "-" && fqdn != "" {
-		policy.Egress = append(policy.Egress, cilium.PolicyRule{
+		policy.Rules = append(policy.Rules, cilium.CiliumRule{
 			ToFQDNs: []cilium.MatchFQDN{
 				{
 					MatchPattern: fqdn,
@@ -451,11 +456,11 @@ func (c *ZeekConnector) createZeekPolicy(noteType, msg, srcIP, destIP, srcPort, 
 	}
 
 	// Store the policy if it has any rules
-	if len(policy.Ingress) > 0 || len(policy.Egress) > 0 {
+	if len(policy.Rules) > 0 {
 		c.policies[policyName] = policy
 
 		// Apply the policy
-		if err := c.networkCtrl.ApplyDynamicPolicy(c.ctx, policy); err != nil {
+		if err := c.ciliumClient.ApplyNetworkPolicy(c.ctx, policy); err != nil {
 			fmt.Printf("Failed to apply Zeek policy: %v\n", err)
 		} else {
 			fmt.Printf("Applied Zeek policy %s for notice: %s\n", policyName, noteType)
@@ -584,7 +589,7 @@ func (c *ZeekConnector) processConnLog(path string) {
 		}
 
 		// Create a DPI event for this connection
-		event := dpi.DPIEvent{
+		event := common.DPIEvent{
 			Timestamp:   timestamp,
 			SourceIP:    srcIP,
 			DestIP:      destIP,
@@ -693,7 +698,7 @@ func (c *ZeekConnector) processHTTPLog(path string) {
 		}
 
 		// Create a DPI event for this HTTP request
-		event := dpi.DPIEvent{
+		event := common.DPIEvent{
 			Timestamp:   timestamp,
 			SourceIP:    srcIP,
 			DestIP:      destIP,
@@ -739,18 +744,362 @@ func (c *ZeekConnector) processHTTPLog(path string) {
 
 // processSSLLog processes a Zeek SSL log
 func (c *ZeekConnector) processSSLLog(path string) {
-	// This would process the SSL log
-	// Skipping implementation details for brevity
-	// In a real implementation, this would parse the ssl.log and extract
-	// useful information for SSL/TLS traffic analysis
+	// Open the ssl.log file
+	file, err := os.Open(path)
+	if err != nil {
+		fmt.Printf("Failed to open ssl.log: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	// Create a scanner to read the file line by line
+	scanner := bufio.NewScanner(file)
+
+	// Skip header lines
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+	}
+
+	// Process each line
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Parse tab-separated fields
+		fields := strings.Split(line, "\t")
+		if len(fields) < 15 { // SSL log has at least 15 fields
+			continue
+		}
+
+		// Extract fields
+		// Format: ts uid id.orig_h id.orig_p id.resp_h id.resp_p version cipher server_name subject issuer
+		ts := fields[0]
+		uid := fields[1]
+		srcIP := fields[2]
+		srcPort := fields[3]
+		destIP := fields[4]
+		destPort := fields[5]
+		version := fields[6]
+		cipher := fields[7]
+		serverName := fields[8]
+		subject := fields[9]
+		issuer := fields[10]
+
+		// Additional fields for certificate validation
+		validationStatus := "-"
+		if len(fields) > 11 {
+			validationStatus = fields[11]
+		}
+
+		// Skip entries with missing data
+		if srcIP == "-" || destIP == "-" {
+			continue
+		}
+
+		// Parse numeric fields
+		srcPortNum, _ := strconv.Atoi(srcPort)
+		destPortNum, _ := strconv.Atoi(destPort)
+
+		// Parse timestamp
+		timestamp, err := time.Parse("2006-01-02T15:04:05.999999", ts)
+		if err != nil {
+			timestamp = time.Now() // Use current time if parsing fails
+		}
+
+		// Determine if this is likely DNS over TLS (DoT)
+		isDOT := false
+		if destPortNum == 853 || srcPortNum == 853 {
+			isDOT = true
+		}
+
+		// Determine application
+		application := "https"
+		category := "web"
+
+		// Check for DNS over TLS
+		if isDOT {
+			application = "dns-over-tls"
+			category = "network-service"
+		} else if serverName != "-" {
+			// Check for other applications based on SNI
+			if strings.Contains(serverName, "mqtt") || destPortNum == 8883 {
+				application = "mqtt"
+				category = "iot"
+			} else if strings.Contains(serverName, "doh") ||
+				strings.Contains(serverName, "dns-query") ||
+				strings.Contains(serverName, "dns.google") ||
+				strings.Contains(serverName, "cloudflare-dns") {
+				application = "dns-over-https"
+				category = "network-service"
+			}
+		}
+
+		// Create a DPI event for this SSL connection
+		event := common.DPIEvent{
+			Timestamp:   timestamp,
+			SourceIP:    srcIP,
+			DestIP:      destIP,
+			SourcePort:  srcPortNum,
+			DestPort:    destPortNum,
+			Protocol:    "tcp",
+			Application: application,
+			Category:    category,
+			EventType:   "ssl",
+			Severity:    0, // Normal SSL connection, no severity by default
+			Description: fmt.Sprintf("SSL/TLS %s connection to %s", version, serverName),
+			SessionID:   uid,
+			RawData: map[string]interface{}{
+				"version":      version,
+				"cipher":       cipher,
+				"server_name":  serverName,
+				"subject":      subject,
+				"issuer":       issuer,
+				"validation":   validationStatus,
+			},
+		}
+
+		// Check for certificate validation issues
+		if validationStatus != "-" && validationStatus != "ok" {
+			event.EventType = "alert"
+			event.Severity = 2 // Medium severity for certificate issues
+			event.Description = fmt.Sprintf("SSL/TLS certificate validation failed: %s", validationStatus)
+		}
+
+		// Send the event
+		select {
+		case c.eventChan <- event:
+			// Successfully sent
+		default:
+			// Channel full, log and continue
+			fmt.Println("Event channel full, dropping event")
+		}
+
+		// Increment logs processed counter
+		c.mu.Lock()
+		c.logsProcessed++
+		c.mu.Unlock()
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Error reading ssl.log: %v\n", err)
+		c.mu.Lock()
+		c.lastError = fmt.Sprintf("Error reading ssl.log: %v", err)
+		c.mu.Unlock()
+	}
 }
 
 // processDNSLog processes a Zeek DNS log
 func (c *ZeekConnector) processDNSLog(path string) {
-	// This would process the DNS log
-	// Skipping implementation details for brevity
-	// In a real implementation, this would parse the dns.log and extract
-	// useful information for DNS traffic analysis
+	// Open the dns.log file
+	file, err := os.Open(path)
+	if err != nil {
+		fmt.Printf("Failed to open dns.log: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	// Create a scanner to read the file line by line
+	scanner := bufio.NewScanner(file)
+
+	// Skip header lines
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+	}
+
+	// Process each line
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Parse tab-separated fields
+		fields := strings.Split(line, "\t")
+		if len(fields) < 15 { // DNS log has at least 15 fields
+			continue
+		}
+
+		// Extract fields
+		// Format: ts uid id.orig_h id.orig_p id.resp_h id.resp_p proto trans_id query qclass qtype rcode answers TTLs
+		ts := fields[0]
+		uid := fields[1]
+		srcIP := fields[2]
+		srcPort := fields[3]
+		destIP := fields[4]
+		destPort := fields[5]
+		proto := fields[6]
+		transID := fields[7]
+		query := fields[8]
+		qclass := fields[9]
+		qtype := fields[10]
+		rcode := fields[11]
+		answers := fields[12]
+		ttls := fields[13]
+
+		// Skip entries with missing data
+		if srcIP == "-" || destIP == "-" {
+			continue
+		}
+
+		// Parse numeric fields
+		srcPortNum, _ := strconv.Atoi(srcPort)
+		destPortNum, _ := strconv.Atoi(destPort)
+
+		// Parse timestamp
+		timestamp, err := time.Parse("2006-01-02T15:04:05.999999", ts)
+		if err != nil {
+			timestamp = time.Now() // Use current time if parsing fails
+		}
+
+		// Determine application
+		application := "dns"
+		category := "network-service"
+
+		// Check for DNSCrypt
+		// DNSCrypt typically uses port 443/tcp or 443/udp or 5353
+		isDNSCrypt := false
+		if (destPortNum == 443 || srcPortNum == 443 || destPortNum == 5353 || srcPortNum == 5353) &&
+		   (query == "-" || strings.Contains(query, "dnscrypt") || strings.Contains(query, "dns-crypt")) {
+			isDNSCrypt = true
+			application = "dnscrypt"
+		}
+
+		// Check for DNS over HTTPS (DoH) - this is a heuristic since DoH is hard to detect from DNS logs alone
+		// DoH typically uses port 443 and may have specific patterns in queries
+		if destPortNum == 443 && !isDNSCrypt &&
+		   (strings.Contains(query, "doh") || strings.Contains(query, "dns-query")) {
+			application = "dns-over-https"
+		}
+
+		// Create a DPI event for this DNS query
+		event := common.DPIEvent{
+			Timestamp:   timestamp,
+			SourceIP:    srcIP,
+			DestIP:      destIP,
+			SourcePort:  srcPortNum,
+			DestPort:    destPortNum,
+			Protocol:    strings.ToLower(proto),
+			Application: application,
+			Category:    category,
+			EventType:   "dns",
+			Severity:    0, // Normal DNS query, no severity by default
+			Description: fmt.Sprintf("DNS query for %s (type: %s)", query, qtype),
+			SessionID:   uid,
+			RawData: map[string]interface{}{
+				"trans_id":    transID,
+				"query":       query,
+				"qclass":      qclass,
+				"qtype":       qtype,
+				"rcode":       rcode,
+				"answers":     answers,
+				"ttls":        ttls,
+				"is_dnscrypt": isDNSCrypt,
+			},
+		}
+
+		// Check for suspicious DNS activity
+		if isSuspiciousDNSQuery(query, qtype) {
+			event.EventType = "alert"
+			event.Severity = 2 // Medium severity for suspicious DNS
+			event.Description = fmt.Sprintf("Suspicious DNS query for %s (type: %s)", query, qtype)
+		}
+
+		// Send the event
+		select {
+		case c.eventChan <- event:
+			// Successfully sent
+		default:
+			// Channel full, log and continue
+			fmt.Println("Event channel full, dropping event")
+		}
+
+		// Increment logs processed counter
+		c.mu.Lock()
+		c.logsProcessed++
+		c.mu.Unlock()
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Error reading dns.log: %v\n", err)
+		c.mu.Lock()
+		c.lastError = fmt.Sprintf("Error reading dns.log: %v", err)
+		c.mu.Unlock()
+	}
+}
+
+// isSuspiciousDNSQuery checks if a DNS query is suspicious
+func isSuspiciousDNSQuery(query, qtype string) bool {
+	// Check for unusually long domain names (potential DNS tunneling)
+	if len(query) > 100 {
+		return true
+	}
+
+	// Check for high entropy in domain name (potential DGA - Domain Generation Algorithm)
+	if calculateEntropy(query) > 4.0 {
+		return true
+	}
+
+	// Check for unusual query types that might indicate tunneling
+	unusualTypes := map[string]bool{
+		"TXT": true,
+		"NULL": true,
+		"CNAME": false, // Common, but can be used for tunneling
+		"MX": false,    // Common, but can be used for tunneling
+	}
+
+	if isUnusual, exists := unusualTypes[qtype]; exists && isUnusual {
+		return true
+	}
+
+	// Check for known malicious domains or patterns
+	maliciousPatterns := []string{
+		".evil.com",
+		".malware.",
+		".ddns.",
+		".dyndns.",
+		".no-ip.",
+		".onion.", // Tor hidden services
+	}
+
+	for _, pattern := range maliciousPatterns {
+		if strings.Contains(query, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// calculateEntropy calculates Shannon entropy of a string
+func calculateEntropy(s string) float64 {
+	if len(s) == 0 {
+		return 0
+	}
+
+	// Count character frequencies
+	charCounts := make(map[rune]int)
+	for _, c := range s {
+		charCounts[c]++
+	}
+
+	// Calculate entropy
+	length := float64(len(s))
+	entropy := 0.0
+
+	for _, count := range charCounts {
+		freq := float64(count) / length
+		entropy -= freq * math.Log2(freq)
+	}
+
+	return entropy
 }
 
 // ExtractProtocols extracts application protocols identified by Zeek
@@ -764,14 +1113,97 @@ func (c *ZeekConnector) ExtractProtocols() (map[string]int, error) {
 		result[proto] = int(stats.Connections)
 	}
 
-	// If no protocols have been detected yet, return some defaults
+	// If no protocols have been detected yet, scan the logs directory
+	if len(result) == 0 && c.running {
+		// In a real implementation, we would parse Zeek logs to extract protocols
+		// For this implementation, we'll scan the conn.log file if it exists
+		connLogPath := filepath.Join(c.logsPath, "conn.log")
+		if _, err := os.Stat(connLogPath); err == nil {
+			// Parse conn.log to extract protocols
+			file, err := os.Open(connLogPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open conn.log: %w", err)
+			}
+			defer file.Close()
+
+			// Create a scanner to read the file line by line
+			scanner := bufio.NewScanner(file)
+
+			// Skip header lines
+			for scanner.Scan() {
+				line := scanner.Text()
+				if !strings.HasPrefix(line, "#") {
+					break
+				}
+			}
+
+			// Process each line
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line == "" {
+					continue
+				}
+
+				// Parse tab-separated fields
+				fields := strings.Split(line, "\t")
+				if len(fields) < 6 {
+					continue
+				}
+
+				// Extract service field (protocol)
+				service := "-"
+				if len(fields) > 7 {
+					service = fields[7]
+				}
+
+				// Skip entries with no service identified
+				if service == "-" {
+					// Try to identify by port
+					destPort := fields[5]
+					portNum, err := strconv.Atoi(destPort)
+					if err == nil {
+						switch portNum {
+						case 80:
+							service = "http"
+						case 443:
+							service = "https"
+						case 53:
+							service = "dns"
+						case 853:
+							service = "dns-over-tls"
+						case 22:
+							service = "ssh"
+						case 1883, 8883:
+							service = "mqtt"
+						}
+					}
+					if service == "-" {
+						continue
+					}
+				}
+
+				// Increment protocol count
+				result[service]++
+			}
+
+			if err := scanner.Err(); err != nil {
+				return nil, fmt.Errorf("error reading conn.log: %w", err)
+			}
+		}
+	}
+
+	// If still no protocols have been detected, return some defaults
 	if len(result) == 0 {
 		return map[string]int{
-			"http":  0,
-			"https": 0,
-			"ssh":   0,
-			"dns":   0,
-			"ftp":   0,
+			"http":          0,
+			"https":         0,
+			"ssh":           0,
+			"dns":           0,
+			"dns-over-tls":  0,
+			"dns-over-https": 0,
+			"dnscrypt":      0,
+			"mqtt":          0,
+			"ftp":           0,
 		}, nil
 	}
 
@@ -835,9 +1267,9 @@ func (c *ZeekConnector) updateProtocolStats(protocol, srcIP, destIP string, byte
 }
 
 // GetEvents returns a channel of DPI events
-func (c *ZeekConnector) GetEvents(ctx context.Context) (<-chan dpi.DPIEvent, error) {
+func (c *ZeekConnector) GetEvents(ctx context.Context) (<-chan common.DPIEvent, error) {
 	// Create a new channel for the caller
-	events := make(chan dpi.DPIEvent, 100)
+	events := make(chan common.DPIEvent, 100)
 
 	// Start a goroutine to forward events from the internal channel to the caller's channel
 	go func() {
@@ -897,11 +1329,11 @@ func (c *ZeekConnector) Configure(config interface{}) error {
 }
 
 // Status returns the status of the Zeek engine
-func (c *ZeekConnector) Status() (dpi.ZeekStatus, error) {
+func (c *ZeekConnector) Status() (common.ZeekStatus, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	status := dpi.ZeekStatus{
+	status := common.ZeekStatus{
 		Running:      true, // If this function is called, the connector is running
 		Uptime:       time.Since(c.startTime),
 		LogsProcessed: c.logsProcessed,
@@ -910,6 +1342,20 @@ func (c *ZeekConnector) Status() (dpi.ZeekStatus, error) {
 	}
 
 	return status, nil
+}
+
+// GetLogsPath returns the path to Zeek logs
+func (c *ZeekConnector) GetLogsPath() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.logsPath
+}
+
+// GetPolicyPath returns the path to Zeek policy files
+func (c *ZeekConnector) GetPolicyPath() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.policyPath
 }
 
 // categorizeApplication categorizes an application protocol
@@ -1052,8 +1498,8 @@ func categorizeApplication(app string) string {
 	return category
 }
 
-// normalizeString normalizes a string for use in policy names
-func normalizeString(s string) string {
+// zeekNormalizeString normalizes a string for use in policy names
+func zeekNormalizeString(s string) string {
 	// Replace spaces and special characters with hyphens
 	s = strings.ReplaceAll(s, " ", "-")
 	s = strings.ReplaceAll(s, ".", "-")
@@ -1314,7 +1760,7 @@ func (c *ZeekConnector) createVLANBlockingPolicy(vlan int, application, srcIP, d
 	}
 
 	// Create a policy that denies the specific traffic
-	policy := &cilium.NetworkPolicy{
+	policy := &cilium.CiliumPolicy{
 		Name: policyName,
 		Labels: map[string]string{
 			"app":         "zeek",
@@ -1325,7 +1771,7 @@ func (c *ZeekConnector) createVLANBlockingPolicy(vlan int, application, srcIP, d
 	}
 
 	// Add rules to block the application
-	policy.Egress = append(policy.Egress, cilium.PolicyRule{
+	policy.Rules = append(policy.Rules, cilium.CiliumRule{
 		ToPorts: []cilium.PortRule{
 			{
 				Ports: []cilium.Port{
@@ -1333,9 +1779,6 @@ func (c *ZeekConnector) createVLANBlockingPolicy(vlan int, application, srcIP, d
 						Port:     destPort,
 						Protocol: proto,
 					},
-				},
-				Rules: map[string]string{
-					"l7proto": application,
 				},
 			},
 		},
@@ -1346,7 +1789,7 @@ func (c *ZeekConnector) createVLANBlockingPolicy(vlan int, application, srcIP, d
 	c.policies[policyName] = policy
 
 	// Apply the policy
-	if err := c.networkCtrl.ApplyDynamicPolicy(c.ctx, policy); err != nil {
+	if err := c.ciliumClient.ApplyNetworkPolicy(c.ctx, policy); err != nil {
 		fmt.Printf("Failed to apply VLAN blocking policy: %v\n", err)
 	} else {
 		fmt.Printf("Applied VLAN %d blocking policy for %s\n", vlan, application)

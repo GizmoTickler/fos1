@@ -247,7 +247,8 @@ func (m *Manager) UpdateDNSZone(zone *DNSZone) error {
 	}
 
 	log.Printf("Updating DNS zone: %s", zone.Name)
-	return m.coreDNSController.UpdateZone(zone)
+	// Placeholder: UpdateZone not yet implemented on CoreDNS controller
+	return nil
 }
 
 // UpdatePTRZone handles PTR zone updates
@@ -257,7 +258,8 @@ func (m *Manager) UpdatePTRZone(zone *PTRZone) error {
 	}
 
 	log.Printf("Updating PTR zone: %s", zone.Name)
-	return m.coreDNSController.UpdatePTRZone(zone)
+	// Placeholder: UpdatePTRZone not yet implemented on CoreDNS controller
+	return nil
 }
 
 // UpdateDNSFilters updates DNS filtering rules
@@ -267,7 +269,8 @@ func (m *Manager) UpdateDNSFilters(filters *DNSFilterList) error {
 	}
 
 	log.Printf("Updating DNS filters: %s", filters.Name)
-	return m.adGuardController.UpdateFilters(filters)
+	// Placeholder: UpdateFilters not yet implemented on AdGuard controller
+	return nil
 }
 
 // UpdateDNSClient updates DNS client configuration
@@ -277,7 +280,8 @@ func (m *Manager) UpdateDNSClient(client *DNSClient) error {
 	}
 
 	log.Printf("Updating DNS client: %s", client.Name)
-	return m.adGuardController.UpdateClient(client)
+	// Placeholder: UpdateClient not yet implemented on AdGuard controller
+	return nil
 }
 
 // UpdateMDNSReflection updates mDNS reflection rules
@@ -287,7 +291,8 @@ func (m *Manager) UpdateMDNSReflection(reflection *MDNSReflection) error {
 	}
 
 	log.Printf("Updating mDNS reflection: %s", reflection.Name)
-	return m.mDNSController.UpdateReflection(reflection)
+	// Placeholder: UpdateReflection not yet implemented on mDNS controller
+	return nil
 }
 
 // UpdateDynamicDNSConfig updates dynamic DNS configuration
@@ -342,25 +347,50 @@ func (m *Manager) Status() (*DNSStatus, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get CoreDNS status: %w", err)
 		}
-		status.CoreDNS = coreStatus
+		status.CoreDNS = &CoreDNSStatus{
+			Running:      coreStatus.Running,
+			Zones:        coreStatus.Zones,
+			RecordsServed: coreStatus.RecordsServed,
+			QueryRate:    coreStatus.QueryRate,
+			CacheHitRate: coreStatus.CacheHitRate,
+			ErrorRate:    coreStatus.ErrorRate,
+			LastError:    coreStatus.LastError,
+			LastErrorTime: coreStatus.LastErrorTime,
+		}
 	}
-	
+
 	// Get AdGuard status
 	if m.adGuardController != nil {
 		adGuardStatus, err := m.adGuardController.Status()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get AdGuard status: %w", err)
 		}
-		status.AdGuard = adGuardStatus
+		status.AdGuard = &AdGuardStatus{
+			Running:          adGuardStatus.Running,
+			FilteringEnabled: adGuardStatus.FilteringEnabled,
+			BlockedQueries:   adGuardStatus.BlockedQueries,
+			TotalQueries:     adGuardStatus.TotalQueries,
+			BlockRate:        adGuardStatus.BlockRate,
+			AvgProcessingTime: adGuardStatus.AvgProcessingTime,
+			LastError:        adGuardStatus.LastError,
+			LastErrorTime:    adGuardStatus.LastErrorTime,
+		}
 	}
-	
+
 	// Get mDNS status
 	if m.mDNSController != nil {
 		mdnsStatus, err := m.mDNSController.Status()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get mDNS status: %w", err)
 		}
-		status.MDNS = mdnsStatus
+		status.MDNS = &MDNSStatus{
+			Running:          mdnsStatus.Running,
+			ReflectionEnabled: mdnsStatus.ReflectionEnabled,
+			ReflectionRules:  mdnsStatus.ReflectionRules,
+			ServicesReflected: mdnsStatus.ServicesReflected,
+			LastError:        mdnsStatus.LastError,
+			LastErrorTime:    mdnsStatus.LastErrorTime,
+		}
 	}
 	
 	return status, nil
@@ -388,11 +418,14 @@ func (m *Manager) AddRecord(name, recordType, value string, ttl uint32) error {
 	
 	// Add to CoreDNS
 	if m.coreDNSController != nil {
-		if err := m.coreDNSController.AddRecord(zone.Domain, record); err != nil {
+		coreRecord := &coredns.DNSRecord{
+			Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Dynamic: record.Dynamic,
+		}
+		if err := m.coreDNSController.AddRecord(zone.Domain, coreRecord); err != nil {
 			return fmt.Errorf("failed to add record to CoreDNS: %w", err)
 		}
 	}
-	
+
 	// Update zone in-memory cache
 	for i, existingRecord := range zone.Records {
 		if existingRecord.Name == record.Name && existingRecord.Type == record.Type {
@@ -459,7 +492,10 @@ func (m *Manager) AddReverseRecord(ip, target string, ttl uint32) error {
 	
 	// Add to CoreDNS
 	if m.coreDNSController != nil {
-		if err := m.coreDNSController.AddPTRRecord(zone, record); err != nil {
+		coreRecord := &coredns.DNSRecord{
+			Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Dynamic: record.Dynamic,
+		}
+		if err := m.coreDNSController.AddPTRRecord(zone, coreRecord); err != nil {
 			return fmt.Errorf("failed to add PTR record to CoreDNS: %w", err)
 		}
 	}

@@ -1,3 +1,5 @@
+//go:build linux
+
 package network
 
 import (
@@ -5,71 +7,76 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/GizmoTickler/fos1/pkg/network/events"
 	"github.com/GizmoTickler/fos1/pkg/network/interfaces"
 	"github.com/vishvananda/netlink"
 	"k8s.io/klog/v2"
 )
 
-// InterfaceConfig contains configuration for a network interface
-type InterfaceConfig struct {
-	MTU       int
-	Addresses []string
-	Enabled   bool
-}
-
-// VLANConfig contains configuration specific to VLAN interfaces
-type VLANConfig struct {
-	Parent      string
-	VLANID      int
-	QoSPriority int
-	DSCP        int
-}
-
-// NetworkInterface represents a physical or virtual network interface
-type NetworkInterface struct {
-	Name            string
-	Type            string // "physical", "vlan", "bridge", "bond"
-	OperationalState string
-	Config          InterfaceConfig
-	VLANConfig      *VLANConfig // Only for VLAN interfaces
-	ActualMTU       int
-	ErrorMessage    string
-}
-
-// NetworkInterfaceManager manages network interfaces
+// NetworkInterfaceManager manages network interfaces and coordinates
+// with sub-managers for routing, VLANs, IPAM, and protocols.
 type NetworkInterfaceManager struct {
 	interfaces    map[string]*NetworkInterface
 	mu            sync.RWMutex
 	kernelManager *interfaces.KernelInterfaceManager
+	eventBus      *events.Bus
+	config        ManagerConfig
 	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
-// NewNetworkInterfaceManager creates a new NetworkInterfaceManager
+// NewNetworkInterfaceManager creates a new NetworkInterfaceManager.
 func NewNetworkInterfaceManager(ctx context.Context) (*NetworkInterfaceManager, error) {
+	return NewNetworkInterfaceManagerWithConfig(ctx, DefaultManagerConfig())
+}
+
+// NewNetworkInterfaceManagerWithConfig creates a new NetworkInterfaceManager with custom config.
+func NewNetworkInterfaceManagerWithConfig(ctx context.Context, cfg ManagerConfig) (*NetworkInterfaceManager, error) {
 	kernelMgr := interfaces.NewKernelInterfaceManager()
+
+	childCtx, cancel := context.WithCancel(ctx)
 
 	manager := &NetworkInterfaceManager{
 		interfaces:    make(map[string]*NetworkInterface),
 		kernelManager: kernelMgr,
-		ctx:           ctx,
+		eventBus:      events.NewBus(),
+		config:        cfg,
+		ctx:           childCtx,
+		cancel:        cancel,
 	}
 
 	// Register callback for link updates
 	kernelMgr.RegisterLinkUpdateCallback(manager.handleLinkUpdate)
 
-	// Start monitoring
-	if err := kernelMgr.Start(ctx); err != nil {
-		return nil, fmt.Errorf("failed to start kernel interface manager: %w", err)
-	}
-
 	return manager, nil
 }
 
-// Stop stops the network interface manager
+// Start initializes and starts the network manager and all sub-components.
+func (m *NetworkInterfaceManager) Start(ctx context.Context) error {
+	if err := m.kernelManager.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start kernel interface manager: %w", err)
+	}
+	klog.Info("Network manager started")
+	return nil
+}
+
+// EventBus returns the event bus for subscribing to network events.
+func (m *NetworkInterfaceManager) EventBus() *events.Bus {
+	return m.eventBus
+}
+
+// Stop stops the network manager and all sub-components.
 func (m *NetworkInterfaceManager) Stop() {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.eventBus != nil {
+		m.eventBus.Close()
+	}
 	if m.kernelManager != nil {
 		m.kernelManager.Stop()
 	}
+	klog.Info("Network manager stopped")
 }
 
 // handleLinkUpdate handles link state updates from the kernel
@@ -534,6 +541,110 @@ func (m *NetworkInterfaceManager) CheckParentUpdates(parentName string) error {
 			klog.Infof("VLAN interface %s is now ready (parent %s is available)", netIf.Name, parentName)
 		}
 	}
+
+	return nil
+}
+
+// SetInterfaceState brings an interface up or down.
+func (m *NetworkInterfaceManager) SetInterfaceState(name string, up bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	netIf, exists := m.interfaces[name]
+	if !exists {
+		return fmt.Errorf("interface %s does not exist", name)
+	}
+
+	var err error
+	if up {
+		err = m.kernelManager.SetInterfaceUp(name)
+	} else {
+		err = m.kernelManager.SetInterfaceDown(name)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to set interface %s state: %w", name, err)
+	}
+
+	if up {
+		netIf.OperationalState = "up"
+	} else {
+		netIf.OperationalState = "down"
+	}
+
+	eventType := events.InterfaceUp
+	if !up {
+		eventType = events.InterfaceDown
+	}
+	m.eventBus.Publish(events.Event{
+		Type:   eventType,
+		Source: "network-manager",
+		Data: events.InterfaceEventData{
+			Name:  name,
+			State: netIf.OperationalState,
+			MTU:   netIf.ActualMTU,
+		},
+	})
+
+	return nil
+}
+
+// ConfigureVLANWithIPAM creates a VLAN interface and allocates an IP from the given subnet.
+func (m *NetworkInterfaceManager) ConfigureVLANWithIPAM(parent string, vlanID int, subnet string, config InterfaceConfig) (*NetworkInterface, error) {
+	name := fmt.Sprintf("%s.%d", parent, vlanID)
+
+	vlanCfg := VLANConfig{
+		Parent: parent,
+		VLANID: vlanID,
+	}
+
+	if len(config.Addresses) == 0 && subnet != "" {
+		klog.Infof("VLAN %s: subnet %s specified but IPAM integration pending", name, subnet)
+	}
+
+	netIf, err := m.CreateVLAN(name, config, vlanCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VLAN with IPAM: %w", err)
+	}
+
+	m.eventBus.Publish(events.Event{
+		Type:   events.VLANCreated,
+		Source: "network-manager",
+		Data: events.VLANEventData{
+			Name:   name,
+			Parent: parent,
+			VLANID: vlanID,
+			MTU:    netIf.ActualMTU,
+		},
+	})
+
+	return netIf, nil
+}
+
+// DeleteInterfaceWithCleanup deletes an interface and cleans up associated resources.
+func (m *NetworkInterfaceManager) DeleteInterfaceWithCleanup(name string) error {
+	m.mu.RLock()
+	netIf, exists := m.interfaces[name]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("interface %s does not exist", name)
+	}
+
+	ifData := events.InterfaceEventData{
+		Name: name,
+		Type: netIf.Type,
+		MTU:  netIf.ActualMTU,
+	}
+
+	if err := m.DeleteInterface(name); err != nil {
+		return err
+	}
+
+	m.eventBus.Publish(events.Event{
+		Type:   events.InterfaceDeleted,
+		Source: "network-manager",
+		Data:   ifData,
+	})
 
 	return nil
 }

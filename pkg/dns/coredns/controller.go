@@ -2,6 +2,9 @@ package coredns
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -274,60 +277,150 @@ type CoreDNSStatus struct {
 
 // Helper functions
 
-// loadConfiguration loads the CoreDNS configuration from disk
+// loadConfiguration loads the CoreDNS configuration from disk.
+// It scans the zones directory for zone files (db.*) and parses each one.
+// If no zone files exist, it initializes default zones.
 func (c *Controller) loadConfiguration() error {
-	// In a real implementation, this would parse CoreDNS configuration files
-	// For now, just initialize with empty data
 	c.zones = make(map[string]*Zone)
 	c.ptrZones = make(map[string]*PTRZone)
-	
-	// Add default local zone
+
+	// Try to read existing zone files from the zones directory
+	entries, err := os.ReadDir(c.zonesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Directory doesn't exist yet; initialize defaults
+			return c.initDefaults()
+		}
+		return fmt.Errorf("failed to read zones directory %s: %w", c.zonesPath, err)
+	}
+
+	loaded := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isZoneFile(name) {
+			continue
+		}
+
+		// Derive zone name from filename: db.example.com -> example.com
+		zoneName := strings.TrimPrefix(name, "db.")
+		path := filepath.Join(c.zonesPath, name)
+
+		zone, parseErr := ParseZoneFile(path, zoneName)
+		if parseErr != nil {
+			// Log but continue loading other zones
+			c.lastError = fmt.Sprintf("failed to parse zone file %s: %v", path, parseErr)
+			c.lastErrorTime = time.Now()
+			continue
+		}
+
+		// Reverse zones go into ptrZones
+		if strings.HasSuffix(zoneName, ".arpa") || strings.HasSuffix(zoneName, ".arpa.") {
+			c.ptrZones[zoneName] = &PTRZone{
+				Name:      zone.Name,
+				Network:   zone.Domain,
+				Records:   zone.Records,
+				SOA:       zone.SOA,
+				Updated:   zone.Updated,
+				ConfigGen: zone.ConfigGen,
+			}
+		} else {
+			c.zones[zoneName] = zone
+		}
+		loaded++
+	}
+
+	// If no zones were loaded, initialize defaults
+	if loaded == 0 {
+		return c.initDefaults()
+	}
+
+	return nil
+}
+
+// initDefaults creates default zones when no zone files exist on disk.
+func (c *Controller) initDefaults() error {
 	c.zones["local"] = &Zone{
 		Name:    "local",
 		Domain:  "local",
 		Records: make([]*DNSRecord, 0),
 		SOA:     defaultSOA("local"),
 	}
-	
-	// Add default reverse zones
+
 	c.ptrZones["in-addr.arpa"] = &PTRZone{
 		Name:    "in-addr.arpa",
 		Network: "in-addr.arpa",
 		Records: make([]*DNSRecord, 0),
 		SOA:     defaultSOA("in-addr.arpa"),
 	}
-	
+
 	c.ptrZones["ip6.arpa"] = &PTRZone{
 		Name:    "ip6.arpa",
 		Network: "ip6.arpa",
 		Records: make([]*DNSRecord, 0),
 		SOA:     defaultSOA("ip6.arpa"),
 	}
-	
+
 	return nil
 }
 
-// saveConfiguration saves the CoreDNS configuration to disk
+// saveConfiguration saves the CoreDNS configuration to disk.
+// It writes each forward and reverse zone as an RFC 1035 zone file,
+// incrementing the SOA serial on each save.
 func (c *Controller) saveConfiguration() error {
-	// In a real implementation, this would write to CoreDNS configuration files
-	// and possibly reload CoreDNS
-	
-	// For now, just simulate a save
+	// Ensure the zones directory exists
+	if err := os.MkdirAll(c.zonesPath, 0755); err != nil {
+		return fmt.Errorf("failed to create zones directory %s: %w", c.zonesPath, err)
+	}
+
+	// Write forward zones
 	for _, zone := range c.zones {
+		IncrementSerial(zone)
 		zone.ConfigGen++
+		path := filepath.Join(c.zonesPath, zoneFileName(zone.Domain))
+		if err := WriteZoneFile(zone, path); err != nil {
+			return fmt.Errorf("failed to write zone file for %s: %w", zone.Domain, err)
+		}
 	}
-	
-	for _, zone := range c.ptrZones {
-		zone.ConfigGen++
+
+	// Write reverse zones (convert PTRZone to Zone for writing)
+	for _, ptrZone := range c.ptrZones {
+		tmpZone := &Zone{
+			Name:      ptrZone.Name,
+			Domain:    ptrZone.Network,
+			Records:   ptrZone.Records,
+			SOA:       ptrZone.SOA,
+			Updated:   ptrZone.Updated,
+			ConfigGen: ptrZone.ConfigGen,
+		}
+		IncrementSerial(tmpZone)
+		ptrZone.ConfigGen++
+		ptrZone.SOA = tmpZone.SOA
+		path := filepath.Join(c.zonesPath, zoneFileName(ptrZone.Network))
+		if err := WriteZoneFile(tmpZone, path); err != nil {
+			return fmt.Errorf("failed to write PTR zone file for %s: %w", ptrZone.Network, err)
+		}
 	}
-	
+
 	return nil
 }
 
-// applyConfiguration applies the current configuration to CoreDNS
+// applyConfiguration applies the current configuration to CoreDNS.
+// It saves all zone files and triggers a CoreDNS reload via file modification times.
 func (c *Controller) applyConfiguration() error {
-	// In a real implementation, this would reload CoreDNS or use its API
-	// For now, just simulate an apply
+	if err := c.saveConfiguration(); err != nil {
+		return fmt.Errorf("failed to save configuration: %w", err)
+	}
+
+	if err := ReloadZones(c.zonesPath); err != nil {
+		// ReloadZones may fail if the directory is empty or has no zone files yet.
+		// This is not fatal during initial startup.
+		c.lastError = fmt.Sprintf("reload warning: %v", err)
+		c.lastErrorTime = time.Now()
+	}
+
 	c.lastReload = time.Now()
 	return nil
 }

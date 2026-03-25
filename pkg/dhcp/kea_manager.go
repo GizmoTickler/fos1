@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 
@@ -226,7 +225,7 @@ func (m *KeaManager) GetLeases(vlanID string) ([]types.Lease, error) {
 	defer m.mutex.RUnlock()
 
 	// Check if the instance exists
-	instance, exists := m.instances[vlanID]
+	_, exists := m.instances[vlanID]
 	if !exists {
 		return nil, fmt.Errorf("no configuration exists for VLAN %s", vlanID)
 	}

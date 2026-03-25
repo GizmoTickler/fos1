@@ -2,7 +2,8 @@ package dpi
 
 import (
 	"context"
-	"time"
+
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 )
 
 // ZeekConnectorInterface defines the interface for the Zeek connector
@@ -17,58 +18,46 @@ type ZeekConnectorInterface interface {
 	Configure(config interface{}) error
 
 	// Status returns the status of the Zeek engine
-	Status() (ZeekStatus, error)
+	Status() (common.ZeekStatus, error)
 
 	// GetEvents returns a channel of DPI events
-	GetEvents(ctx context.Context) (<-chan DPIEvent, error)
+	GetEvents(ctx context.Context) (<-chan common.DPIEvent, error)
 
 	// GetProtocolStats gets statistics for a specific protocol
 	GetProtocolStats(protocol string) (map[string]interface{}, error)
 
 	// ExtractProtocols extracts application protocols identified by Zeek
 	ExtractProtocols() (map[string]int, error)
+
+	// GetLogsPath returns the path to Zeek logs
+	GetLogsPath() string
+
+	// GetPolicyPath returns the path to Zeek policy files
+	GetPolicyPath() string
 }
 
-// ZeekStatus represents the status of the Zeek engine
-type ZeekStatus struct {
-	Running      bool
-	Uptime       time.Duration
-	LogsProcessed int64
-	LastError    string
-	Version      string
-}
-
-// DPIEvent represents an event from the DPI system
-type DPIEvent struct {
-	// Common fields for all DPI events
-	Timestamp   time.Time
-	SourceIP    string
-	DestIP      string
-	SourcePort  int
-	DestPort    int
-	Protocol    string
-	Application string
-	Category    string
-
-	// Event-specific fields
-	EventType   string // "flow", "alert", "notice", etc.
-	Severity    int    // 0-4, with 4 being most severe
-	Description string
-	Signature   string
-	SessionID   string
-
-	// Raw event data
-	RawData     map[string]interface{}
-}
+// ZeekStatus and DPIEvent types are now in the common package
 
 // ApplicationDetectorInterface defines the interface for application detection
 type ApplicationDetectorInterface interface {
 	// GetApplicationInfo gets information about an application
-	GetApplicationInfo(applicationName string) (*ApplicationInfo, error)
+	GetApplicationInfo(applicationName string) (*common.ApplicationInfo, error)
 
 	// GetAllApplications returns all known applications
-	GetAllApplications() []*ApplicationInfo
+	GetAllApplications() []*common.ApplicationInfo
 
 	// GetApplicationsByCategory returns applications in a category
-	GetApplicationsByCategory(category string) []*ApplicationInfo
+	GetApplicationsByCategory(category string) []*common.ApplicationInfo
+}
+
+// DPIEngineConnector defines the interface for DPI engine connectors
+type DPIEngineConnector interface {
+	// Start starts the DPI engine connector
+	Start() error
+
+	// Stop stops the DPI engine connector
+	Stop() error
+
+	// GetEvents returns a channel of DPI events
+	GetEvents(ctx context.Context) (<-chan common.DPIEvent, error)
 }

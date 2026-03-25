@@ -8,7 +8,6 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/GizmoTickler/fos1/pkg/network/routing"
 )
 
 // failover implements failover for multi-WAN

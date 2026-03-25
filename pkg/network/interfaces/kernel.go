@@ -1,3 +1,5 @@
+//go:build linux
+
 package interfaces
 
 import (
@@ -7,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"golang.org/x/sys/unix"
 	"k8s.io/klog/v2"
 )
@@ -317,7 +320,7 @@ func (m *KernelInterfaceManager) GetInterfaceAddresses(name string) ([]string, e
 	}
 
 	// Get addresses
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+	addrs, err := netlink.AddrList(link, nl.FAMILY_ALL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list addresses on interface %s: %w", name, err)
 	}

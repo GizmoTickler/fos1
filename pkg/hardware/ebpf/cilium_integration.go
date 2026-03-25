@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,35 +19,6 @@ type Endpoint struct {
 	PodName     string
 	Namespace   string
 	Labels      []string
-}
-
-// CiliumNetworkPolicy represents the structure of a Cilium Network Policy
-type CiliumNetworkPolicy struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Metadata   struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace,omitempty"`
-	} `json:"metadata"`
-	Spec struct {
-		Description     string                 `json:"description,omitempty"`
-		EndpointSelector map[string]interface{} `json:"endpointSelector"`
-		Ingress         []interface{}          `json:"ingress,omitempty"`
-		Egress          []interface{}          `json:"egress,omitempty"`
-		NodeSelector    map[string]interface{} `json:"nodeSelector,omitempty"`
-		Options         map[string]string      `json:"options,omitempty"`
-	} `json:"spec"`
-}
-
-// HardwareAccelerationOptions contains options for hardware acceleration
-type HardwareAccelerationOptions struct {
-	Enabled       bool   `json:"enabled"`
-	XDPAccel      bool   `json:"xdpAccel"`      // XDP acceleration
-	XDPHWOffload  bool   `json:"xdpHWOffload"`  // XDP hardware offload
-	SmartNIC      bool   `json:"smartNIC"`      // SmartNIC offload
-	DPDKEnabled   bool   `json:"dpdkEnabled"`   // DPDK integration
-	HardwareType  string `json:"hardwareType"`  // Type of hardware
-	OffloadDevice string `json:"offloadDevice"` // Device for offload
 }
 
 // CiliumIntegrationManager provides integration with Cilium's eBPF components.
@@ -240,13 +210,13 @@ func (c *CiliumIntegrationManager) SyncCiliumConfiguration() error {
 	}
 
 	// Get currently registered custom programs
-	regPrograms, err := c.getRegisteredPrograms()
+	_, err = c.getRegisteredPrograms()
 	if err != nil {
 		return fmt.Errorf("failed to get registered programs: %w", err)
 	}
 
 	// Get active Cilium network policies
-	policies, err := c.GetCiliumNetworkPolicies(ctx)
+	_, err = c.GetCiliumNetworkPolicies(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get Cilium network policies: %w", err)
 	}
@@ -283,21 +253,11 @@ func (c *CiliumIntegrationManager) GetCiliumNetworkPolicies(ctx context.Context)
 		{
 			APIVersion: "cilium.io/v2",
 			Kind:       "CiliumNetworkPolicy",
-			Metadata: struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace,omitempty"`
-			}{
+			Metadata: CiliumPolicyMetadata{
 				Name:      "secure-pods",
 				Namespace: "default",
 			},
-			Spec: struct {
-				Description     string                 `json:"description,omitempty"`
-				EndpointSelector map[string]interface{} `json:"endpointSelector"`
-				Ingress         []interface{}          `json:"ingress,omitempty"`
-				Egress          []interface{}          `json:"egress,omitempty"`
-				NodeSelector    map[string]interface{} `json:"nodeSelector,omitempty"`
-				Options         map[string]string      `json:"options,omitempty"`
-			}{
+			Spec: CiliumPolicySpec{
 				Description: "Secure pod communications",
 				EndpointSelector: map[string]interface{}{
 					"matchLabels": map[string]string{

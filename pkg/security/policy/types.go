@@ -276,22 +276,22 @@ func (r *PolicyResolver) ResolvePolicy(policy *FilterPolicy, policies map[string
 	return policy, nil
 }
 
-// PolicyTranslator translates policies to Cilium policies
-type PolicyTranslator struct {
+// CiliumPolicyTranslator translates policies to Cilium policies
+type CiliumPolicyTranslator struct {
 	ciliumClient interface{}
 	logger       *PolicyLogger
 }
 
-// NewPolicyTranslator creates a new policy translator
-func NewPolicyTranslator(ciliumClient interface{}, logger *PolicyLogger) *PolicyTranslator {
-	return &PolicyTranslator{
+// NewCiliumPolicyTranslator creates a new Cilium policy translator
+func NewCiliumPolicyTranslator(ciliumClient interface{}, logger *PolicyLogger) *CiliumPolicyTranslator {
+	return &CiliumPolicyTranslator{
 		ciliumClient: ciliumClient,
 		logger:       logger,
 	}
 }
 
 // TranslatePolicy translates a policy to Cilium policies
-func (t *PolicyTranslator) TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*interface{}, error) {
+func (t *CiliumPolicyTranslator) TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*interface{}, error) {
 	// In a real implementation, would translate to Cilium policies
 	// For now, return a placeholder
 	var result []*interface{}

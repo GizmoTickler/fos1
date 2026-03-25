@@ -8,19 +8,19 @@ import (
 // NetworkController manages all networking functionality through Cilium
 type NetworkController struct {
 	// Configuration would be injected here
-	ciliumClient CiliumClient
+	ciliumClient NetworkCiliumClient
 }
 
-// CiliumClient represents the interface to Cilium's API
-type CiliumClient interface {
-	ApplyNetworkPolicy(ctx context.Context, policy *NetworkPolicy) error
-	CreateNAT(ctx context.Context, config *NATConfig) error
-	ConfigureVLANRouting(ctx context.Context, config *VLANRoutingConfig) error
-	ConfigureDPIIntegration(ctx context.Context, config *DPIIntegrationConfig) error
+// NetworkCiliumClient represents the interface to Cilium's API for network operations
+type NetworkCiliumClient interface {
+	ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error
+	CreateNAT(ctx context.Context, config *CiliumNATConfig) error
+	ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error
+	ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error
 }
 
-// NetworkPolicy represents a Cilium network policy
-type NetworkPolicy struct {
+// NetworkControllerPolicy represents a network policy for the network controller
+type NetworkControllerPolicy struct {
 	Name      string
 	Namespace string
 	Labels    map[string]string
@@ -30,24 +30,24 @@ type NetworkPolicy struct {
 
 // PolicyRule represents a rule in a network policy
 type PolicyRule struct {
-	FromEndpoints []Endpoint
-	ToEndpoints   []Endpoint
-	ToPorts      []PortRule
+	FromEndpoints []NetworkEndpoint
+	ToEndpoints   []NetworkEndpoint
+	ToPorts      []NetworkPortRule
 }
 
-// Endpoint represents an endpoint selector
-type Endpoint struct {
+// NetworkEndpoint represents an endpoint selector for the network controller
+type NetworkEndpoint struct {
 	Labels map[string]string
 }
 
-// PortRule represents a port rule
-type PortRule struct {
-	Ports     []Port
+// NetworkPortRule represents a port rule for the network controller
+type NetworkPortRule struct {
+	Ports     []NetworkPort
 	Rules     map[string]string
 }
 
-// Port represents a port range
-type Port struct {
+// NetworkPort represents a port range for the network controller
+type NetworkPort struct {
 	Port     uint16
 	Protocol string
 }
@@ -63,19 +63,19 @@ type NATConfig struct {
 type VLANRoutingConfig struct {
 	VLANs      []uint16
 	AllowInter bool
-	Policies   map[string]VLANPolicy
+	Policies   map[string]NetworkVLANPolicy
 }
 
-// VLANPolicy represents a policy between VLANs
-type VLANPolicy struct {
+// NetworkVLANPolicy represents a policy between VLANs for the network controller
+type NetworkVLANPolicy struct {
 	FromVLAN uint16
 	ToVLAN   uint16
 	AllowAll bool
-	Rules    []VLANRule
+	Rules    []NetworkVLANRule
 }
 
-// VLANRule represents a rule between VLANs
-type VLANRule struct {
+// NetworkVLANRule represents a rule between VLANs for the network controller
+type NetworkVLANRule struct {
 	Protocol string
 	Port     uint16
 	Allow    bool
@@ -96,7 +96,7 @@ type AppPolicy struct {
 }
 
 // NewNetworkController creates a new network controller
-func NewNetworkController(client CiliumClient) *NetworkController {
+func NewNetworkController(client NetworkCiliumClient) *NetworkController {
 	return &NetworkController{
 		ciliumClient: client,
 	}
@@ -104,66 +104,104 @@ func NewNetworkController(client CiliumClient) *NetworkController {
 
 // ConfigureNAT configures NAT for IPv4 or IPv6
 func (c *NetworkController) ConfigureNAT(ctx context.Context, sourceNetwork, outInterface string, ipv6 bool) error {
-	config := &NATConfig{
+	config := &CiliumNATConfig{
 		SourceNetwork:    sourceNetwork,
 		DestinationIface: outInterface,
 		IPv6:             ipv6,
 	}
-	
+
 	return c.ciliumClient.CreateNAT(ctx, config)
 }
 
 // ConfigureInterVLANRouting configures routing between VLANs
 func (c *NetworkController) ConfigureInterVLANRouting(ctx context.Context, vlans []uint16, allowAll bool) error {
-	config := &VLANRoutingConfig{
-		VLANs:      vlans,
-		AllowInter: allowAll,
-		Policies:   make(map[string]VLANPolicy),
+	// Convert to CiliumVLANRoutingConfig
+	vlanConfigs := make(map[int]VLANConfig)
+	for _, vlan := range vlans {
+		vlanConfigs[int(vlan)] = VLANConfig{
+			Name: fmt.Sprintf("vlan-%d", vlan),
+			MTU:  1500,
+		}
 	}
-	
+
+	config := &CiliumVLANRoutingConfig{
+		VLANs: vlanConfigs,
+		Policies: make(map[string]VLANPolicy),
+	}
+
 	return c.ciliumClient.ConfigureVLANRouting(ctx, config)
 }
 
 // AddVLANPolicy adds a specific policy between VLANs
-func (c *NetworkController) AddVLANPolicy(ctx context.Context, fromVLAN, toVLAN uint16, allowAll bool, rules []VLANRule) error {
+func (c *NetworkController) AddVLANPolicy(ctx context.Context, fromVLAN, toVLAN uint16, allowAll bool, rules []NetworkVLANRule) error {
 	policyKey := fmt.Sprintf("%d-%d", fromVLAN, toVLAN)
-	config := &VLANRoutingConfig{
-		VLANs:      []uint16{fromVLAN, toVLAN},
-		AllowInter: false,
-		Policies: map[string]VLANPolicy{
-			policyKey: {
-				FromVLAN: fromVLAN,
-				ToVLAN:   toVLAN,
-				AllowAll: allowAll,
-				Rules:    rules,
-			},
-		},
+
+	// Convert NetworkVLANRule to VLANRule
+	vlanRules := make([]VLANRule, 0, len(rules))
+	for _, rule := range rules {
+		vlanRules = append(vlanRules, VLANRule{
+			Protocol: rule.Protocol,
+			Port:     rule.Port,
+			Allow:    rule.Allow,
+		})
 	}
-	
+
+	// Create VLAN configurations
+	vlanConfigs := make(map[int]VLANConfig)
+	vlanConfigs[int(fromVLAN)] = VLANConfig{
+		Name: fmt.Sprintf("vlan-%d", fromVLAN),
+		MTU:  1500,
+	}
+	vlanConfigs[int(toVLAN)] = VLANConfig{
+		Name: fmt.Sprintf("vlan-%d", toVLAN),
+		MTU:  1500,
+	}
+
+	// Create policy
+	policies := make(map[string]VLANPolicy)
+	policies[policyKey] = VLANPolicy{
+		FromVLAN: fromVLAN,
+		ToVLAN:   toVLAN,
+		AllowAll: allowAll,
+		Rules:    vlanRules,
+	}
+
+	config := &CiliumVLANRoutingConfig{
+		VLANs:    vlanConfigs,
+		Policies: policies,
+	}
+
 	return c.ciliumClient.ConfigureVLANRouting(ctx, config)
 }
 
 // IntegrateDPI integrates DPI with Cilium for application-aware policies
 func (c *NetworkController) IntegrateDPI(ctx context.Context, appPolicies map[string]AppPolicy) error {
-	config := &DPIIntegrationConfig{
-		EnableAppDetection: true,
-		AppPolicies:        appPolicies,
+	// Convert app policies to a list of applications to monitor
+	apps := make([]string, 0, len(appPolicies))
+	for app := range appPolicies {
+		apps = append(apps, app)
 	}
-	
+
+	config := &CiliumDPIIntegrationConfig{
+		Enabled: true,
+		ApplicationsToMonitor: apps,
+		EnforcementMode: "log", // Default to log-only mode
+	}
+
 	return c.ciliumClient.ConfigureDPIIntegration(ctx, config)
 }
 
 // ApplyDynamicPolicy applies a dynamic policy based on DPI results
 func (c *NetworkController) ApplyDynamicPolicy(ctx context.Context, app string, action string) error {
-	policy := &NetworkPolicy{
+	policy := &CiliumPolicy{
 		Name: fmt.Sprintf("dpi-app-%s", app),
 		Labels: map[string]string{
 			"app": app,
 		},
 	}
-	
+
 	// Configure policy based on action
 	// This would be expanded based on specific requirements
-	
+
 	return c.ciliumClient.ApplyNetworkPolicy(ctx, policy)
 }

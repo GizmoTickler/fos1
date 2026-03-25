@@ -11,9 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/varuntirumala1/fos1/pkg/cilium"
-	"github.com/varuntirumala1/fos1/pkg/kubernetes"
-	"github.com/varuntirumala1/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
+	"github.com/GizmoTickler/fos1/pkg/kubernetes"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/connectors"
 	"gopkg.in/yaml.v2"
 )
 
@@ -30,8 +32,8 @@ type Config struct {
 	} `yaml:"zeek"`
 
 	VLANs struct {
-		Enabled bool                `yaml:"enabled"`
-		Configs []dpi.VLANConfig   `yaml:"configs"`
+		Enabled bool                     `yaml:"enabled"`
+		Configs []connectors.VLANConfig  `yaml:"configs"`
 	} `yaml:"vlans"`
 
 	Profiles []dpi.DPIProfile `yaml:"profiles"`
@@ -95,7 +97,7 @@ func main() {
 	}
 
 	// Convert VLAN configs to map
-	vlanMap := make(map[int]dpi.VLANConfig)
+	vlanMap := make(map[int]connectors.VLANConfig)
 	if config.VLANs.Enabled {
 		for _, vlanConfig := range config.VLANs.Configs {
 			vlanMap[vlanConfig.ID] = vlanConfig
@@ -120,7 +122,7 @@ func main() {
 	}
 
 	// Register event handler
-	manager.RegisterEventHandler(func(event dpi.DPIEvent) {
+	manager.RegisterEventHandler(func(event common.DPIEvent) {
 		log.Printf("Event: %s - %s", event.EventType, event.Description)
 	})
 
@@ -195,11 +197,12 @@ func main() {
 	// Start Kubernetes controller for policy management if in Kubernetes mode
 	if config.Kubernetes.Enabled {
 		k8sClient, _ := kubernetes.NewClient(*kubeconfig)
-		controller := kubernetes.NewPolicyController(k8sClient, manager)
+		controller := kubernetes.NewPolicyController(k8sClient)
 		go controller.Run(context.Background())
 
 		// Start metrics server for Prometheus
-		go kubernetes.StartMetricsServer(":8080", manager)
+		metricsServer := kubernetes.NewMetricsServer(":8080")
+		go metricsServer.Start()
 	} else {
 		// Simulate some events for testing in non-Kubernetes mode
 		go simulateEvents(manager)
@@ -270,7 +273,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 	log.Println("Simulating DPI events...")
 
 	// Simulate a flow event
-	flowEvent := dpi.DPIEvent{
+	flowEvent := common.DPIEvent{
 		Timestamp:   time.Now(),
 		SourceIP:    "192.168.1.10",
 		DestIP:      "10.0.0.10",
@@ -288,14 +291,14 @@ func simulateEvents(manager *dpi.DPIManager) {
 			"packets": int64(10),
 		},
 	}
-	manager.eventChan <- flowEvent
+	manager.EventChan() <-flowEvent
 	log.Println("Sent flow event")
 
 	// Wait a moment
 	time.Sleep(2 * time.Second)
 
 	// Simulate an alert event
-	alertEvent := dpi.DPIEvent{
+	alertEvent := common.DPIEvent{
 		Timestamp:   time.Now(),
 		SourceIP:    "192.168.1.20",
 		DestIP:      "10.0.0.20",
@@ -311,7 +314,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 		SessionID:   "sim-session-2",
 		RawData:     map[string]interface{}{},
 	}
-	manager.eventChan <- alertEvent
+	manager.EventChan() <-alertEvent
 	log.Println("Sent alert event")
 
 	// Simulate periodic events
@@ -322,7 +325,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 		select {
 		case <-ticker.C:
 			// Simulate a random event
-			event := dpi.DPIEvent{
+			event := common.DPIEvent{
 				Timestamp:   time.Now(),
 				SourceIP:    fmt.Sprintf("192.168.1.%d", time.Now().Second()%254+1),
 				DestIP:      fmt.Sprintf("10.0.0.%d", time.Now().Second()%254+1),
@@ -340,7 +343,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 					"packets": int64(10 * (time.Now().Second() % 10 + 1)),
 				},
 			}
-			manager.eventChan <- event
+			manager.EventChan() <-event
 			log.Println("Sent periodic flow event")
 		}
 	}

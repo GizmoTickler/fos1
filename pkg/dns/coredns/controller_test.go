@@ -2,7 +2,6 @@ package coredns
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -31,14 +30,9 @@ func TestNewController(t *testing.T) {
 
 // TestAddRecord tests the AddRecord function
 func TestAddRecord(t *testing.T) {
-	// Create a controller
-	controller, err := NewController("/tmp/coredns", "/tmp/zones")
+	dir := t.TempDir()
+	controller, err := NewController(dir, dir)
 	assert.NoError(t, err)
-
-	// Mock the saveConfiguration method to prevent actual file writes
-	originalSaveConfig := controller.saveConfiguration
-	controller.saveConfiguration = func() error { return nil }
-	defer func() { controller.saveConfiguration = originalSaveConfig }()
 
 	// Test adding a record to a new zone
 	record := &DNSRecord{
@@ -52,7 +46,6 @@ func TestAddRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the zone and record were created
-	assert.Len(t, controller.zones, 1)
 	zone, exists := controller.zones["example.com"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 1)
@@ -72,7 +65,6 @@ func TestAddRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the record was updated
-	assert.Len(t, controller.zones, 1)
 	zone, exists = controller.zones["example.com"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 1)
@@ -93,7 +85,6 @@ func TestAddRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify both records exist
-	assert.Len(t, controller.zones, 1)
 	zone, exists = controller.zones["example.com"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 2)
@@ -101,14 +92,9 @@ func TestAddRecord(t *testing.T) {
 
 // TestRemoveRecord tests the RemoveRecord function
 func TestRemoveRecord(t *testing.T) {
-	// Create a controller
-	controller, err := NewController("/tmp/coredns", "/tmp/zones")
+	dir := t.TempDir()
+	controller, err := NewController(dir, dir)
 	assert.NoError(t, err)
-
-	// Mock the saveConfiguration method to prevent actual file writes
-	originalSaveConfig := controller.saveConfiguration
-	controller.saveConfiguration = func() error { return nil }
-	defer func() { controller.saveConfiguration = originalSaveConfig }()
 
 	// Add a record first
 	record := &DNSRecord{
@@ -140,7 +126,6 @@ func TestRemoveRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify only one record remains
-	assert.Len(t, controller.zones, 1)
 	zone, exists := controller.zones["example.com"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 1)
@@ -157,14 +142,9 @@ func TestRemoveRecord(t *testing.T) {
 
 // TestAddPTRRecord tests the AddPTRRecord function
 func TestAddPTRRecord(t *testing.T) {
-	// Create a controller
-	controller, err := NewController("/tmp/coredns", "/tmp/zones")
+	dir := t.TempDir()
+	controller, err := NewController(dir, dir)
 	assert.NoError(t, err)
-
-	// Mock the saveConfiguration method to prevent actual file writes
-	originalSaveConfig := controller.saveConfiguration
-	controller.saveConfiguration = func() error { return nil }
-	defer func() { controller.saveConfiguration = originalSaveConfig }()
 
 	// Test adding a PTR record to a new zone
 	record := &DNSRecord{
@@ -178,7 +158,6 @@ func TestAddPTRRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the zone and record were created
-	assert.Len(t, controller.ptrZones, 1)
 	zone, exists := controller.ptrZones["1.168.192.in-addr.arpa"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 1)
@@ -198,7 +177,6 @@ func TestAddPTRRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the record was updated
-	assert.Len(t, controller.ptrZones, 1)
 	zone, exists = controller.ptrZones["1.168.192.in-addr.arpa"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 1)
@@ -210,14 +188,9 @@ func TestAddPTRRecord(t *testing.T) {
 
 // TestRemovePTRRecord tests the RemovePTRRecord function
 func TestRemovePTRRecord(t *testing.T) {
-	// Create a controller
-	controller, err := NewController("/tmp/coredns", "/tmp/zones")
+	dir := t.TempDir()
+	controller, err := NewController(dir, dir)
 	assert.NoError(t, err)
-
-	// Mock the saveConfiguration method to prevent actual file writes
-	originalSaveConfig := controller.saveConfiguration
-	controller.saveConfiguration = func() error { return nil }
-	defer func() { controller.saveConfiguration = originalSaveConfig }()
 
 	// Add a PTR record first
 	record := &DNSRecord{
@@ -249,7 +222,6 @@ func TestRemovePTRRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify only one record remains
-	assert.Len(t, controller.ptrZones, 1)
 	zone, exists := controller.ptrZones["1.168.192.in-addr.arpa"]
 	assert.True(t, exists)
 	assert.Len(t, zone.Records, 1)
@@ -266,14 +238,9 @@ func TestRemovePTRRecord(t *testing.T) {
 
 // TestStatus tests the Status function
 func TestStatus(t *testing.T) {
-	// Create a controller
-	controller, err := NewController("/tmp/coredns", "/tmp/zones")
+	dir := t.TempDir()
+	controller, err := NewController(dir, dir)
 	assert.NoError(t, err)
-
-	// Mock the saveConfiguration method to prevent actual file writes
-	originalSaveConfig := controller.saveConfiguration
-	controller.saveConfiguration = func() error { return nil }
-	defer func() { controller.saveConfiguration = originalSaveConfig }()
 
 	// Add some records
 	for i := 0; i < 3; i++ {

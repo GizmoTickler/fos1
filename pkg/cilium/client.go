@@ -23,7 +23,7 @@ func NewDefaultCiliumClient(apiEndpoint, k8sContext string) *DefaultCiliumClient
 }
 
 // ApplyNetworkPolicy applies a Cilium network policy
-func (c *DefaultCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *NetworkPolicy) error {
+func (c *DefaultCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error {
 	// Convert policy to Kubernetes CiliumNetworkPolicy
 	policyYAML, err := c.convertToCiliumPolicy(policy)
 	if err != nil {
@@ -35,7 +35,7 @@ func (c *DefaultCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Ne
 }
 
 // CreateNAT creates NAT rules using Cilium's capabilities
-func (c *DefaultCiliumClient) CreateNAT(ctx context.Context, config *NATConfig) error {
+func (c *DefaultCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
 	// For IPv6, we need to use NAT66
 	natType := "nat"
 	if config.IPv6 {
@@ -44,13 +44,13 @@ func (c *DefaultCiliumClient) CreateNAT(ctx context.Context, config *NATConfig) 
 
 	// Create NAT policy that will be applied to Cilium
 	policyName := fmt.Sprintf("%s-%s", natType, sanitizeNetworkName(config.SourceNetwork))
-	policy := &NetworkPolicy{
+	policy := &CiliumPolicy{
 		Name: policyName,
 		Labels: map[string]string{
 			"type": natType,
 			"network": sanitizeNetworkName(config.SourceNetwork),
 		},
-		Egress: []PolicyRule{
+		Rules: []CiliumRule{
 			{
 				ToEndpoints: []Endpoint{
 					{
@@ -68,13 +68,13 @@ func (c *DefaultCiliumClient) CreateNAT(ctx context.Context, config *NATConfig) 
 }
 
 // ConfigureVLANRouting configures routing between VLANs using Cilium
-func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *VLANRoutingConfig) error {
+func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error {
 	// Create policies for each VLAN pair
 	for _, policy := range config.Policies {
 		policyName := fmt.Sprintf("vlan-%d-to-%d", policy.FromVLAN, policy.ToVLAN)
 
 		// Create a policy that allows traffic between the VLANs
-		networkPolicy := &NetworkPolicy{
+		networkPolicy := &CiliumPolicy{
 			Name: policyName,
 			Labels: map[string]string{
 				"type": "vlan-routing",
@@ -85,7 +85,7 @@ func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *
 
 		// If allow all traffic between VLANs
 		if policy.AllowAll {
-			networkPolicy.Ingress = []PolicyRule{
+			networkPolicy.Rules = []CiliumRule{
 				{
 					FromEndpoints: []Endpoint{
 						{
@@ -116,7 +116,7 @@ func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *
 						},
 					}
 
-					networkPolicy.Ingress = append(networkPolicy.Ingress, PolicyRule{
+					networkPolicy.Rules = append(networkPolicy.Rules, CiliumRule{
 						FromEndpoints: []Endpoint{
 							{
 								Labels: map[string]string{
@@ -147,13 +147,13 @@ func (c *DefaultCiliumClient) ConfigureVLANRouting(ctx context.Context, config *
 }
 
 // ConfigureDPIIntegration configures DPI integration with Cilium
-func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *DPIIntegrationConfig) error {
+func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error {
 	// For each application, create a policy
 	for _, appName := range config.ApplicationsToMonitor {
 		policyName := fmt.Sprintf("dpi-app-%s", appName)
 
 		// Create a policy for this application
-		networkPolicy := &NetworkPolicy{
+		networkPolicy := &CiliumPolicy{
 			Name: policyName,
 			Labels: map[string]string{
 				"type": "dpi",
@@ -184,7 +184,7 @@ func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, confi
 }
 
 // RemoveNAT removes NAT rules
-func (c *DefaultCiliumClient) RemoveNAT(ctx context.Context, config *NATConfig) error {
+func (c *DefaultCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATConfig) error {
 	// For IPv6, we need to use NAT66
 	natType := "nat"
 	if config.IPv6 {
@@ -210,13 +210,13 @@ func (c *DefaultCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Conf
 	policyName := fmt.Sprintf("nat64-%s", sanitizeNetworkName(config.SourceNetwork))
 
 	// Create a policy that enables NAT64 for the source network
-	policy := &NetworkPolicy{
+	policy := &CiliumPolicy{
 		Name: policyName,
 		Labels: map[string]string{
 			"type": "nat64",
 			"network": sanitizeNetworkName(config.SourceNetwork),
 		},
-		Egress: []PolicyRule{
+		Rules: []CiliumRule{
 			{
 				ToEndpoints: []Endpoint{
 					{
@@ -257,7 +257,7 @@ func (c *DefaultCiliumClient) CreatePortForward(ctx context.Context, config *Por
 		config.Protocol)
 
 	// Create a policy that enables port forwarding
-	policy := &NetworkPolicy{
+	policy := &CiliumPolicy{
 		Name: policyName,
 		Labels: map[string]string{
 			"type": "portforward",
@@ -265,13 +265,13 @@ func (c *DefaultCiliumClient) CreatePortForward(ctx context.Context, config *Por
 			"externalPort": fmt.Sprintf("%d", config.ExternalPort),
 			"protocol": config.Protocol,
 		},
-		Ingress: []PolicyRule{
+		Rules: []CiliumRule{
 			{
 				ToPorts: []PortRule{
 					{
 						Ports: []Port{
 							{
-								Port: config.ExternalPort,
+								Port: uint16(config.ExternalPort),
 								Protocol: config.Protocol,
 							},
 						},
@@ -305,8 +305,8 @@ func (c *DefaultCiliumClient) RemovePortForward(ctx context.Context, config *Por
 
 // Helper methods
 
-// convertToCiliumPolicy converts a NetworkPolicy to a CiliumNetworkPolicy YAML
-func (c *DefaultCiliumClient) convertToCiliumPolicy(policy *NetworkPolicy) (string, error) {
+// convertToCiliumPolicy converts a CiliumPolicy to a CiliumNetworkPolicy YAML
+func (c *DefaultCiliumClient) convertToCiliumPolicy(policy *CiliumPolicy) (string, error) {
 	// This is a simplified conversion - in a real implementation this would map
 	// to the actual CiliumNetworkPolicy CRD format
 
@@ -321,14 +321,9 @@ func (c *DefaultCiliumClient) convertToCiliumPolicy(policy *NetworkPolicy) (stri
 		"spec": map[string]interface{}{},
 	}
 
-	// Add ingress rules if any
-	if len(policy.Ingress) > 0 {
-		ciliumPolicy["spec"].(map[string]interface{})["ingress"] = policy.Ingress
-	}
-
-	// Add egress rules if any
-	if len(policy.Egress) > 0 {
-		ciliumPolicy["spec"].(map[string]interface{})["egress"] = policy.Egress
+	// Add rules if any
+	if len(policy.Rules) > 0 {
+		ciliumPolicy["spec"].(map[string]interface{})["rules"] = policy.Rules
 	}
 
 	// Convert to JSON then to YAML (simplified - would use proper YAML marshaling)

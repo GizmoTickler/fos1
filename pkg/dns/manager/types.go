@@ -166,3 +166,43 @@ type ServiceType struct {
 	Description  string
 	DefaultPorts []int32
 }
+
+// MetricsCollector collects metrics for DNS services
+type MetricsCollector struct {
+	manager *Manager
+}
+
+// NewMetricsCollector creates a new metrics collector
+func NewMetricsCollector(manager *Manager) (*MetricsCollector, error) {
+	return &MetricsCollector{manager: manager}, nil
+}
+
+// Start starts the metrics collector
+func (m *MetricsCollector) Start() error {
+	return nil
+}
+
+// Stop stops the metrics collector
+func (m *MetricsCollector) Stop() error {
+	return nil
+}
+
+// APIServer provides an API for DNS management
+type APIServer struct {
+	manager *Manager
+}
+
+// NewAPIServer creates a new API server
+func NewAPIServer(manager *Manager) (*APIServer, error) {
+	return &APIServer{manager: manager}, nil
+}
+
+// Start starts the API server
+func (a *APIServer) Start() error {
+	return nil
+}
+
+// Stop stops the API server
+func (a *APIServer) Stop() error {
+	return nil
+}

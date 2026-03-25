@@ -180,12 +180,12 @@ func (m *Manager) UnloadProgram(name string) error {
 	}
 
 	// Close maps
-	for _, m := range prog.maps {
-		if err := m.Close(); err != nil {
+	for _, em := range prog.maps {
+		if err := em.Close(); err != nil {
 			fmt.Printf("Failed to close map: %v\n", err)
 		}
 		// Unpin map
-		mapName := fmt.Sprintf("%s_%s", name, m.String())
+		mapName := fmt.Sprintf("%s_%s", name, em.String())
 		mapPath := filepath.Join(m.pinPath, "maps", mapName)
 		if err := os.Remove(mapPath); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("Failed to unpin map %s: %v\n", mapName, err)
@@ -232,7 +232,6 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 
 	// Create the appropriate link based on the hook type
 	var l link.Link
-	var err error
 
 	switch {
 	case hookName == "xdp":
@@ -519,7 +518,7 @@ func (m *Manager) loadPinnedPrograms() error {
 		m.programs[programName] = &loadedProgram{
 			program: prog,
 			maps:    maps,
-			info: hardware.EBPFProgramInfo{
+			info: types.EBPFProgramInfo{
 				Name:      programName,
 				Type:      prog.Type().String(),
 				ID:        prog.FD(),

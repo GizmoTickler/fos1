@@ -1,8 +1,6 @@
 package multiwan
 
-import (
-	"time"
-)
+import ()
 
 // Configuration represents a multi-WAN configuration
 type Configuration struct {

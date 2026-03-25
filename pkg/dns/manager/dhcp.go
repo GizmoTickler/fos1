@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/GizmoTickler/fos1/pkg/dns/coredns"
 )
 
 // DHCPIntegration handles integration with DHCP for dynamic DNS updates
@@ -263,7 +265,7 @@ func (d *DHCPIntegration) determineHostname(lease *Lease) string {
 // createForwardRecord creates a forward DNS record for a lease
 func (d *DHCPIntegration) createForwardRecord(lease *Lease, hostname string) error {
 	// Create fully qualified domain name
-	fqdn := fmt.Sprintf("%s.%s", hostname, d.config.BaseDomain)
+	_ = fmt.Sprintf("%s.%s", hostname, d.config.BaseDomain)
 
 	// Determine record type based on IP version
 	recordType := "A"
@@ -296,7 +298,10 @@ func (d *DHCPIntegration) createForwardRecord(lease *Lease, hostname string) err
 	}
 
 	// Add record to zone
-	return d.dnsManager.coreDNSController.AddRecord(zone, record)
+	coreRecord := &coredns.DNSRecord{
+		Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Dynamic: record.Dynamic,
+	}
+	return d.dnsManager.coreDNSController.AddRecord(zone.Domain, coreRecord)
 }
 
 // createReverseRecord creates a reverse DNS record for a lease
@@ -340,7 +345,10 @@ func (d *DHCPIntegration) createReverseRecord(lease *Lease, hostname string) err
 	}
 
 	// Add record to zone
-	return d.dnsManager.coreDNSController.AddPTRRecord(zone, record)
+	coreRecord := &coredns.DNSRecord{
+		Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Dynamic: record.Dynamic,
+	}
+	return d.dnsManager.coreDNSController.AddPTRRecord(zone.Name, coreRecord)
 }
 
 // cleanupRecords removes DNS records for a lease
@@ -363,7 +371,7 @@ func (d *DHCPIntegration) cleanupRecords(lease *Lease) error {
 	}
 
 	// Remove record from zone
-	if err := d.dnsManager.coreDNSController.RemoveRecord(zone, record); err != nil {
+	if err := d.dnsManager.coreDNSController.RemoveRecord(zone.Domain, record.Name, record.Type, record.Value); err != nil {
 		return fmt.Errorf("failed to remove forward record: %w", err)
 	}
 
@@ -405,7 +413,7 @@ func (d *DHCPIntegration) cleanupRecords(lease *Lease) error {
 		}
 
 		// Remove record from zone
-		if err := d.dnsManager.coreDNSController.RemovePTRRecord(ptrZone, ptrRecord); err != nil {
+		if err := d.dnsManager.coreDNSController.RemovePTRRecord(ptrZone.Name, ptrRecord.Name); err != nil {
 			return fmt.Errorf("failed to remove reverse record: %w", err)
 		}
 	}

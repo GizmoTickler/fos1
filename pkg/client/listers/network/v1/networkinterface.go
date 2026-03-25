@@ -1,9 +1,7 @@
 package v1
 
 import (
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
 
 	networkv1 "github.com/GizmoTickler/fos1/pkg/apis/network/v1"
 )

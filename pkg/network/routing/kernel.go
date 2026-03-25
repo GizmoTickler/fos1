@@ -1,3 +1,5 @@
+//go:build linux
+
 package routing
 
 import (
@@ -7,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"golang.org/x/sys/unix"
 	"k8s.io/klog/v2"
 )
@@ -235,15 +238,15 @@ func (m *KernelRouteManager) ListRoutes(filter RouteFilter) ([]*Route, error) {
 
 	// List routes by table
 	if link != nil {
-		netlinkRoutes, err = netlink.RouteList(link, netlink.FAMILY_ALL)
+		netlinkRoutes, err = netlink.RouteList(link, nl.FAMILY_ALL)
 	} else {
 		// Get all routes with specified table filter
 		filterMask := netlink.RT_FILTER_TABLE
 		if tableID > 0 {
-			netlinkRoutes, err = netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: tableID}, filterMask)
+			netlinkRoutes, err = netlink.RouteListFiltered(nl.FAMILY_ALL, &netlink.Route{Table: tableID}, filterMask)
 		} else {
 			// Get all routes (main table)
-			netlinkRoutes, err = netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: unix.RT_TABLE_MAIN}, filterMask)
+			netlinkRoutes, err = netlink.RouteListFiltered(nl.FAMILY_ALL, &netlink.Route{Table: unix.RT_TABLE_MAIN}, filterMask)
 		}
 	}
 
@@ -271,7 +274,7 @@ func (m *KernelRouteManager) GetRoutingTable(tableName string, vrf string) ([]*R
 
 	// List routes by table
 	filterMask := netlink.RT_FILTER_TABLE
-	netlinkRoutes, err := netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: tableID}, filterMask)
+	netlinkRoutes, err := netlink.RouteListFiltered(nl.FAMILY_ALL, &netlink.Route{Table: tableID}, filterMask)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list routes for table %s: %w", tableName, err)
 	}

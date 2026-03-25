@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -339,17 +338,15 @@ func (c *Controller) syncDHCPv4Handler(key string) error {
 		return err
 	}
 
-	// Create Kea subnet configuration from DHCPv4Service and VLAN
-	subnetConfig, err := c.createDHCPv4SubnetConfig(dhcpv4Service, vlan)
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to create subnet configuration for DHCPv4Service %s: %v", name, err))
-		return err
-	}
-
 	// Update Kea configuration
 	// Create Kea configuration for DHCPv4
 	keaConfig, err := c.keaManager.ConfigureFromDHCPv4(&types.DHCPv4Service{
-		Spec: *subnetConfig,
+		Spec: types.DHCPv4ServiceSpec{
+			VLANRef:      dhcpv4Service.Spec.VLANRef,
+			LeaseTime:    dhcpv4Service.Spec.LeaseTime,
+			Range:        types.AddressRange{Start: dhcpv4Service.Spec.Range.Start, End: dhcpv4Service.Spec.Range.End},
+			Domain:       dhcpv4Service.Spec.Domain,
+		},
 	}, vlan.Spec.Subnet, vlan.Spec.Gateway)
 	if err != nil {
 		return err
@@ -408,17 +405,15 @@ func (c *Controller) syncDHCPv6Handler(key string) error {
 		return err
 	}
 
-	// Create Kea subnet configuration from DHCPv6Service and VLAN
-	subnetConfig, err := c.createDHCPv6SubnetConfig(dhcpv6Service, vlan)
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to create subnet configuration for DHCPv6Service %s: %v", name, err))
-		return err
-	}
-
 	// Update Kea configuration
 	// Create Kea configuration for DHCPv6
 	keaConfig, err := c.keaManager.ConfigureFromDHCPv6(&types.DHCPv6Service{
-		Spec: *subnetConfig,
+		Spec: types.DHCPv6ServiceSpec{
+			VLANRef:      dhcpv6Service.Spec.VLANRef,
+			LeaseTime:    dhcpv6Service.Spec.LeaseTime,
+			Range:        types.AddressRange{Start: dhcpv6Service.Spec.Range.Start, End: dhcpv6Service.Spec.Range.End},
+			Domain:       dhcpv6Service.Spec.Domain,
+		},
 	}, vlan.Spec.Subnet6, vlan.Spec.Gateway6)
 	if err != nil {
 		return err
@@ -516,65 +511,3 @@ func (c *Controller) handleVLAN(obj interface{}) {
 	}
 }
 
-// createDHCPv4SubnetConfig creates a Kea DHCPv4 subnet configuration from a DHCPv4Service and VLAN
-func (c *Controller) createDHCPv4SubnetConfig(dhcpService *networkv1.DHCPv4Service, vlan *networkv1.VLAN) (*types.DHCPv4SubnetConfig, error) {
-	// This is a placeholder for the actual implementation, which would:
-	// 1. Extract the subnet information from the VLAN
-	// 2. Configure the gateway address from the VLAN interface
-	// 3. Set up the DHCP pool from the DHCPv4Service range
-	// 4. Configure options from the DHCPv4Service
-	// 5. Set up static reservations
-	
-	// For now, return a dummy configuration
-	return &types.DHCPv4SubnetConfig{
-		Subnet: vlan.Spec.Subnet,
-		Pools: []types.Pool{
-			{
-				Start: dhcpService.Spec.Range.Start,
-				End:   dhcpService.Spec.Range.End,
-			},
-		},
-		ValidLifetime: dhcpService.Spec.LeaseTime,
-		RenewTimer:    dhcpService.Spec.LeaseTime / 2,
-		RebindTimer:   dhcpService.Spec.LeaseTime * 3 / 4,
-		Options: []types.DHCPOption{
-			{
-				Name: "domain-name",
-				Data: dhcpService.Spec.Domain,
-			},
-		},
-		// Additional configuration would be set up here
-	}, nil
-}
-
-// createDHCPv6SubnetConfig creates a Kea DHCPv6 subnet configuration from a DHCPv6Service and VLAN
-func (c *Controller) createDHCPv6SubnetConfig(dhcpService *networkv1.DHCPv6Service, vlan *networkv1.VLAN) (*types.DHCPv6SubnetConfig, error) {
-	// This is a placeholder for the actual implementation, which would:
-	// 1. Extract the subnet information from the VLAN
-	// 2. Configure the gateway address from the VLAN interface
-	// 3. Set up the DHCP pool from the DHCPv6Service range
-	// 4. Configure options from the DHCPv6Service
-	// 5. Set up static reservations
-	
-	// For now, return a dummy configuration
-	return &types.DHCPv6SubnetConfig{
-		Subnet: vlan.Spec.Subnet6,
-		Pools: []types.Pool{
-			{
-				Start: dhcpService.Spec.Range.Start,
-				End:   dhcpService.Spec.Range.End,
-			},
-		},
-		ValidLifetime:    dhcpService.Spec.LeaseTime,
-		PreferredLifetime: dhcpService.Spec.LeaseTime * 3 / 4,
-		RenewTimer:       dhcpService.Spec.LeaseTime / 2,
-		RebindTimer:      dhcpService.Spec.LeaseTime * 3 / 4,
-		Options: []types.DHCPOption{
-			{
-				Name: "domain-name",
-				Data: dhcpService.Spec.Domain,
-			},
-		},
-		// Additional configuration would be set up here
-	}, nil
-}

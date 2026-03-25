@@ -59,6 +59,91 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// GetNICInfo gets information about a network interface.
+func (m *Manager) GetNICInfo(name string) (*types.NICInfo, error) {
+	iface, err := m.GetInterface(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &types.NICInfo{
+		Name:       iface.Name,
+		Type:       string(iface.Type),
+		MACAddress: iface.MAC,
+		MTU:        iface.MTU,
+		State:      iface.State,
+		Features:   make(map[string]bool),
+		Statistics: types.NICStatistics{
+			RxPackets:  iface.Statistics.RxPackets,
+			TxPackets:  iface.Statistics.TxPackets,
+			RxBytes:    iface.Statistics.RxBytes,
+			TxBytes:    iface.Statistics.TxBytes,
+			RxErrors:   iface.Statistics.RxErrors,
+			TxErrors:   iface.Statistics.TxErrors,
+			RxDropped:  iface.Statistics.RxDropped,
+			TxDropped:  iface.Statistics.TxDropped,
+			Collisions: iface.Statistics.Collisions,
+		},
+	}, nil
+}
+
+// ListNICs lists all network interfaces.
+func (m *Manager) ListNICs() ([]string, error) {
+	m.interfacesMu.RLock()
+	defer m.interfacesMu.RUnlock()
+
+	names := make([]string, 0, len(m.interfaces))
+	for name := range m.interfaces {
+		names = append(names, name)
+	}
+
+	return names, nil
+}
+
+// SetLinkState sets the state of a network interface.
+func (m *Manager) SetLinkState(name string, up bool) error {
+	h, err := netlink.NewHandle()
+	if err != nil {
+		return fmt.Errorf("failed to create netlink handle: %w", err)
+	}
+	defer h.Delete()
+
+	link, err := h.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to get interface %s: %w", name, err)
+	}
+
+	if up {
+		return h.LinkSetUp(link)
+	}
+	return h.LinkSetDown(link)
+}
+
+// SetMTU sets the MTU of a network interface.
+func (m *Manager) SetMTU(name string, mtu int) error {
+	h, err := netlink.NewHandle()
+	if err != nil {
+		return fmt.Errorf("failed to create netlink handle: %w", err)
+	}
+	defer h.Delete()
+
+	link, err := h.LinkByName(name)
+	if err != nil {
+		return fmt.Errorf("failed to get interface %s: %w", name, err)
+	}
+
+	return h.LinkSetMTU(link, mtu)
+}
+
+// GetStatistics gets statistics for a network interface.
+func (m *Manager) GetStatistics(name string) (*types.NICStatistics, error) {
+	info, err := m.GetNICInfo(name)
+	if err != nil {
+		return nil, err
+	}
+	return &info.Statistics, nil
+}
+
 // ConfigureInterface configures a network interface.
 func (m *Manager) ConfigureInterface(name string, config types.InterfaceConfig) error {
 	// Create netlink handle
@@ -294,7 +379,7 @@ func (m *Manager) updateInterfaceInfo(name string) error {
 	// Get interface statistics
 	stats := link.Attrs().Statistics
 	if stats != nil {
-		iface.Statistics = hardware.InterfaceStatistics{
+		iface.Statistics = types.InterfaceStatistics{
 			RxBytes:    stats.RxBytes,
 			RxPackets:  stats.RxPackets,
 			RxErrors:   stats.RxErrors,
@@ -344,11 +429,6 @@ func (m *Manager) getOffloadFeatures(ifName string) (types.OffloadFeatures, erro
 	features := types.OffloadFeatures{}
 
 	// Get hardware offloading features using ethtool
-	txcsum, err := m.ethtool.GetFeaturesNames(ifName)
-	if err != nil {
-		return features, fmt.Errorf("failed to get features: %w", err)
-	}
-
 	featureMap, err := m.ethtool.Features(ifName)
 	if err != nil {
 		return features, fmt.Errorf("failed to get feature states: %w", err)
@@ -429,9 +509,9 @@ func (m *Manager) configureOffload(ifName string, features types.OffloadFeatures
 	}
 
 	// Apply changes
-	for feature, enabled := range changes {
-		if err := m.ethtool.Change(ifName, feature, enabled); err != nil {
-			return fmt.Errorf("failed to change feature %s to %v: %w", feature, enabled, err)
+	if len(changes) > 0 {
+		if err := m.ethtool.Change(ifName, changes); err != nil {
+			return fmt.Errorf("failed to change offload features: %w", err)
 		}
 	}
 

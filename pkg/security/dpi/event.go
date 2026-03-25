@@ -1,3 +1,4 @@
+// Package dpi provides deep packet inspection functionality
 package dpi
 
 import (
@@ -5,6 +6,7 @@ import (
 )
 
 // DPIEvent represents an event from a DPI engine
+// Deprecated: Use common.DPIEvent instead
 type DPIEvent struct {
 	// Timestamp of the event
 	Timestamp time.Time
@@ -16,23 +18,24 @@ type DPIEvent struct {
 	DestPort    int
 	Protocol    string
 	VLAN        int    // VLAN ID
-	
+
 	// Application information
 	Application string
 	Category    string
-	
+
 	// Event details
 	EventType   string
 	Severity    int
 	Description string
 	Signature   string
 	SessionID   string
-	
+
 	// Additional data
 	RawData     map[string]interface{}
 }
 
 // ZeekStatus represents the status of the Zeek engine
+// Deprecated: Use common.ZeekStatus instead
 type ZeekStatus struct {
 	Running      bool
 	Uptime       time.Duration
@@ -42,6 +45,7 @@ type ZeekStatus struct {
 }
 
 // ApplicationInfo represents information about an application
+// Deprecated: Use common.ApplicationInfo instead
 type ApplicationInfo struct {
 	Name        string
 	Category    string

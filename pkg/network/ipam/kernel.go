@@ -1,3 +1,5 @@
+//go:build linux
+
 package ipam
 
 import (
@@ -7,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"golang.org/x/sys/unix"
 	"k8s.io/klog/v2"
 )
@@ -185,13 +188,13 @@ func (m *KernelAddressManager) ListAddresses(iface string, family AddressFamily)
 	var netlinkFamily int
 	switch family {
 	case FamilyIPv4:
-		netlinkFamily = netlink.FAMILY_V4
+		netlinkFamily = nl.FAMILY_V4
 	case FamilyIPv6:
-		netlinkFamily = netlink.FAMILY_V6
+		netlinkFamily = nl.FAMILY_V6
 	case FamilyAll:
-		netlinkFamily = netlink.FAMILY_ALL
+		netlinkFamily = nl.FAMILY_ALL
 	default:
-		netlinkFamily = netlink.FAMILY_ALL
+		netlinkFamily = nl.FAMILY_ALL
 	}
 
 	// Get addresses

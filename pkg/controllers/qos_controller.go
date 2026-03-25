@@ -1,12 +1,12 @@
 package controllers
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"context"
 	"fmt"
 	"reflect"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -82,7 +82,7 @@ func NewQoSController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			
@@ -359,16 +359,7 @@ func (c *QoSController) handleQoSProfileCreateOrUpdate(obj *unstructured.Unstruc
 	}
 	
 	// Apply the QoS profile
-	var profileErr error
-	if existingProfile, err := c.qosManager.GetProfile(interfaceName); err != nil {
-		// Profile doesn't exist, create it
-		profileErr = c.qosManager.AddProfile(profile)
-	} else {
-		// Profile exists, update it
-		profileErr = c.qosManager.UpdateProfile(profile)
-	}
-	
-	if profileErr != nil {
+	if profileErr := c.qosManager.AddProfile(profile); profileErr != nil {
 		return fmt.Errorf("failed to apply QoS profile: %w", profileErr)
 	}
 	
@@ -432,29 +423,28 @@ func (c *QoSController) updateQoSProfileStatus(obj *unstructured.Unstructured) e
 		return fmt.Errorf("interface not found in QoSProfile %s/%s: %w", namespace, name, err)
 	}
 	
-	// Get the QoS profile
-	profile, err := c.qosManager.GetProfile(interfaceName)
-	if err != nil {
-		return fmt.Errorf("failed to get QoS profile: %w", err)
-	}
-	
 	// Create a copy of the object
 	newObj := obj.DeepCopy()
-	
+
 	// Update the status
 	status := make(map[string]interface{})
-	status["actualUploadBandwidth"] = profile.UploadBandwidth
-	status["actualDownloadBandwidth"] = profile.DownloadBandwidth
-	
-	// Update class statistics
+	status["state"] = "Applied"
+
+	// Update class statistics from spec classes
 	classStats := make(map[string]interface{})
-	for _, class := range profile.Classes {
-		stats, err := c.qosManager.GetClassStatistics(interfaceName, class.Name)
+	classesUntyped, _, _ := unstructured.NestedSlice(obj.Object, "spec", "classes")
+	for _, classUntyped := range classesUntyped {
+		classMap, ok := classUntyped.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		className, _, _ := unstructured.NestedString(classMap, "name")
+		stats, err := c.qosManager.GetClassStatistics(interfaceName, className)
 		if err != nil {
 			continue
 		}
 		
-		classStats[class.Name] = map[string]interface{}{
+		classStats[className] = map[string]interface{}{
 			"packets": stats.Packets,
 			"bytes":   stats.Bytes,
 			"drops":   stats.Drops,
@@ -475,7 +465,7 @@ func (c *QoSController) updateQoSProfileStatus(obj *unstructured.Unstructured) e
 		Resource: "qosprofiles",
 	}
 	
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, nil)
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update QoSProfile status: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,12 +24,12 @@ type PolicyController struct {
 
 	// Core components
 	resolver       *PolicyResolver
-	translator     *PolicyTranslator
+	translator     *CiliumPolicyTranslator
 	monitor        *PolicyMonitor
 	logger         *PolicyLogger
 
 	// Integration components
-	dpiManager     *dpi.Manager
+	dpiManager     *dpi.DPIManager
 
 	// Internal state
 	policies       map[string]*FilterPolicy
@@ -58,7 +57,7 @@ type ControllerConfig struct {
 func NewPolicyController(
 	kubeClient kubernetes.Interface,
 	ciliumClient cilium.CiliumClient,
-	dpiManager *dpi.Manager,
+	dpiManager *dpi.DPIManager,
 	config *ControllerConfig) (*PolicyController, error) {
 	
 	if kubeClient == nil {
@@ -87,7 +86,7 @@ func NewPolicyController(
 		ciliumClient: ciliumClient,
 		dpiManager:   dpiManager,
 		resolver:     NewPolicyResolver(logger),
-		translator:   NewPolicyTranslator(ciliumClient, logger),
+		translator:   NewCiliumPolicyTranslator(ciliumClient, logger),
 		monitor:      NewPolicyMonitor(logger),
 		logger:       logger,
 		policies:     make(map[string]*FilterPolicy),
@@ -308,7 +307,7 @@ func (c *PolicyController) handlePolicyGroupDelete(obj interface{}) {
 	delete(c.policyGroups, group.Name)
 	
 	// Reprocess all member policies without group overrides
-	for _, policyName := range group.Policies {
+	for _, policyName := range group.Spec.Policies {
 		if policy, exists := c.policies[policyName]; exists {
 			c.processPolicy(policy)
 		}
@@ -391,7 +390,7 @@ func (c *PolicyController) processPolicy(policy *FilterPolicy) {
 	
 	// Apply policy group overrides if applicable
 	for _, group := range c.policyGroups {
-		for _, policyName := range group.Policies {
+		for _, policyName := range group.Spec.Policies {
 			if policyName == policy.Name {
 				policy = c.applyGroupOverrides(policy, group)
 				break
@@ -432,7 +431,7 @@ func (c *PolicyController) processPolicyGroup(group *FilterPolicyGroup) {
 	}
 	
 	// Process each policy in the group
-	for _, policyName := range group.Policies {
+	for _, policyName := range group.Spec.Policies {
 		if policy, exists := c.policies[policyName]; exists {
 			policyWithOverrides := c.applyGroupOverrides(policy, group)
 			c.processPolicy(policyWithOverrides)
@@ -469,7 +468,7 @@ func (c *PolicyController) applyGroupOverrides(policy *FilterPolicy, group *Filt
 	policyCopy := *policy
 	
 	// Find and apply overrides
-	for _, override := range group.Overrides {
+	for _, override := range group.Spec.Overrides {
 		if override.PolicyName == policy.Name {
 			// Apply overrides
 			if override.Enabled != nil {
@@ -493,18 +492,18 @@ func (c *PolicyController) applyGroupOverrides(policy *FilterPolicy, group *Filt
 }
 
 // applyCiliumPolicy applies a Cilium network policy
-func (c *PolicyController) applyCiliumPolicy(policy *ciliumv2.CiliumNetworkPolicy) error {
+func (c *PolicyController) applyCiliumPolicy(policy *interface{}) error {
 	// In a real implementation, would use the Cilium client to apply the policy
-	log.Printf("Applying Cilium policy: %s", policy.Name)
-	
+	log.Printf("Applying Cilium policy (placeholder)")
+
 	// Log policy details for debugging
 	if c.config.EnableDetailedLogging {
 		// In a real implementation, would log detailed policy information
-		log.Printf("Cilium policy details (placeholder): %s", policy.Name)
+		log.Printf("Cilium policy details (placeholder)")
 	}
-	
+
 	// Register for monitoring
-	c.monitor.RegisterPolicy(policy.Name, policy.Namespace)
+	c.monitor.RegisterPolicy("placeholder", "")
 	
 	return nil
 }

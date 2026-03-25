@@ -64,7 +64,6 @@ func NewIDSManager(kubeClient kubernetes.Interface, config *rest.Config) (*IDSMa
 	// Create controller runtime manager
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme:             runtime.NewScheme(),
-		MetricsBindAddress: ":8080",
 		LeaderElection:     true,
 		LeaderElectionID:   "ids-manager-leader-election",
 	})

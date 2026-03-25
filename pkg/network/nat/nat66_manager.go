@@ -228,7 +228,7 @@ func (m *NAT66Manager2) DisableTranslation(sourcePrefix string) error {
 // applyTranslation applies a NAT66 translation
 func (m *NAT66Manager2) applyTranslation(translation NAT66Translation) error {
 	// Create a Cilium NAT configuration with IPv6
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    translation.SourcePrefix,
 		DestinationIface: translation.Interface,
 		IPv6:             true,
@@ -241,7 +241,7 @@ func (m *NAT66Manager2) applyTranslation(translation NAT66Translation) error {
 // removeTranslation removes a NAT66 translation
 func (m *NAT66Manager2) removeTranslation(translation NAT66Translation) error {
 	// Create a Cilium NAT configuration with IPv6
-	natConfig := &cilium.NATConfig{
+	natConfig := &cilium.CiliumNATConfig{
 		SourceNetwork:    translation.SourcePrefix,
 		DestinationIface: translation.Interface,
 		IPv6:             true,

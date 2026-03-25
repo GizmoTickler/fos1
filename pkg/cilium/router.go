@@ -50,8 +50,8 @@ type VRF struct {
 	Interfaces []string
 }
 
-// PolicyRule represents a policy-based routing rule
-type PolicyRule struct {
+// RoutingPolicyRule represents a policy-based routing rule
+type RoutingPolicyRule struct {
 	// Priority is the rule priority (lower values have higher priority)
 	Priority int
 
@@ -86,7 +86,7 @@ type Router struct {
 	vrfs map[int]*VRF
 
 	// policyRules is a list of policy-based routing rules
-	policyRules []PolicyRule
+	policyRules []RoutingPolicyRule
 
 	// mutex is used to synchronize access to the router state
 	mutex sync.RWMutex
@@ -106,7 +106,7 @@ func NewRouter(client CiliumClient, routeSynchronizer *RouteSynchronizer, option
 		options:           options,
 		routeSynchronizer: routeSynchronizer,
 		vrfs:              make(map[int]*VRF),
-		policyRules:       []PolicyRule{},
+		policyRules:       []RoutingPolicyRule{},
 		ctx:               ctx,
 		cancel:            cancel,
 	}
@@ -197,7 +197,7 @@ func (r *Router) AddVRF(name string, tables []int, interfaces []string) (int, er
 
 	// Find an available VRF ID
 	vrfID := r.findAvailableVRFID()
-	
+
 	// Create the VRF
 	r.vrfs[vrfID] = &VRF{
 		ID:         vrfID,
@@ -242,7 +242,7 @@ func (r *Router) DeleteVRF(vrfID int) error {
 }
 
 // AddPolicyRule adds a new policy-based routing rule
-func (r *Router) AddPolicyRule(rule PolicyRule) error {
+func (r *Router) AddPolicyRule(rule RoutingPolicyRule) error {
 	if !r.options.EnablePBR {
 		return fmt.Errorf("policy-based routing is disabled")
 	}
@@ -287,7 +287,7 @@ func (r *Router) DeletePolicyRule(priority int) error {
 
 	// Find the rule with the given priority
 	found := false
-	newRules := make([]PolicyRule, 0, len(r.policyRules))
+	newRules := make([]RoutingPolicyRule, 0, len(r.policyRules))
 	for _, rule := range r.policyRules {
 		if rule.Priority == priority {
 			found = true

@@ -6,10 +6,10 @@ import (
 	"time"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	certmanagerclientset "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned"
 	certmanagerinformers "github.com/cert-manager/cert-manager/pkg/client/informers/externalversions"
 	certmanagerlisters "github.com/cert-manager/cert-manager/pkg/client/listers/certmanager/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -277,7 +277,7 @@ func (c *Controller) syncCertificate(ctx context.Context, key string) error {
 	// Check if the certificate is ready
 	isReady := false
 	for _, condition := range certificate.Status.Conditions {
-		if condition.Type == certmanagerv1.CertificateConditionReady && condition.Status == certmanagerv1.ConditionTrue {
+		if condition.Type == certmanagerv1.CertificateConditionReady && condition.Status == cmmeta.ConditionTrue {
 			isReady = true
 			break
 		}
@@ -311,7 +311,7 @@ func (c *Controller) syncIssuer(ctx context.Context, key string) error {
 	// Check if the issuer is ready
 	isReady := false
 	for _, condition := range issuer.Status.Conditions {
-		if condition.Type == certmanagerv1.IssuerConditionReady && condition.Status == certmanagerv1.ConditionTrue {
+		if condition.Type == certmanagerv1.IssuerConditionReady && condition.Status == cmmeta.ConditionTrue {
 			isReady = true
 			break
 		}

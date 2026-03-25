@@ -1,7 +1,7 @@
 package client
 
 import (
-	"context"
+	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -76,7 +76,7 @@ func (l ntpServiceNamespaceLister) Get(name string) (runtime.Object, error) {
 		return nil, err
 	}
 	if !exists {
-		return nil, cache.NewNotFoundError("ntpservice", key)
+		return nil, fmt.Errorf("ntpservice %q not found", key)
 	}
 	return obj.(runtime.Object), nil
 }

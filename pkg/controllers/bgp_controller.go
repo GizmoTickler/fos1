@@ -1,12 +1,12 @@
 package controllers
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"context"
 	"fmt"
 	"reflect"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -76,7 +76,7 @@ func NewBGPController(
 			newObj := new.(*unstructured.Unstructured)
 			
 			// Skip if the objects are the same
-			if reflect.DeepEqual(oldObj.GetSpec(), newObj.GetSpec()) {
+			if reflect.DeepEqual(oldObj.Object["spec"], newObj.Object["spec"]) {
 				return
 			}
 			
@@ -334,14 +334,14 @@ func (c *BGPController) handleBGPConfigCreateOrUpdate(obj *unstructured.Unstruct
 		
 		// Extract networks
 		networksUntyped, _, _ := unstructured.NestedSlice(afMap, "networks")
-		networks := make([]string, 0, len(networksUntyped))
+		networks := make([]routing.BGPNetwork, 0, len(networksUntyped))
 		for _, networkUntyped := range networksUntyped {
 			network, ok := networkUntyped.(string)
 			if !ok {
 				return fmt.Errorf("invalid network format in BGPConfig %s/%s", namespace, name)
 			}
-			
-			networks = append(networks, network)
+
+			networks = append(networks, routing.BGPNetwork{Prefix: network})
 		}
 		
 		addressFamilies = append(addressFamilies, routing.BGPAddressFamily{
@@ -393,8 +393,8 @@ func (c *BGPController) handleBGPConfigCreateOrUpdate(obj *unstructured.Unstruct
 func (c *BGPController) updateBGPConfigStatus(obj *unstructured.Unstructured) error {
 	// Get the namespace and name
 	namespace := obj.GetNamespace()
-	name := obj.GetName()
-	
+	_ = obj.GetName()
+
 	// Get the BGP status
 	status, err := c.protocolManager.GetProtocolStatus("bgp")
 	if err != nil {
@@ -438,7 +438,7 @@ func (c *BGPController) updateBGPConfigStatus(obj *unstructured.Unstructured) er
 		Resource: "bgpconfigs",
 	}
 	
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, nil)
+	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update BGPConfig status: %w", err)
 	}

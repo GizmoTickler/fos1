@@ -1,16 +1,20 @@
 package cilium
 
 import (
+	"context"
 	"net"
 )
 
-// NetworkPolicy represents a Cilium network policy.
-type NetworkPolicy struct {
+// CiliumPolicy represents a Cilium network policy.
+type CiliumPolicy struct {
 	// Name of the policy
 	Name string
 
 	// Description provides documentation about the policy
 	Description string
+
+	// Labels for the policy
+	Labels map[string]string
 
 	// SourceLabels defines the labels that must match the source of the traffic
 	SourceLabels map[string]string
@@ -19,14 +23,20 @@ type NetworkPolicy struct {
 	DestinationLabels map[string]string
 
 	// Rules contains L3/L4/L7 rules for this policy
-	Rules []Rule
+	Rules []CiliumRule
 
 	// Namespace where the policy should be applied, empty for cluster-wide policies
 	Namespace string
 }
 
-// Rule represents a Cilium network policy rule.
-type Rule struct {
+// Endpoint represents an endpoint selector.
+type Endpoint struct {
+	// Labels are the labels to match
+	Labels map[string]string
+}
+
+// CiliumRule represents a Cilium network policy rule.
+type CiliumRule struct {
 	// Protocol specifies the protocol (TCP, UDP, ICMP, etc.)
 	Protocol string
 
@@ -47,6 +57,33 @@ type Rule struct {
 
 	// L7Rules contains application layer rules (DNS, HTTP, etc.)
 	L7Rules L7Rules
+
+	// FromEndpoints defines the source endpoints for this rule
+	FromEndpoints []Endpoint
+
+	// ToEndpoints defines the destination endpoints for this rule
+	ToEndpoints []Endpoint
+
+	// ToPorts defines the destination ports for this rule
+	ToPorts []PortRule
+
+	// FromCIDR defines the source CIDR for this rule
+	FromCIDR []string
+
+	// ToCIDR defines the destination CIDR for this rule
+	ToCIDR []string
+
+	// ToFQDNs defines the destination FQDNs for this rule
+	ToFQDNs []MatchFQDN
+
+	// Denied indicates whether the rule denies traffic
+	Denied bool
+}
+
+// MatchFQDN represents a fully qualified domain name match.
+type MatchFQDN struct {
+	// MatchPattern is the pattern to match against
+	MatchPattern string
 }
 
 // PortRange represents a range of ports.
@@ -56,6 +93,21 @@ type PortRange struct {
 
 	// Last port in the range
 	Last int
+}
+
+// Port represents a single port and protocol.
+type Port struct {
+	// Port number
+	Port uint16
+
+	// Protocol (tcp, udp)
+	Protocol string
+}
+
+// PortRule represents a port-based rule.
+type PortRule struct {
+	// Ports is a list of ports
+	Ports []Port
 }
 
 // L7Rules contains application layer rules.
@@ -100,8 +152,8 @@ type KafkaRule struct {
 	ApiKey int
 }
 
-// NATConfig represents configuration for NAT.
-type NATConfig struct {
+// CiliumNATConfig represents configuration for NAT.
+type CiliumNATConfig struct {
 	// SourceNetwork is the source network to NAT
 	SourceNetwork string
 
@@ -151,10 +203,40 @@ type PortForwardConfig struct {
 	Description string
 }
 
-// VLANRoutingConfig represents configuration for VLAN routing in Cilium.
-type VLANRoutingConfig struct {
+// CiliumVLANRoutingConfig represents configuration for VLAN routing in Cilium.
+type CiliumVLANRoutingConfig struct {
 	// VLANs is a map of VLAN IDs to VLAN configurations
 	VLANs map[int]VLANConfig
+
+	// Policies is a map of policy names to VLAN policies
+	Policies map[string]VLANPolicy
+}
+
+// VLANPolicy represents a policy between VLANs.
+type VLANPolicy struct {
+	// FromVLAN is the source VLAN
+	FromVLAN uint16
+
+	// ToVLAN is the destination VLAN
+	ToVLAN uint16
+
+	// AllowAll indicates whether to allow all traffic between VLANs
+	AllowAll bool
+
+	// Rules is a list of specific rules between VLANs
+	Rules []VLANRule
+}
+
+// VLANRule represents a rule between VLANs.
+type VLANRule struct {
+	// Protocol is the protocol (tcp, udp, icmp)
+	Protocol string
+
+	// Port is the port number
+	Port uint16
+
+	// Allow indicates whether to allow or deny
+	Allow bool
 }
 
 // VLANConfig represents configuration for a single VLAN.
@@ -175,8 +257,8 @@ type VLANConfig struct {
 	Labels map[string]string
 }
 
-// DPIIntegrationConfig represents configuration for DPI integration.
-type DPIIntegrationConfig struct {
+// CiliumDPIIntegrationConfig represents configuration for DPI integration.
+type CiliumDPIIntegrationConfig struct {
 	// Enabled indicates whether DPI integration is enabled
 	Enabled bool
 
@@ -190,8 +272,8 @@ type DPIIntegrationConfig struct {
 	TargetInterfaces []string
 }
 
-// RouteSync represents a route to be synchronized with Cilium.
-type RouteSync struct {
+// CiliumRouteSync represents a route to be synchronized with Cilium.
+type CiliumRouteSync struct {
 	// Destination is the destination CIDR
 	Destination string
 
@@ -244,16 +326,19 @@ const (
 	ErrOperationFailed = "OperationFailed"
 )
 
-// Client defines the interface for interacting with Cilium
-type Client interface {
+// Client is an alias for CiliumClient for backward compatibility
+type Client = CiliumClient
+
+// CiliumClient defines the interface for interacting with Cilium
+type CiliumClient interface {
 	// ApplyNetworkPolicy applies a Cilium network policy
-	ApplyNetworkPolicy(ctx context.Context, policy *NetworkPolicy) error
+	ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error
 
 	// CreateNAT creates NAT rules using Cilium's capabilities
-	CreateNAT(ctx context.Context, config *NATConfig) error
+	CreateNAT(ctx context.Context, config *CiliumNATConfig) error
 
 	// RemoveNAT removes NAT rules
-	RemoveNAT(ctx context.Context, config *NATConfig) error
+	RemoveNAT(ctx context.Context, config *CiliumNATConfig) error
 
 	// CreateNAT64 creates NAT64 rules (IPv6 to IPv4)
 	CreateNAT64(ctx context.Context, config *NAT64Config) error
@@ -268,8 +353,12 @@ type Client interface {
 	RemovePortForward(ctx context.Context, config *PortForwardConfig) error
 
 	// ConfigureVLANRouting configures routing between VLANs
-	ConfigureVLANRouting(ctx context.Context, config *VLANRoutingConfig) error
+	ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error
 
 	// ConfigureDPIIntegration configures DPI integration
-	ConfigureDPIIntegration(ctx context.Context, config *DPIIntegrationConfig) error
+	ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error
 }
+
+// Type aliases for backward compatibility
+type Rule = CiliumRule
+type NetworkPolicy = CiliumPolicy

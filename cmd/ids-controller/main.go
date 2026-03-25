@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
-	"github.com/varuntirumala1/fos1/pkg/security/ids"
+	"github.com/GizmoTickler/fos1/pkg/security/ids"
 )
 
 func main() {

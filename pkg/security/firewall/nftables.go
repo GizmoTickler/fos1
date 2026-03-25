@@ -42,7 +42,7 @@ func (f *NFTablesFirewall) InitializeFirewall() error {
 }
 
 // AddRule adds a firewall rule
-func (f *NFTablesFirewall) AddRule(rule FirewallRule) error {
+func (f *NFTablesFirewall) AddRule(rule LegacyFirewallRule) error {
 	// Convert the rule to an nftables command
 	cmd, err := f.buildRuleCommand(rule)
 	if err != nil {
@@ -377,7 +377,7 @@ func (f *NFTablesFirewall) setupBasePolicies() error {
 }
 
 // buildRuleCommand builds an nftables command from a firewall rule
-func (f *NFTablesFirewall) buildRuleCommand(rule FirewallRule) ([]string, error) {
+func (f *NFTablesFirewall) buildRuleCommand(rule LegacyFirewallRule) ([]string, error) {
 	// Determine the family
 	family := "ip"
 	if rule.IPVersion == "ipv6" {
@@ -483,8 +483,9 @@ func (f *NFTablesFirewall) buildRuleCommand(rule FirewallRule) ([]string, error)
 	return cmd, nil
 }
 
-// FirewallRule represents a firewall rule
-type FirewallRule struct {
+// LegacyFirewallRule represents a firewall rule for the deprecated exec.Command-based implementation.
+// Deprecated: Use NFTFirewallRule from types.go instead.
+type LegacyFirewallRule struct {
 	Name              string
 	Description       string
 	Enabled           bool
@@ -497,7 +498,7 @@ type FirewallRule struct {
 	Destination       string
 	DestinationPort   string
 	IPVersion         string // ipv4, ipv6, both
-	State             *ConnectionState
+	State             *LegacyConnectionState
 	Application       string // DPI-based application match
 	ApplicationCategory string // DPI-based application category match
 	DSCP              int
@@ -506,8 +507,9 @@ type FirewallRule struct {
 	TimeSchedule      string
 }
 
-// ConnectionState represents connection tracking states
-type ConnectionState struct {
+// LegacyConnectionState represents connection tracking states for the deprecated implementation.
+// Deprecated: Use RuleMatch.CTState from types.go instead.
+type LegacyConnectionState struct {
 	New         bool
 	Established bool
 	Related     bool
