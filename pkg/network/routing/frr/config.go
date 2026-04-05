@@ -33,18 +33,18 @@ func (g *ConfigGenerator) GenerateDaemonsFile(enabledDaemons map[DaemonType]bool
 
 	// Define all daemons with their defaults
 	allDaemons := map[DaemonType]string{
-		DaemonTypeZEBRA:    "zebra",
-		DaemonTypeBGPD:     "bgpd",
-		DaemonTypeOSPFD:    "ospfd",
-		DaemonTypeOSPF6D:   "ospf6d",
-		DaemonTypeRIPD:     "ripd",
-		DaemonTypeRIPNGD:   "ripngd",
-		DaemonTypeISISD:    "isisd",
-		DaemonTypePIMD:     "pimd",
-		DaemonTypeLDPD:     "ldpd",
-		DaemonTypeNHRPD:    "nhrpd",
-		DaemonTypeBFDD:     "bfdd",
-		DaemonTypeFABRICD:  "fabricd",
+		DaemonTypeZEBRA:   "zebra",
+		DaemonTypeBGPD:    "bgpd",
+		DaemonTypeOSPFD:   "ospfd",
+		DaemonTypeOSPF6D:  "ospf6d",
+		DaemonTypeRIPD:    "ripd",
+		DaemonTypeRIPNGD:  "ripngd",
+		DaemonTypeISISD:   "isisd",
+		DaemonTypePIMD:    "pimd",
+		DaemonTypeLDPD:    "ldpd",
+		DaemonTypeNHRPD:   "nhrpd",
+		DaemonTypeBFDD:    "bfdd",
+		DaemonTypeFABRICD: "fabricd",
 	}
 
 	// Zebra is always enabled
@@ -218,7 +218,7 @@ func (g *ConfigGenerator) GenerateBGPConfig(asn uint32, routerID string, neighbo
 
 		// Add networks
 		for _, network := range af.Networks {
-			afSection.Commands = append(afSection.Commands, fmt.Sprintf("network %s", network))
+			afSection.Commands = append(afSection.Commands, fmt.Sprintf("network %s", network.Prefix))
 		}
 
 		// Add redistributions

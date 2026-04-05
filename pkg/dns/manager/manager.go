@@ -16,26 +16,51 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+type coreDNSController interface {
+	Start() error
+	Stop() error
+	Sync() error
+	Status() (*coredns.CoreDNSStatus, error)
+	AddRecord(zoneName string, record *coredns.DNSRecord) error
+	RemoveRecord(zoneName, name, recordType, value string) error
+	AddPTRRecord(zoneName string, record *coredns.DNSRecord) error
+	RemovePTRRecord(zoneName, name string) error
+}
+
+type adGuardController interface {
+	Start() error
+	Stop() error
+	Sync() error
+	Status() (*adguard.AdGuardStatus, error)
+}
+
+type mdnsController interface {
+	Start() error
+	Stop() error
+	Sync() error
+	Status() (*mdns.MDNSStatus, error)
+}
+
 // Manager coordinates all DNS services
 type Manager struct {
 	// Component controllers
-	coreDNSController  *coredns.Controller
-	adGuardController  *adguard.Controller
-	mDNSController     *mdns.Controller
+	coreDNSController coreDNSController
+	adGuardController adGuardController
+	mDNSController    mdnsController
 
 	// Integration
-	dhcpIntegration    *DHCPIntegration
-	metricsCollector   *MetricsCollector
+	dhcpIntegration  *DHCPIntegration
+	metricsCollector *MetricsCollector
 
 	// API and status
-	apiServer         *APIServer
+	apiServer *APIServer
 
 	// Control
-	k8sClient         kubernetes.Interface
-	informers         []cache.SharedInformer
-	ctx               context.Context
-	cancel            context.CancelFunc
-	mutex             sync.RWMutex
+	k8sClient kubernetes.Interface
+	informers []cache.SharedInformer
+	ctx       context.Context
+	cancel    context.CancelFunc
+	mutex     sync.RWMutex
 }
 
 // Config holds DNS Manager configuration
@@ -49,9 +74,9 @@ type Config struct {
 // NewManager creates a new DNS Manager
 func NewManager(
 	client kubernetes.Interface,
-	coreController *coredns.Controller,
-	adGuardController *adguard.Controller,
-	mDNSController *mdns.Controller,
+	coreController coreDNSController,
+	adGuardController adGuardController,
+	mDNSController mdnsController,
 	config *Config) (*Manager, error) {
 
 	if client == nil {
@@ -233,10 +258,10 @@ func (m *Manager) stopControllers() {
 func (m *Manager) setupInformers() error {
 	// In a real implementation, would use client-go's SharedInformerFactory
 	// and create informers for all DNS-related CRDs
-	
+
 	// This is a simplified placeholder
 	log.Println("Setting up CRD informers")
-	
+
 	return nil
 }
 
@@ -308,28 +333,28 @@ func (m *Manager) UpdateDynamicDNSConfig(config *DynamicDNSConfig) error {
 // Sync forces a synchronization of all DNS services
 func (m *Manager) Sync() error {
 	log.Println("Syncing all DNS services")
-	
+
 	// Sync CoreDNS
 	if m.coreDNSController != nil {
 		if err := m.coreDNSController.Sync(); err != nil {
 			return fmt.Errorf("failed to sync CoreDNS: %w", err)
 		}
 	}
-	
+
 	// Sync AdGuard
 	if m.adGuardController != nil {
 		if err := m.adGuardController.Sync(); err != nil {
 			return fmt.Errorf("failed to sync AdGuard: %w", err)
 		}
 	}
-	
+
 	// Sync mDNS
 	if m.mDNSController != nil {
 		if err := m.mDNSController.Sync(); err != nil {
 			return fmt.Errorf("failed to sync mDNS: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -340,7 +365,7 @@ func (m *Manager) Status() (*DNSStatus, error) {
 		AdGuard: &AdGuardStatus{},
 		MDNS:    &MDNSStatus{},
 	}
-	
+
 	// Get CoreDNS status
 	if m.coreDNSController != nil {
 		coreStatus, err := m.coreDNSController.Status()
@@ -348,13 +373,13 @@ func (m *Manager) Status() (*DNSStatus, error) {
 			return nil, fmt.Errorf("failed to get CoreDNS status: %w", err)
 		}
 		status.CoreDNS = &CoreDNSStatus{
-			Running:      coreStatus.Running,
-			Zones:        coreStatus.Zones,
+			Running:       coreStatus.Running,
+			Zones:         coreStatus.Zones,
 			RecordsServed: coreStatus.RecordsServed,
-			QueryRate:    coreStatus.QueryRate,
-			CacheHitRate: coreStatus.CacheHitRate,
-			ErrorRate:    coreStatus.ErrorRate,
-			LastError:    coreStatus.LastError,
+			QueryRate:     coreStatus.QueryRate,
+			CacheHitRate:  coreStatus.CacheHitRate,
+			ErrorRate:     coreStatus.ErrorRate,
+			LastError:     coreStatus.LastError,
 			LastErrorTime: coreStatus.LastErrorTime,
 		}
 	}
@@ -366,14 +391,14 @@ func (m *Manager) Status() (*DNSStatus, error) {
 			return nil, fmt.Errorf("failed to get AdGuard status: %w", err)
 		}
 		status.AdGuard = &AdGuardStatus{
-			Running:          adGuardStatus.Running,
-			FilteringEnabled: adGuardStatus.FilteringEnabled,
-			BlockedQueries:   adGuardStatus.BlockedQueries,
-			TotalQueries:     adGuardStatus.TotalQueries,
-			BlockRate:        adGuardStatus.BlockRate,
+			Running:           adGuardStatus.Running,
+			FilteringEnabled:  adGuardStatus.FilteringEnabled,
+			BlockedQueries:    adGuardStatus.BlockedQueries,
+			TotalQueries:      adGuardStatus.TotalQueries,
+			BlockRate:         adGuardStatus.BlockRate,
 			AvgProcessingTime: adGuardStatus.AvgProcessingTime,
-			LastError:        adGuardStatus.LastError,
-			LastErrorTime:    adGuardStatus.LastErrorTime,
+			LastError:         adGuardStatus.LastError,
+			LastErrorTime:     adGuardStatus.LastErrorTime,
 		}
 	}
 
@@ -384,15 +409,15 @@ func (m *Manager) Status() (*DNSStatus, error) {
 			return nil, fmt.Errorf("failed to get mDNS status: %w", err)
 		}
 		status.MDNS = &MDNSStatus{
-			Running:          mdnsStatus.Running,
+			Running:           mdnsStatus.Running,
 			ReflectionEnabled: mdnsStatus.ReflectionEnabled,
-			ReflectionRules:  mdnsStatus.ReflectionRules,
+			ReflectionRules:   mdnsStatus.ReflectionRules,
 			ServicesReflected: mdnsStatus.ServicesReflected,
-			LastError:        mdnsStatus.LastError,
-			LastErrorTime:    mdnsStatus.LastErrorTime,
+			LastError:         mdnsStatus.LastError,
+			LastErrorTime:     mdnsStatus.LastErrorTime,
 		}
 	}
-	
+
 	return status, nil
 }
 
@@ -400,13 +425,13 @@ func (m *Manager) Status() (*DNSStatus, error) {
 func (m *Manager) AddRecord(name, recordType, value string, ttl uint32) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
 	// Determine the zone for this record
 	zone, err := m.findZoneForRecord(name)
 	if err != nil {
 		return fmt.Errorf("failed to find zone for record %s: %w", name, err)
 	}
-	
+
 	// Create the record
 	record := &DNSRecord{
 		Name:    name,
@@ -415,7 +440,7 @@ func (m *Manager) AddRecord(name, recordType, value string, ttl uint32) error {
 		TTL:     int32(ttl),
 		Dynamic: true,
 	}
-	
+
 	// Add to CoreDNS
 	if m.coreDNSController != nil {
 		coreRecord := &coredns.DNSRecord{
@@ -434,7 +459,7 @@ func (m *Manager) AddRecord(name, recordType, value string, ttl uint32) error {
 			return nil
 		}
 	}
-	
+
 	// Add new record
 	zone.Records = append(zone.Records, record)
 	return nil
@@ -444,20 +469,20 @@ func (m *Manager) AddRecord(name, recordType, value string, ttl uint32) error {
 func (m *Manager) RemoveRecord(name, recordType, value string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
 	// Determine the zone for this record
 	zone, err := m.findZoneForRecord(name)
 	if err != nil {
 		return fmt.Errorf("failed to find zone for record %s: %w", name, err)
 	}
-	
+
 	// Remove from CoreDNS
 	if m.coreDNSController != nil {
 		if err := m.coreDNSController.RemoveRecord(zone.Domain, name, recordType, value); err != nil {
 			return fmt.Errorf("failed to remove record from CoreDNS: %w", err)
 		}
 	}
-	
+
 	// Update zone in-memory cache
 	for i, record := range zone.Records {
 		if record.Name == name && record.Type == recordType && record.Value == value {
@@ -466,7 +491,7 @@ func (m *Manager) RemoveRecord(name, recordType, value string) error {
 			break
 		}
 	}
-	
+
 	return nil
 }
 
@@ -474,13 +499,13 @@ func (m *Manager) RemoveRecord(name, recordType, value string) error {
 func (m *Manager) AddReverseRecord(ip, target string, ttl uint32) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
 	// Convert IP to reverse lookup format
 	reverseIP, zone, err := m.convertToReverseLookup(ip)
 	if err != nil {
 		return fmt.Errorf("failed to convert IP %s to reverse lookup: %w", ip, err)
 	}
-	
+
 	// Create the PTR record
 	record := &DNSRecord{
 		Name:    reverseIP,
@@ -489,7 +514,7 @@ func (m *Manager) AddReverseRecord(ip, target string, ttl uint32) error {
 		TTL:     int32(ttl),
 		Dynamic: true,
 	}
-	
+
 	// Add to CoreDNS
 	if m.coreDNSController != nil {
 		coreRecord := &coredns.DNSRecord{
@@ -499,7 +524,7 @@ func (m *Manager) AddReverseRecord(ip, target string, ttl uint32) error {
 			return fmt.Errorf("failed to add PTR record to CoreDNS: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -507,20 +532,20 @@ func (m *Manager) AddReverseRecord(ip, target string, ttl uint32) error {
 func (m *Manager) RemoveReverseRecord(ip string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	
+
 	// Convert IP to reverse lookup format
 	reverseIP, zone, err := m.convertToReverseLookup(ip)
 	if err != nil {
 		return fmt.Errorf("failed to convert IP %s to reverse lookup: %w", ip, err)
 	}
-	
+
 	// Remove from CoreDNS
 	if m.coreDNSController != nil {
 		if err := m.coreDNSController.RemovePTRRecord(zone, reverseIP); err != nil {
 			return fmt.Errorf("failed to remove PTR record from CoreDNS: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -529,12 +554,12 @@ func (m *Manager) findZoneForRecord(name string) (*DNSZone, error) {
 	// Implementation depends on how zones are stored
 	// For now, we'll use a placeholder implementation that just returns a default zone
 	defaultZone := &DNSZone{
-		Name:   "default",
-		Domain: "local",
-		TTL:    3600,
+		Name:    "default",
+		Domain:  "local",
+		TTL:     3600,
 		Records: []*DNSRecord{},
 	}
-	
+
 	return defaultZone, nil
 }
 
@@ -544,7 +569,7 @@ func (m *Manager) convertToReverseLookup(ip string) (string, string, error) {
 	if parsedIP == nil {
 		return "", "", fmt.Errorf("invalid IP address: %s", ip)
 	}
-	
+
 	if parsedIP.To4() != nil {
 		// IPv4 address
 		octs := strings.Split(ip, ".")

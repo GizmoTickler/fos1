@@ -2,8 +2,9 @@ package vlan
 
 import (
 	"context"
-	"testing"
+	"errors"
 	"net"
+	"testing"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -119,7 +120,7 @@ func createVLANNetworkInterface(name, parent string, vlanID int, addresses []str
 func TestVLANControllerCreate(t *testing.T) {
 	// Create a mock VLAN manager
 	mockManager := new(MockVLANManager)
-	
+
 	// Set up expectations for the mock
 	mockVLAN := &VLANInterface{
 		Name:             "test-vlan100",
@@ -144,44 +145,44 @@ func TestVLANControllerCreate(t *testing.T) {
 			TxBytes:   0,
 		},
 	}
-	
+
 	// Setup expectations
 	mockManager.On("CreateVLAN", "eth0", 100, "test-vlan100", mock.AnythingOfType("VLANConfig")).Return(mockVLAN, nil)
-	mockManager.On("GetVLAN", "test-vlan100").Return(mockVLAN, nil)
-	
+	mockManager.On("GetVLAN", "test-vlan100").Return(nil, errors.New("not found"))
+
 	// Create a fake dynamic client (not used in this test but kept for future expansion)
 	scheme := runtime.NewScheme()
 	objs := []runtime.Object{}
 	_ = fake.NewSimpleDynamicClient(scheme, objs...)
-	
+
 	// Create a controller config
 	config := VLANControllerConfig{
-		ResyncInterval:           60,
-		MaxConcurrentReconciles:  2,
-		DefaultQoSPriority:       0,
-		DefaultDSCP:              0,
-		DefaultMTU:               1500,
-		VLANNetlinkTimeout:       5,
+		ResyncInterval:            60,
+		MaxConcurrentReconciles:   2,
+		DefaultQoSPriority:        0,
+		DefaultDSCP:               0,
+		DefaultMTU:                1500,
+		VLANNetlinkTimeout:        5,
 		EnableSysctlConfiguration: true,
 	}
-	
+
 	// Create the controller
 	controller := NewVLANController(nil, mockManager, config)
 
 	// Start the controller (context for future use)
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// Manually create and process a VLAN NetworkInterface CRD
 	vlanObj := createVLANNetworkInterface("test-vlan100", "eth0", 100, []string{"192.168.100.1/24"})
-	
+
 	// Add the object to the test cache
 	controller.informer.GetStore().Add(vlanObj)
-	
+
 	// Manually trigger reconciliation
 	err := controller.reconcileVLAN("test-vlan100")
 	require.NoError(t, err)
-	
+
 	// Verify expectations
 	mockManager.AssertExpectations(t)
 }
@@ -189,7 +190,7 @@ func TestVLANControllerCreate(t *testing.T) {
 func TestVLANControllerUpdate(t *testing.T) {
 	// Create a mock VLAN manager
 	mockManager := new(MockVLANManager)
-	
+
 	// Set up expectations for the mock
 	existingVLAN := &VLANInterface{
 		Name:             "test-vlan100",
@@ -208,7 +209,7 @@ func TestVLANControllerUpdate(t *testing.T) {
 		},
 		ActualMTU: 1500,
 	}
-	
+
 	updatedVLAN := &VLANInterface{
 		Name:             "test-vlan100",
 		Parent:           "eth0",
@@ -230,52 +231,52 @@ func TestVLANControllerUpdate(t *testing.T) {
 		},
 		ActualMTU: 1500,
 	}
-	
+
 	// Setup expectations
 	mockManager.On("GetVLAN", "test-vlan100").Return(existingVLAN, nil)
 	mockManager.On("UpdateVLAN", "test-vlan100", mock.AnythingOfType("VLANConfig")).Return(updatedVLAN, nil)
-	
+
 	// Create a fake dynamic client (not used in this test but kept for future expansion)
 	scheme := runtime.NewScheme()
 	objs := []runtime.Object{}
 	_ = fake.NewSimpleDynamicClient(scheme, objs...)
-	
+
 	// Create a controller config
 	config := VLANControllerConfig{
-		ResyncInterval:           60,
-		MaxConcurrentReconciles:  2,
-		DefaultQoSPriority:       0,
-		DefaultDSCP:              0,
-		DefaultMTU:               1500,
-		VLANNetlinkTimeout:       5,
+		ResyncInterval:            60,
+		MaxConcurrentReconciles:   2,
+		DefaultQoSPriority:        0,
+		DefaultDSCP:               0,
+		DefaultMTU:                1500,
+		VLANNetlinkTimeout:        5,
 		EnableSysctlConfiguration: true,
 	}
-	
+
 	// Create the controller
 	controller := NewVLANController(nil, mockManager, config)
 
 	// Start the controller (context for future use)
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// Manually create and process a VLAN NetworkInterface CRD
-	vlanObj := createVLANNetworkInterface("test-vlan100", "eth0", 100, 
+	vlanObj := createVLANNetworkInterface("test-vlan100", "eth0", 100,
 		[]string{"192.168.100.1/24", "192.168.100.2/24"})
-	
+
 	// Set the updated QoS priority
 	spec, _, _ := unstructured.NestedMap(vlanObj.Object, "spec")
 	qos, _, _ := unstructured.NestedMap(spec, "qos")
-	qos["priority"] = 4
+	qos["priority"] = float64(4)
 	unstructured.SetNestedMap(spec, qos, "qos")
 	unstructured.SetNestedMap(vlanObj.Object, spec, "spec")
-	
+
 	// Add the object to the test cache
 	controller.informer.GetStore().Add(vlanObj)
-	
+
 	// Manually trigger reconciliation
 	err := controller.reconcileVLAN("test-vlan100")
 	require.NoError(t, err)
-	
+
 	// Verify expectations
 	mockManager.AssertExpectations(t)
 }
@@ -283,37 +284,39 @@ func TestVLANControllerUpdate(t *testing.T) {
 func TestVLANControllerDelete(t *testing.T) {
 	// Create a mock VLAN manager
 	mockManager := new(MockVLANManager)
-	
+
 	// Setup expectations
+	mockVLAN := &VLANInterface{Name: "test-vlan100"}
+	mockManager.On("GetVLAN", "test-vlan100").Return(mockVLAN, nil)
 	mockManager.On("DeleteVLAN", "test-vlan100").Return(nil)
-	
+
 	// Create a fake dynamic client (not used in this test but kept for future expansion)
 	scheme := runtime.NewScheme()
 	objs := []runtime.Object{}
 	_ = fake.NewSimpleDynamicClient(scheme, objs...)
-	
+
 	// Create a controller config
 	config := VLANControllerConfig{
-		ResyncInterval:           60,
-		MaxConcurrentReconciles:  2,
-		DefaultQoSPriority:       0,
-		DefaultDSCP:              0,
-		DefaultMTU:               1500,
-		VLANNetlinkTimeout:       5,
+		ResyncInterval:            60,
+		MaxConcurrentReconciles:   2,
+		DefaultQoSPriority:        0,
+		DefaultDSCP:               0,
+		DefaultMTU:                1500,
+		VLANNetlinkTimeout:        5,
 		EnableSysctlConfiguration: true,
 	}
-	
+
 	// Create the controller
 	controller := NewVLANController(nil, mockManager, config)
 
 	// Start the controller (context for future use)
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// Manually trigger reconciliation for a non-existent object (simulating deletion)
 	err := controller.reconcileVLAN("test-vlan100")
 	require.NoError(t, err)
-	
+
 	// Verify expectations
 	mockManager.AssertExpectations(t)
 }

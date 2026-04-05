@@ -7,16 +7,23 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
-	"github.com/GizmoTickler/fos1/pkg/dns/manager"
 )
+
+// DNSManager captures the DNS operations the DHCP connector depends on.
+type DNSManager interface {
+	AddRecord(name, recordType, value string, ttl uint32) error
+	RemoveRecord(name, recordType, value string) error
+	AddReverseRecord(ip, target string, ttl uint32) error
+	RemoveReverseRecord(ip string) error
+}
 
 // DNSConnector manages the connection between DHCP and DNS
 type DNSConnector struct {
-	dnsManager *manager.Manager
+	dnsManager DNSManager
 }
 
 // NewDNSConnector creates a new DNS connector
-func NewDNSConnector(dnsManager *manager.Manager) *DNSConnector {
+func NewDNSConnector(dnsManager DNSManager) *DNSConnector {
 	return &DNSConnector{
 		dnsManager: dnsManager,
 	}

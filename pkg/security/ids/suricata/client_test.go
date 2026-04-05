@@ -23,7 +23,9 @@ func mockServer(t *testing.T, handler func(cmd Command) Response) (string, func(
 	sockPath := filepath.Join(dir, "test.sock")
 
 	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
+	if err != nil {
+		t.Skipf("unix socket listeners unavailable in this environment: %v", err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -191,7 +193,9 @@ func TestTimeout(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "slow.sock")
 	ln, err := net.Listen("unix", sockPath)
-	require.NoError(t, err)
+	if err != nil {
+		t.Skipf("unix socket listeners unavailable in this environment: %v", err)
+	}
 	defer ln.Close()
 
 	go func() {

@@ -74,8 +74,10 @@ func TestConfigureBGP(t *testing.T) {
 		{
 			Type:    "ipv4-unicast",
 			Enabled: true,
-			Networks: []string{
-				"10.0.0.0/24",
+			Networks: []BGPNetwork{
+				{
+					Prefix: "10.0.0.0/24",
+				},
 			},
 			Redistributions: []Redistribution{
 				{

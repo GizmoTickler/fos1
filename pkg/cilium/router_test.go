@@ -11,7 +11,7 @@ import (
 type MockCiliumClient struct {
 	routes      map[string]Route
 	vrfs        map[int]map[string]Route
-	policyRules []PolicyRule
+	policyRules []RoutingPolicyRule
 }
 
 // NewMockCiliumClient creates a new mock Cilium client
@@ -19,8 +19,44 @@ func NewMockCiliumClient() *MockCiliumClient {
 	return &MockCiliumClient{
 		routes:      make(map[string]Route),
 		vrfs:        make(map[int]map[string]Route),
-		policyRules: []PolicyRule{},
+		policyRules: []RoutingPolicyRule{},
 	}
+}
+
+func (c *MockCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error {
+	return nil
+}
+
+func (c *MockCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
+	return nil
+}
+
+func (c *MockCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATConfig) error {
+	return nil
+}
+
+func (c *MockCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Config) error {
+	return nil
+}
+
+func (c *MockCiliumClient) RemoveNAT64(ctx context.Context, config *NAT64Config) error {
+	return nil
+}
+
+func (c *MockCiliumClient) CreatePortForward(ctx context.Context, config *PortForwardConfig) error {
+	return nil
+}
+
+func (c *MockCiliumClient) RemovePortForward(ctx context.Context, config *PortForwardConfig) error {
+	return nil
+}
+
+func (c *MockCiliumClient) ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error {
+	return nil
+}
+
+func (c *MockCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error {
+	return nil
 }
 
 // AddRoute adds a route to the mock client
@@ -57,14 +93,14 @@ func (c *MockCiliumClient) DeleteVRFRoute(route Route, vrfID int) error {
 }
 
 // AddPolicyRule adds a policy rule to the mock client
-func (c *MockCiliumClient) AddPolicyRule(rule PolicyRule) error {
+func (c *MockCiliumClient) AddPolicyRule(rule RoutingPolicyRule) error {
 	c.policyRules = append(c.policyRules, rule)
 	return nil
 }
 
 // DeletePolicyRule deletes a policy rule from the mock client
 func (c *MockCiliumClient) DeletePolicyRule(priority int) error {
-	newRules := make([]PolicyRule, 0, len(c.policyRules))
+	newRules := make([]RoutingPolicyRule, 0, len(c.policyRules))
 	for _, rule := range c.policyRules {
 		if rule.Priority != priority {
 			newRules = append(newRules, rule)
@@ -110,10 +146,10 @@ func TestRouter(t *testing.T) {
 
 	// Test adding a policy rule
 	_, cidr, _ := net.ParseCIDR("192.168.1.0/24")
-	rule := PolicyRule{
-		Priority:     100,
-		Table:        100,
-		SourceIP:     cidr,
+	rule := RoutingPolicyRule{
+		Priority:       100,
+		Table:          100,
+		SourceIP:       cidr,
 		InputInterface: "eth1",
 	}
 	if err := router.AddPolicyRule(rule); err != nil {

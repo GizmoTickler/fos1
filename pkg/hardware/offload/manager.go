@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package offload provides functionality for managing hardware offloading features.
 package offload
 
@@ -171,16 +173,16 @@ func (m *Manager) ResetOffload(ifName string) error {
 	// Default hardware offloading configuration
 	// These defaults are conservative for better compatibility
 	defaults := map[string]bool{
-		"tx-checksumming":           true,  // Enable TX checksum offloading
-		"rx-checksumming":           true,  // Enable RX checksum offloading
-		"tcp-segmentation-offload":  true,  // Enable TCP segmentation offloading
+		"tx-checksumming":              true,  // Enable TX checksum offloading
+		"rx-checksumming":              true,  // Enable RX checksum offloading
+		"tcp-segmentation-offload":     true,  // Enable TCP segmentation offloading
 		"generic-segmentation-offload": true,  // Enable generic segmentation offloading
-		"generic-receive-offload":   true,  // Enable generic receive offloading
-		"large-receive-offload":     false, // Disable large receive offloading (can cause issues)
-		"rx-packet-steering":        true,  // Enable RX packet steering
-		"tx-packet-steering":        true,  // Enable TX packet steering
-		"rx-flow-hash-filter":       false, // Disable NTUPLE filtering (complex to configure)
-		"receive-flow-steering":     false, // Disable RFS (complex to configure)
+		"generic-receive-offload":      true,  // Enable generic receive offloading
+		"large-receive-offload":        false, // Disable large receive offloading (can cause issues)
+		"rx-packet-steering":           true,  // Enable RX packet steering
+		"tx-packet-steering":           true,  // Enable TX packet steering
+		"rx-flow-hash-filter":          false, // Disable NTUPLE filtering (complex to configure)
+		"receive-flow-steering":        false, // Disable RFS (complex to configure)
 	}
 
 	// Apply defaults where features exist
@@ -226,12 +228,12 @@ func (m *Manager) GetOptimalOffloadConfiguration(ifName string) (types.OffloadFe
 		GSO:        capabilities.TxUDPFragmentation,
 		GRO:        capabilities.RxGRO,
 		// LRO is often not recommended due to potential issues with packet reordering
-		LRO:        false,
-		RPS:        false,
-		XPS:        false,
+		LRO: false,
+		RPS: false,
+		XPS: false,
 		// NTUPLE and RFS are more advanced and may require specific configuration
-		NTUPLE:     false,
-		RFS:        false,
+		NTUPLE: false,
+		RFS:    false,
 	}
 
 	return features, nil

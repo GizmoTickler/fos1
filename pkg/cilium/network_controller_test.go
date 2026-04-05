@@ -11,8 +11,8 @@ var (
 	errTestOperationFailed = fmt.Errorf("operation failed")
 )
 
-// MockCiliumClient is a mock implementation of the CiliumClient interface for testing
-type MockCiliumClient struct {
+// MockNetworkCiliumClient is a mock implementation of the network controller client.
+type MockNetworkCiliumClient struct {
 	// Track calls to methods
 	ApplyNetworkPolicyCalled   bool
 	CreateNATCalled            bool
@@ -20,17 +20,17 @@ type MockCiliumClient struct {
 	ConfigureDPICalled         bool
 
 	// Store parameters for verification
-	LastNetworkPolicy   *CiliumPolicy
-	LastNATConfig       *CiliumNATConfig
-	LastVLANConfig      *CiliumVLANRoutingConfig
-	LastDPIConfig       *CiliumDPIIntegrationConfig
+	LastNetworkPolicy *CiliumPolicy
+	LastNATConfig     *CiliumNATConfig
+	LastVLANConfig    *CiliumVLANRoutingConfig
+	LastDPIConfig     *CiliumDPIIntegrationConfig
 
 	// Configure responses
 	ShouldError bool
 }
 
 // ApplyNetworkPolicy mocks applying a network policy
-func (m *MockCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error {
+func (m *MockNetworkCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error {
 	m.ApplyNetworkPolicyCalled = true
 	m.LastNetworkPolicy = policy
 	if m.ShouldError {
@@ -40,7 +40,7 @@ func (m *MockCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Ciliu
 }
 
 // CreateNAT mocks creating NAT rules
-func (m *MockCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
+func (m *MockNetworkCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
 	m.CreateNATCalled = true
 	m.LastNATConfig = config
 	if m.ShouldError {
@@ -50,7 +50,7 @@ func (m *MockCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfi
 }
 
 // ConfigureVLANRouting mocks configuring VLAN routing
-func (m *MockCiliumClient) ConfigureVLANRouting(ctx context.Context, config *VLANRoutingConfig) error {
+func (m *MockNetworkCiliumClient) ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error {
 	m.ConfigureVLANRoutingCalled = true
 	m.LastVLANConfig = config
 	if m.ShouldError {
@@ -60,7 +60,7 @@ func (m *MockCiliumClient) ConfigureVLANRouting(ctx context.Context, config *VLA
 }
 
 // ConfigureDPIIntegration mocks configuring DPI integration
-func (m *MockCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *DPIIntegrationConfig) error {
+func (m *MockNetworkCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error {
 	m.ConfigureDPICalled = true
 	m.LastDPIConfig = config
 	if m.ShouldError {
@@ -72,7 +72,7 @@ func (m *MockCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *
 // TestNetworkController_ConfigureNAT tests the ConfigureNAT method
 func TestNetworkController_ConfigureNAT(t *testing.T) {
 	// Create a mock client
-	mockClient := &MockCiliumClient{}
+	mockClient := &MockNetworkCiliumClient{}
 
 	// Create a network controller with the mock client
 	controller := NewNetworkController(mockClient)
@@ -102,7 +102,7 @@ func TestNetworkController_ConfigureNAT(t *testing.T) {
 	}
 
 	// Test IPv6 NAT (NAT66)
-	mockClient = &MockCiliumClient{}
+	mockClient = &MockNetworkCiliumClient{}
 	controller = NewNetworkController(mockClient)
 
 	err = controller.ConfigureNAT(ctx, "2001:db8::/64", "eth0", true)
@@ -128,7 +128,7 @@ func TestNetworkController_ConfigureNAT(t *testing.T) {
 	}
 
 	// Test error case
-	mockClient = &MockCiliumClient{ShouldError: true}
+	mockClient = &MockNetworkCiliumClient{ShouldError: true}
 	controller = NewNetworkController(mockClient)
 
 	err = controller.ConfigureNAT(ctx, "192.168.1.0/24", "eth0", false)
@@ -140,7 +140,7 @@ func TestNetworkController_ConfigureNAT(t *testing.T) {
 // TestNetworkController_ConfigureInterVLANRouting tests the ConfigureInterVLANRouting method
 func TestNetworkController_ConfigureInterVLANRouting(t *testing.T) {
 	// Create a mock client
-	mockClient := &MockCiliumClient{}
+	mockClient := &MockNetworkCiliumClient{}
 
 	// Create a network controller with the mock client
 	controller := NewNetworkController(mockClient)
@@ -162,18 +162,19 @@ func TestNetworkController_ConfigureInterVLANRouting(t *testing.T) {
 		t.Errorf("Unexpected VLANs: got %v, want %v", mockClient.LastVLANConfig.VLANs, vlans)
 	}
 
-	for i, vlan := range vlans {
-		if mockClient.LastVLANConfig.VLANs[i] != vlan {
-			t.Errorf("Unexpected VLAN at index %d: got %d, want %d", i, mockClient.LastVLANConfig.VLANs[i], vlan)
+	for _, vlan := range vlans {
+		config, exists := mockClient.LastVLANConfig.VLANs[int(vlan)]
+		if !exists {
+			t.Errorf("Expected VLAN %d to exist", vlan)
+			continue
+		}
+		if config.Name != fmt.Sprintf("vlan-%d", vlan) {
+			t.Errorf("Unexpected VLAN name for %d: got %s", vlan, config.Name)
 		}
 	}
 
-	if !mockClient.LastVLANConfig.AllowInter {
-		t.Error("AllowInter should be true")
-	}
-
 	// Test error case
-	mockClient = &MockCiliumClient{ShouldError: true}
+	mockClient = &MockNetworkCiliumClient{ShouldError: true}
 	controller = NewNetworkController(mockClient)
 
 	err = controller.ConfigureInterVLANRouting(ctx, vlans, true)
@@ -185,14 +186,14 @@ func TestNetworkController_ConfigureInterVLANRouting(t *testing.T) {
 // TestNetworkController_AddVLANPolicy tests the AddVLANPolicy method
 func TestNetworkController_AddVLANPolicy(t *testing.T) {
 	// Create a mock client
-	mockClient := &MockCiliumClient{}
+	mockClient := &MockNetworkCiliumClient{}
 
 	// Create a network controller with the mock client
 	controller := NewNetworkController(mockClient)
 
 	// Test VLAN policy
 	ctx := context.Background()
-	rules := []VLANRule{
+	rules := []NetworkVLANRule{
 		{
 			Protocol: "tcp",
 			Port:     80,
@@ -241,7 +242,7 @@ func TestNetworkController_AddVLANPolicy(t *testing.T) {
 	}
 
 	// Test error case
-	mockClient = &MockCiliumClient{ShouldError: true}
+	mockClient = &MockNetworkCiliumClient{ShouldError: true}
 	controller = NewNetworkController(mockClient)
 
 	err = controller.AddVLANPolicy(ctx, 10, 20, false, rules)
@@ -253,7 +254,7 @@ func TestNetworkController_AddVLANPolicy(t *testing.T) {
 // TestNetworkController_IntegrateDPI tests the IntegrateDPI method
 func TestNetworkController_IntegrateDPI(t *testing.T) {
 	// Create a mock client
-	mockClient := &MockCiliumClient{}
+	mockClient := &MockNetworkCiliumClient{}
 
 	// Create a network controller with the mock client
 	controller := NewNetworkController(mockClient)
@@ -284,36 +285,29 @@ func TestNetworkController_IntegrateDPI(t *testing.T) {
 		t.Error("ConfigureDPIIntegration was not called")
 	}
 
-	if !mockClient.LastDPIConfig.EnableAppDetection {
-		t.Error("EnableAppDetection should be true")
+	if !mockClient.LastDPIConfig.Enabled {
+		t.Error("Enabled should be true")
 	}
 
-	if len(mockClient.LastDPIConfig.AppPolicies) != len(appPolicies) {
-		t.Errorf("Unexpected app policy count: got %d, want %d", len(mockClient.LastDPIConfig.AppPolicies), len(appPolicies))
+	if len(mockClient.LastDPIConfig.ApplicationsToMonitor) != len(appPolicies) {
+		t.Errorf("Unexpected application count: got %d, want %d", len(mockClient.LastDPIConfig.ApplicationsToMonitor), len(appPolicies))
 	}
 
-	for app, policy := range appPolicies {
-		configPolicy, exists := mockClient.LastDPIConfig.AppPolicies[app]
-		if !exists {
-			t.Errorf("Expected policy for app %s to exist", app)
-			continue
+	appsSeen := make(map[string]bool, len(mockClient.LastDPIConfig.ApplicationsToMonitor))
+	for _, app := range mockClient.LastDPIConfig.ApplicationsToMonitor {
+		appsSeen[app] = true
+	}
+	for app := range appPolicies {
+		if !appsSeen[app] {
+			t.Errorf("Expected application %s to be monitored", app)
 		}
-
-		if configPolicy.Application != policy.Application {
-			t.Errorf("Unexpected application for %s: got %s, want %s", app, configPolicy.Application, policy.Application)
-		}
-
-		if configPolicy.Action != policy.Action {
-			t.Errorf("Unexpected action for %s: got %s, want %s", app, configPolicy.Action, policy.Action)
-		}
-
-		if configPolicy.Priority != policy.Priority {
-			t.Errorf("Unexpected priority for %s: got %d, want %d", app, configPolicy.Priority, policy.Priority)
-		}
+	}
+	if mockClient.LastDPIConfig.EnforcementMode != "log" {
+		t.Errorf("Unexpected enforcement mode: got %s, want log", mockClient.LastDPIConfig.EnforcementMode)
 	}
 
 	// Test error case
-	mockClient = &MockCiliumClient{ShouldError: true}
+	mockClient = &MockNetworkCiliumClient{ShouldError: true}
 	controller = NewNetworkController(mockClient)
 
 	err = controller.IntegrateDPI(ctx, appPolicies)
@@ -325,7 +319,7 @@ func TestNetworkController_IntegrateDPI(t *testing.T) {
 // TestNetworkController_ApplyDynamicPolicy tests the ApplyDynamicPolicy method
 func TestNetworkController_ApplyDynamicPolicy(t *testing.T) {
 	// Create a mock client
-	mockClient := &MockCiliumClient{}
+	mockClient := &MockNetworkCiliumClient{}
 
 	// Create a network controller with the mock client
 	controller := NewNetworkController(mockClient)
@@ -355,7 +349,7 @@ func TestNetworkController_ApplyDynamicPolicy(t *testing.T) {
 	}
 
 	// Test error case
-	mockClient = &MockCiliumClient{ShouldError: true}
+	mockClient = &MockNetworkCiliumClient{ShouldError: true}
 	controller = NewNetworkController(mockClient)
 
 	err = controller.ApplyDynamicPolicy(ctx, "http", "allow")

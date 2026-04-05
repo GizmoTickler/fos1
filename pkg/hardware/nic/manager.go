@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package nic provides functionality for managing network interfaces.
 package nic
 

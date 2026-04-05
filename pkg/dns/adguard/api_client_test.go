@@ -3,6 +3,7 @@ package adguard
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,7 +11,8 @@ import (
 
 // newTestServer creates an httptest.NewServer that handles the AdGuard Home
 // API endpoints used by APIClient.
-func newTestServer() *httptest.Server {
+func newTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/control/status", func(w http.ResponseWriter, r *http.Request) {
@@ -144,11 +146,25 @@ func newTestServer() *httptest.Server {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	return httptest.NewServer(mux)
+	return newBoundServer(t, mux)
+}
+
+func newBoundServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("tcp listeners unavailable in this environment: %v", err)
+	}
+
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
 }
 
 func TestGetStatus(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -172,7 +188,7 @@ func TestGetStatus(t *testing.T) {
 }
 
 func TestAddFilterList(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -183,7 +199,7 @@ func TestAddFilterList(t *testing.T) {
 }
 
 func TestAddFilterList_EmptyFields(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -194,7 +210,7 @@ func TestAddFilterList_EmptyFields(t *testing.T) {
 }
 
 func TestRemoveFilterList(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -205,7 +221,7 @@ func TestRemoveFilterList(t *testing.T) {
 }
 
 func TestRemoveFilterList_EmptyURL(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -216,7 +232,7 @@ func TestRemoveFilterList_EmptyURL(t *testing.T) {
 }
 
 func TestRefreshFilters(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -227,7 +243,7 @@ func TestRefreshFilters(t *testing.T) {
 }
 
 func TestGetClients(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -251,7 +267,7 @@ func TestGetClients(t *testing.T) {
 }
 
 func TestUpdateClient(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -267,7 +283,7 @@ func TestUpdateClient(t *testing.T) {
 }
 
 func TestGetStats(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "admin", "password")
@@ -294,7 +310,7 @@ func TestBasicAuth(t *testing.T) {
 	var receivedUser, receivedPass string
 	var authOK bool
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newBoundServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedUser, receivedPass, authOK = r.BasicAuth()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ServerStatus{Running: true})
@@ -319,7 +335,7 @@ func TestBasicAuth(t *testing.T) {
 }
 
 func TestServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newBoundServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -332,7 +348,7 @@ func TestServerError(t *testing.T) {
 }
 
 func TestContextCancellation(t *testing.T) {
-	srv := newTestServer()
+	srv := newTestServer(t)
 	defer srv.Close()
 
 	client := NewAPIClient(srv.URL, "", "")
