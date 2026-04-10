@@ -288,6 +288,10 @@ func (c *NATController) extractConfig(obj *unstructured.Unstructured) (nat.Confi
 		config, err = c.extractMasqueradeConfig(spec, name, namespace, iface)
 	case "full":
 		config, err = c.extractFullNATConfig(spec, name, namespace, iface)
+	case "nat66":
+		config, err = c.extractNAT66Config(spec, name, namespace, iface)
+	case "nat64":
+		config, err = c.extractNAT64Config(spec, name, namespace, iface)
 	default:
 		return nat.Config{}, fmt.Errorf("unsupported NAT type: %s", natType)
 	}
@@ -395,6 +399,45 @@ func (c *NATController) extractFullNATConfig(spec map[string]interface{}, name, 
 		ExternalIP:      externalIP,
 		SourceAddresses: sourceAddresses,
 		PortMappings:    portMappings,
+		EnableTracking:  enableTracking,
+	}, nil
+}
+
+// extractNAT66Config extracts NAT66 configuration from the spec
+func (c *NATController) extractNAT66Config(spec map[string]interface{}, name, namespace, iface string) (nat.Config, error) {
+	sourceAddresses, err := extractStringSlice(spec, "sourceAddresses")
+	if err != nil {
+		return nat.Config{}, err
+	}
+
+	enableTracking, _, _ := unstructured.NestedBool(spec, "enableTracking")
+
+	return nat.Config{
+		Name:            name,
+		Namespace:       namespace,
+		Type:            nat.TypeNAT66,
+		Interface:       iface,
+		SourceAddresses: sourceAddresses,
+		EnableTracking:  enableTracking,
+		IPv6:            true,
+	}, nil
+}
+
+// extractNAT64Config extracts NAT64 configuration from the spec
+func (c *NATController) extractNAT64Config(spec map[string]interface{}, name, namespace, iface string) (nat.Config, error) {
+	sourceAddresses, err := extractStringSlice(spec, "sourceAddresses")
+	if err != nil {
+		return nat.Config{}, err
+	}
+
+	enableTracking, _, _ := unstructured.NestedBool(spec, "enableTracking")
+
+	return nat.Config{
+		Name:            name,
+		Namespace:       namespace,
+		Type:            nat.TypeNAT64,
+		Interface:       iface,
+		SourceAddresses: sourceAddresses,
 		EnableTracking:  enableTracking,
 	}, nil
 }

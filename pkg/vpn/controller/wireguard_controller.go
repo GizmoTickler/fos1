@@ -17,7 +17,7 @@ import (
 )
 
 // WireGuardInterfaceResource is the API resource name for WireGuard CRDs.
-const WireGuardInterfaceResource = "wiregaurdinterfaces.vpn.fos1.io"
+const WireGuardInterfaceResource = "wireguardinterfaces.vpn.fos1.io"
 
 // WireGuardController is the controller for WireGuard VPNs
 type WireGuardController struct {

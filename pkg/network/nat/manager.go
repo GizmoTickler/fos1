@@ -1,7 +1,9 @@
 package nat
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -146,8 +148,7 @@ func (m *manager) ApplyNATPolicy(config Config) (*ApplyResult, error) {
 // isDNATPartialFailure checks if an error from applyFullNAT is a DNAT-specific failure
 // (meaning SNAT succeeded but DNAT failed)
 func isDNATPartialFailure(err error) bool {
-	return err != nil && len(err.Error()) > 0 &&
-		(err.Error()[:len("failed to apply DNAT")] == "failed to apply DNAT")
+	return err != nil && strings.HasPrefix(err.Error(), "failed to apply DNAT")
 }
 
 // getOrCreateStatus returns an existing status or creates a new one
@@ -258,7 +259,7 @@ func (m *manager) applySNAT(config Config) error {
 		IPv6:             config.IPv6,
 	}
 
-	return m.ciliumClient.CreateNAT(nil, natConfig)
+	return m.ciliumClient.CreateNAT(context.Background(), natConfig)
 }
 
 // applyDNAT applies a Destination NAT policy
@@ -275,7 +276,7 @@ func (m *manager) applyDNAT(config Config) error {
 			Description:  mapping.Description,
 		}
 
-		if err := m.ciliumClient.CreatePortForward(nil, portForwardConfig); err != nil {
+		if err := m.ciliumClient.CreatePortForward(context.Background(), portForwardConfig); err != nil {
 			return fmt.Errorf("failed to create port forwarding for %s:%d: %w",
 				mapping.Protocol, mapping.ExternalPort, err)
 		}
@@ -294,7 +295,7 @@ func (m *manager) applyMasquerade(config Config) error {
 		IPv6:             config.IPv6,
 	}
 
-	return m.ciliumClient.CreateNAT(nil, natConfig)
+	return m.ciliumClient.CreateNAT(context.Background(), natConfig)
 }
 
 // applyFullNAT applies a Full NAT policy (both SNAT and DNAT)
@@ -322,7 +323,7 @@ func (m *manager) applyNAT66(config Config) error {
 		IPv6:             true,
 	}
 
-	return m.ciliumClient.CreateNAT(nil, natConfig)
+	return m.ciliumClient.CreateNAT(context.Background(), natConfig)
 }
 
 // applyNAT64 applies a NAT64 policy (IPv6 to IPv4)
@@ -334,7 +335,7 @@ func (m *manager) applyNAT64(config Config) error {
 		DestinationIface: config.Interface,
 	}
 
-	return m.ciliumClient.CreateNAT64(nil, nat64Config)
+	return m.ciliumClient.CreateNAT64(context.Background(), nat64Config)
 }
 
 // removeSNAT removes a Source NAT policy
@@ -347,7 +348,7 @@ func (m *manager) removeSNAT(config Config) error {
 		IPv6:             config.IPv6,
 	}
 
-	return m.ciliumClient.RemoveNAT(nil, natConfig)
+	return m.ciliumClient.RemoveNAT(context.Background(), natConfig)
 }
 
 // removeDNAT removes a Destination NAT policy
@@ -363,7 +364,7 @@ func (m *manager) removeDNAT(config Config) error {
 			InternalPort: mapping.InternalPort,
 		}
 
-		if err := m.ciliumClient.RemovePortForward(nil, portForwardConfig); err != nil {
+		if err := m.ciliumClient.RemovePortForward(context.Background(), portForwardConfig); err != nil {
 			return fmt.Errorf("failed to remove port forwarding: %w", err)
 		}
 	}
@@ -381,7 +382,7 @@ func (m *manager) removeMasquerade(config Config) error {
 		IPv6:             config.IPv6,
 	}
 
-	return m.ciliumClient.RemoveNAT(nil, natConfig)
+	return m.ciliumClient.RemoveNAT(context.Background(), natConfig)
 }
 
 // removeFullNAT removes a Full NAT policy (both SNAT and DNAT)
@@ -409,7 +410,7 @@ func (m *manager) removeNAT66(config Config) error {
 		IPv6:             true,
 	}
 
-	return m.ciliumClient.RemoveNAT(nil, natConfig)
+	return m.ciliumClient.RemoveNAT(context.Background(), natConfig)
 }
 
 // removeNAT64 removes a NAT64 policy (IPv6 to IPv4)
@@ -421,5 +422,5 @@ func (m *manager) removeNAT64(config Config) error {
 		DestinationIface: config.Interface,
 	}
 
-	return m.ciliumClient.RemoveNAT64(nil, nat64Config)
+	return m.ciliumClient.RemoveNAT64(context.Background(), nat64Config)
 }
