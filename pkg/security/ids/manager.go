@@ -526,6 +526,12 @@ func (m *IDSManager) GetStatistics() (*Statistics, error) {
 }
 
 // EnableIPS enables IPS mode (blocking).
+//
+// TODO: This currently only toggles a local boolean. To actually enable IPS mode,
+// this method needs to reconfigure Suricata from IDS (af-packet copy mode) to IPS
+// (af-packet inline/IPS mode) by updating the Suricata YAML configuration and
+// issuing a reload or restart via the Suricata control socket. Without that,
+// Suricata continues to run in detection-only mode regardless of this flag.
 func (m *IDSManager) EnableIPS() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -536,6 +542,12 @@ func (m *IDSManager) EnableIPS() error {
 }
 
 // DisableIPS disables IPS mode (detection only).
+//
+// TODO: This currently only toggles a local boolean. To actually disable IPS mode,
+// this method needs to reconfigure Suricata from IPS (af-packet inline mode) back
+// to IDS (af-packet copy mode) by updating the Suricata YAML configuration and
+// issuing a reload or restart via the Suricata control socket. Without that,
+// Suricata's actual operating mode is unchanged by this call.
 func (m *IDSManager) DisableIPS() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
