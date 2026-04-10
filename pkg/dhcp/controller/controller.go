@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -25,7 +26,6 @@ import (
 	listers "github.com/GizmoTickler/fos1/pkg/client/listers/network/v1"
 	"github.com/GizmoTickler/fos1/pkg/dhcp"
 	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
-	"github.com/GizmoTickler/fos1/pkg/dns/manager"
 )
 
 const (
@@ -38,6 +38,24 @@ const (
 	// MessageResourceSynced is the message used for an Event fired when a resource
 	// is synced successfully
 	MessageResourceSynced = "DHCP service synced successfully"
+
+	// PhaseReady indicates the service has been configured and verified on Kea.
+	PhaseReady = "Ready"
+
+	// PhaseDegraded indicates Kea rejected the configuration or is unreachable.
+	PhaseDegraded = "Degraded"
+
+	// PhaseError indicates a fatal reconciliation error.
+	PhaseError = "Error"
+
+	// ConditionConfigApplied tracks whether the Kea config-set succeeded.
+	ConditionConfigApplied = "ConfigApplied"
+
+	// ConditionKeaReachable tracks whether the Kea daemon is reachable.
+	ConditionKeaReachable = "KeaReachable"
+
+	// keaReconcileTimeout is how long we wait for Kea operations during reconcile.
+	keaReconcileTimeout = 15 * time.Second
 )
 
 // Controller is the controller implementation for DHCP resources
@@ -63,7 +81,7 @@ type Controller struct {
 	// Kubernetes API.
 	recorder record.EventRecorder
 
-	// keaManager manages the Kea DHCP server configuration
+	// keaManager manages communication with Kea DHCP daemons via control sockets.
 	keaManager *dhcp.KeaManager
 
 	// dnsConnector connects DHCP to DNS for updates
@@ -78,7 +96,8 @@ func NewController(
 	kubeclientset kubernetes.Interface,
 	networkclientset clientset.Interface,
 	networkInformerFactory informers.SharedInformerFactory,
-	dnsManager *manager.Manager) *Controller {
+	keaManager *dhcp.KeaManager,
+	dnsConnector *DNSConnector) *Controller {
 
 	// Get informers
 	dhcpv4Informer := networkInformerFactory.Network().V1().DHCPv4Services()
@@ -91,15 +110,6 @@ func NewController(
 	eventBroadcaster.StartStructuredLogging(0)
 	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("")})
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: ControllerName})
-
-	// Create Kea manager
-	keaManager, err := dhcp.NewKeaManager("/etc/kea", "kea-dhcp")
-	if err != nil {
-		klog.Fatalf("Error creating Kea manager: %v", err)
-	}
-
-	// Create DNS connector
-	dnsConnector := NewDNSConnector(dnsManager)
 
 	controller := &Controller{
 		kubeclientset:    kubeclientset,
@@ -118,7 +128,7 @@ func NewController(
 	}
 
 	klog.Info("Setting up event handlers")
-	
+
 	// Set up an event handler for when DHCPv4Service resources change
 	dhcpv4Informer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.enqueueDHCPv4Service,
@@ -198,38 +208,19 @@ func (c *Controller) processDHCPv4NextWorkItem() bool {
 		return false
 	}
 
-	// We wrap this block in a func so we can defer c.workqueue.Done.
 	err := func(obj interface{}) error {
-		// We call Done here so the workqueue knows we have finished
-		// processing this item. We also must remember to call Forget if we
-		// do not want this work item being re-queued. For example, we do
-		// not call Forget if a transient error occurs, instead the item is
-		// re-queued with a backoff.
 		defer c.dhcpv4Workqueue.Done(obj)
 		var key string
 		var ok bool
-		// We expect strings to come off the workqueue. These are of the
-		// form namespace/name. We do this as the delayed nature of the
-		// workqueue means the items in the informer cache may actually be
-		// more up to date that when the item was initially put onto the
-		// workqueue.
 		if key, ok = obj.(string); !ok {
-			// As the item in the workqueue is actually invalid, we call
-			// Forget here else we'd go into a loop of attempting to
-			// process a work item that is invalid.
 			c.dhcpv4Workqueue.Forget(obj)
 			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
 			return nil
 		}
-		// Run the syncHandler, passing it the namespace/name string of the
-		// DHCPv4Service resource to be synced.
 		if err := c.syncDHCPv4Handler(key); err != nil {
-			// Put the item back on the workqueue to handle any transient errors.
 			c.dhcpv4Workqueue.AddRateLimited(key)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
-		// Finally, if no error occurs we Forget this item so it does not
-		// get queued again until another change happens.
 		c.dhcpv4Workqueue.Forget(obj)
 		klog.Infof("Successfully synced '%s'", key)
 		return nil
@@ -260,38 +251,19 @@ func (c *Controller) processDHCPv6NextWorkItem() bool {
 		return false
 	}
 
-	// We wrap this block in a func so we can defer c.workqueue.Done.
 	err := func(obj interface{}) error {
-		// We call Done here so the workqueue knows we have finished
-		// processing this item. We also must remember to call Forget if we
-		// do not want this work item being re-queued. For example, we do
-		// not call Forget if a transient error occurs, instead the item is
-		// re-queued with a backoff.
 		defer c.dhcpv6Workqueue.Done(obj)
 		var key string
 		var ok bool
-		// We expect strings to come off the workqueue. These are of the
-		// form namespace/name. We do this as the delayed nature of the
-		// workqueue means the items in the informer cache may actually be
-		// more up to date that when the item was initially put onto the
-		// workqueue.
 		if key, ok = obj.(string); !ok {
-			// As the item in the workqueue is actually invalid, we call
-			// Forget here else we'd go into a loop of attempting to
-			// process a work item that is invalid.
 			c.dhcpv6Workqueue.Forget(obj)
 			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
 			return nil
 		}
-		// Run the syncHandler, passing it the namespace/name string of the
-		// DHCPv6Service resource to be synced.
 		if err := c.syncDHCPv6Handler(key); err != nil {
-			// Put the item back on the workqueue to handle any transient errors.
 			c.dhcpv6Workqueue.AddRateLimited(key)
 			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 		}
-		// Finally, if no error occurs we Forget this item so it does not
-		// get queued again until another change happens.
 		c.dhcpv6Workqueue.Forget(obj)
 		klog.Infof("Successfully synced '%s'", key)
 		return nil
@@ -306,23 +278,20 @@ func (c *Controller) processDHCPv6NextWorkItem() bool {
 }
 
 // syncDHCPv4Handler compares the actual state with the desired, and attempts to
-// converge the two. It then updates the Status block of the DHCPv4Service resource
-// with the current status of the resource.
+// converge the two. It pushes the Kea configuration via config-set, verifies it,
+// and updates the CRD status to reflect the applied state.
 func (c *Controller) syncDHCPv4Handler(key string) error {
 	c.configMutex.Lock()
 	defer c.configMutex.Unlock()
 
-	// Convert the namespace/name string into a distinct namespace and name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 		return nil
 	}
 
-	// Get the DHCPv4Service resource with this namespace/name
 	dhcpv4Service, err := c.dhcpv4Lister.DHCPv4Services(namespace).Get(name)
 	if err != nil {
-		// The DHCPv4Service resource may no longer exist, in which case we stop processing.
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("dhcpv4service '%s' in work queue no longer exists", key))
 			return nil
@@ -333,63 +302,68 @@ func (c *Controller) syncDHCPv4Handler(key string) error {
 	// Get the referenced VLAN
 	vlan, err := c.vlanLister.VLANs(namespace).Get(dhcpv4Service.Spec.VLANRef)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to get VLAN %s referenced by DHCPv4Service %s: %v", 
-			dhcpv4Service.Spec.VLANRef, name, err))
-		return err
+		c.setDHCPv4Status(dhcpv4Service, PhaseError, fmt.Sprintf("VLAN %s not found: %v", dhcpv4Service.Spec.VLANRef, err))
+		return fmt.Errorf("failed to get VLAN %s referenced by DHCPv4Service %s: %v",
+			dhcpv4Service.Spec.VLANRef, name, err)
 	}
 
-	// Update Kea configuration
-	// Create Kea configuration for DHCPv4
-	keaConfig, err := c.keaManager.ConfigureFromDHCPv4(&types.DHCPv4Service{
+	// Determine the domain suffix from the CRD spec.
+	domain := dhcpv4Service.Spec.Domain
+	if domain == "" {
+		// Fall back to a reasonable default derived from the VLAN name.
+		domain = fmt.Sprintf("vlan%d.local", vlan.Spec.ID)
+	}
+
+	// Build the types.DHCPv4Service from the CRD spec.
+	typedService := &types.DHCPv4Service{
 		Spec: types.DHCPv4ServiceSpec{
-			VLANRef:      dhcpv4Service.Spec.VLANRef,
-			LeaseTime:    dhcpv4Service.Spec.LeaseTime,
-			Range:        types.AddressRange{Start: dhcpv4Service.Spec.Range.Start, End: dhcpv4Service.Spec.Range.End},
-			Domain:       dhcpv4Service.Spec.Domain,
+			VLANRef:   dhcpv4Service.Spec.VLANRef,
+			LeaseTime: dhcpv4Service.Spec.LeaseTime,
+			Range:     types.AddressRange{Start: dhcpv4Service.Spec.Range.Start, End: dhcpv4Service.Spec.Range.End},
+			Domain:    domain,
 		},
-	}, vlan.Spec.Subnet, vlan.Spec.Gateway)
-	if err != nil {
-		return err
-	}
-	
-	// Update the Kea configuration
-	err = c.keaManager.UpdateConfig(fmt.Sprintf("%d", vlan.Spec.ID), keaConfig)
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to update Kea DHCPv4 configuration for VLAN %d: %v", 
-			vlan.Spec.ID, err))
-		return err
 	}
 
-	// Restart Kea service for this VLAN
-	err = c.keaManager.RestartService(fmt.Sprintf("%d", vlan.Spec.ID))
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to restart Kea DHCPv4 service for VLAN %d: %v", 
-			vlan.Spec.ID, err))
-		return err
+	// Create a context with timeout for Kea operations.
+	ctx, cancel := context.WithTimeout(context.Background(), keaReconcileTimeout)
+	defer cancel()
+
+	// Check if Kea daemon is reachable before pushing config.
+	if !c.keaManager.IsDHCPv4Running() {
+		c.setDHCPv4Status(dhcpv4Service, PhaseDegraded, "Kea DHCPv4 daemon is not reachable")
+		c.recorder.Event(dhcpv4Service, corev1.EventTypeWarning, "KeaUnreachable", "Kea DHCPv4 daemon is not reachable on its control socket")
+		return fmt.Errorf("kea dhcp4 daemon unreachable for VLAN %s", dhcpv4Service.Spec.VLANRef)
 	}
 
+	// Push the configuration to Kea via config-set and verify via config-get.
+	if err := c.keaManager.PushDHCPv4Config(ctx, typedService, vlan.Spec.Subnet, vlan.Spec.Gateway); err != nil {
+		c.setDHCPv4Status(dhcpv4Service, PhaseDegraded, fmt.Sprintf("Kea config-set failed: %v", err))
+		c.recorder.Event(dhcpv4Service, corev1.EventTypeWarning, "ConfigSetFailed",
+			fmt.Sprintf("Failed to push DHCPv4 config to Kea: %v", err))
+		return fmt.Errorf("failed to push Kea DHCPv4 config for VLAN %d: %v", vlan.Spec.ID, err)
+	}
+
+	// Configuration applied and verified. Mark as Ready.
+	c.setDHCPv4Status(dhcpv4Service, PhaseReady, "Configuration applied and verified on Kea")
 	c.recorder.Event(dhcpv4Service, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
 	return nil
 }
 
 // syncDHCPv6Handler compares the actual state with the desired, and attempts to
-// converge the two. It then updates the Status block of the DHCPv6Service resource
-// with the current status of the resource.
+// converge the two. It pushes the Kea configuration via config-set, verifies it,
+// and updates the CRD status to reflect the applied state.
 func (c *Controller) syncDHCPv6Handler(key string) error {
 	c.configMutex.Lock()
 	defer c.configMutex.Unlock()
 
-	// Convert the namespace/name string into a distinct namespace and name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 		return nil
 	}
 
-	// Get the DHCPv6Service resource with this namespace/name
 	dhcpv6Service, err := c.dhcpv6Lister.DHCPv6Services(namespace).Get(name)
 	if err != nil {
-		// The DHCPv6Service resource may no longer exist, in which case we stop processing.
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("dhcpv6service '%s' in work queue no longer exists", key))
 			return nil
@@ -400,43 +374,116 @@ func (c *Controller) syncDHCPv6Handler(key string) error {
 	// Get the referenced VLAN
 	vlan, err := c.vlanLister.VLANs(namespace).Get(dhcpv6Service.Spec.VLANRef)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to get VLAN %s referenced by DHCPv6Service %s: %v", 
-			dhcpv6Service.Spec.VLANRef, name, err))
-		return err
+		c.setDHCPv6Status(dhcpv6Service, PhaseError, fmt.Sprintf("VLAN %s not found: %v", dhcpv6Service.Spec.VLANRef, err))
+		return fmt.Errorf("failed to get VLAN %s referenced by DHCPv6Service %s: %v",
+			dhcpv6Service.Spec.VLANRef, name, err)
 	}
 
-	// Update Kea configuration
-	// Create Kea configuration for DHCPv6
-	keaConfig, err := c.keaManager.ConfigureFromDHCPv6(&types.DHCPv6Service{
+	// Determine the domain suffix from the CRD spec.
+	domain := dhcpv6Service.Spec.Domain
+	if domain == "" {
+		domain = fmt.Sprintf("vlan%d.local", vlan.Spec.ID)
+	}
+
+	// Build the types.DHCPv6Service from the CRD spec.
+	typedService := &types.DHCPv6Service{
 		Spec: types.DHCPv6ServiceSpec{
-			VLANRef:      dhcpv6Service.Spec.VLANRef,
-			LeaseTime:    dhcpv6Service.Spec.LeaseTime,
-			Range:        types.AddressRange{Start: dhcpv6Service.Spec.Range.Start, End: dhcpv6Service.Spec.Range.End},
-			Domain:       dhcpv6Service.Spec.Domain,
+			VLANRef:   dhcpv6Service.Spec.VLANRef,
+			LeaseTime: dhcpv6Service.Spec.LeaseTime,
+			Range:     types.AddressRange{Start: dhcpv6Service.Spec.Range.Start, End: dhcpv6Service.Spec.Range.End},
+			Domain:    domain,
 		},
-	}, vlan.Spec.Subnet6, vlan.Spec.Gateway6)
-	if err != nil {
-		return err
-	}
-	
-	// Update the Kea configuration
-	err = c.keaManager.UpdateConfig(fmt.Sprintf("%d", vlan.Spec.ID), keaConfig)
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to update Kea DHCPv6 configuration for VLAN %d: %v", 
-			vlan.Spec.ID, err))
-		return err
 	}
 
-	// Restart Kea service for this VLAN
-	err = c.keaManager.RestartService(fmt.Sprintf("%d", vlan.Spec.ID))
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to restart Kea DHCPv6 service for VLAN %d: %v", 
-			vlan.Spec.ID, err))
-		return err
+	// Create a context with timeout for Kea operations.
+	ctx, cancel := context.WithTimeout(context.Background(), keaReconcileTimeout)
+	defer cancel()
+
+	// Check if Kea daemon is reachable.
+	if !c.keaManager.IsDHCPv6Running() {
+		c.setDHCPv6Status(dhcpv6Service, PhaseDegraded, "Kea DHCPv6 daemon is not reachable")
+		c.recorder.Event(dhcpv6Service, corev1.EventTypeWarning, "KeaUnreachable", "Kea DHCPv6 daemon is not reachable on its control socket")
+		return fmt.Errorf("kea dhcp6 daemon unreachable for VLAN %s", dhcpv6Service.Spec.VLANRef)
 	}
 
+	// Push the configuration to Kea via config-set and verify via config-get.
+	if err := c.keaManager.PushDHCPv6Config(ctx, typedService, vlan.Spec.Subnet6, vlan.Spec.Gateway6); err != nil {
+		c.setDHCPv6Status(dhcpv6Service, PhaseDegraded, fmt.Sprintf("Kea config-set failed: %v", err))
+		c.recorder.Event(dhcpv6Service, corev1.EventTypeWarning, "ConfigSetFailed",
+			fmt.Sprintf("Failed to push DHCPv6 config to Kea: %v", err))
+		return fmt.Errorf("failed to push Kea DHCPv6 config for VLAN %d: %v", vlan.Spec.ID, err)
+	}
+
+	// Configuration applied and verified. Mark as Ready.
+	c.setDHCPv6Status(dhcpv6Service, PhaseReady, "Configuration applied and verified on Kea")
 	c.recorder.Event(dhcpv6Service, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
 	return nil
+}
+
+// setDHCPv4Status updates the status of a DHCPv4Service CRD.
+func (c *Controller) setDHCPv4Status(svc *networkv1.DHCPv4Service, phase, message string) {
+	now := metav1.Now()
+	svc.Status.Phase = phase
+	svc.Status.Message = message
+	svc.Status.LastUpdated = now
+	svc.Status.Active = (phase == PhaseReady)
+
+	// Update ConfigApplied condition.
+	configApplied := metav1.Condition{
+		Type:               ConditionConfigApplied,
+		LastTransitionTime: now,
+		ObservedGeneration: svc.Generation,
+	}
+	if phase == PhaseReady {
+		configApplied.Status = metav1.ConditionTrue
+		configApplied.Reason = "ConfigSetSucceeded"
+		configApplied.Message = "Kea accepted and applied the configuration"
+	} else {
+		configApplied.Status = metav1.ConditionFalse
+		configApplied.Reason = "ConfigSetFailed"
+		configApplied.Message = message
+	}
+	setCondition(&svc.Status.Conditions, configApplied)
+}
+
+// setDHCPv6Status updates the status of a DHCPv6Service CRD.
+func (c *Controller) setDHCPv6Status(svc *networkv1.DHCPv6Service, phase, message string) {
+	now := metav1.Now()
+	svc.Status.Phase = phase
+	svc.Status.Message = message
+	svc.Status.LastUpdated = now
+	svc.Status.Active = (phase == PhaseReady)
+
+	// Update ConfigApplied condition.
+	configApplied := metav1.Condition{
+		Type:               ConditionConfigApplied,
+		LastTransitionTime: now,
+		ObservedGeneration: svc.Generation,
+	}
+	if phase == PhaseReady {
+		configApplied.Status = metav1.ConditionTrue
+		configApplied.Reason = "ConfigSetSucceeded"
+		configApplied.Message = "Kea accepted and applied the configuration"
+	} else {
+		configApplied.Status = metav1.ConditionFalse
+		configApplied.Reason = "ConfigSetFailed"
+		configApplied.Message = message
+	}
+	setCondition(&svc.Status.Conditions, configApplied)
+}
+
+// setCondition updates or appends a condition in the conditions slice.
+func setCondition(conditions *[]metav1.Condition, condition metav1.Condition) {
+	if *conditions == nil {
+		*conditions = []metav1.Condition{}
+	}
+	for i, existing := range *conditions {
+		if existing.Type == condition.Type {
+			(*conditions)[i] = condition
+			return
+		}
+	}
+	*conditions = append(*conditions, condition)
 }
 
 // enqueueDHCPv4Service takes a DHCPv4Service resource and converts it into a namespace/name
@@ -469,9 +516,6 @@ func (c *Controller) handleVLAN(obj interface{}) {
 	var vlan *networkv1.VLAN
 	var ok bool
 	if vlan, ok = obj.(*networkv1.VLAN); !ok {
-		// If the object is not a VLAN, it is probably a
-		// DeletionFinalStateUnknown, so we use its metadata to queue
-		// affected DHCP services
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
 			utilruntime.HandleError(fmt.Errorf("error decoding object, invalid type"))
@@ -510,4 +554,3 @@ func (c *Controller) handleVLAN(obj interface{}) {
 		}
 	}
 }
-

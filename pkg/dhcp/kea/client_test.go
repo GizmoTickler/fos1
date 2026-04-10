@@ -325,3 +325,138 @@ func TestConnectionError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connect to")
 }
+
+func TestConfigSet(t *testing.T) {
+	sockPath, cleanup := mockKeaServer(t, func(cmd KeaCommand) []KeaResponse {
+		assert.Equal(t, "config-set", cmd.Command)
+		assert.Equal(t, []string{"dhcp4"}, cmd.Service)
+
+		// Verify arguments contain a Dhcp4 key.
+		argBytes, _ := json.Marshal(cmd.Arguments)
+		var args map[string]any
+		json.Unmarshal(argBytes, &args)
+		_, hasDhcp4 := args["Dhcp4"]
+		assert.True(t, hasDhcp4, "config-set arguments should contain Dhcp4 key")
+
+		return []KeaResponse{{
+			Result: 0,
+			Text:   "Configuration successful.",
+		}}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, "dhcp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	config := map[string]any{
+		"Dhcp4": map[string]any{
+			"valid-lifetime": 4000,
+			"subnet4":        []any{},
+		},
+	}
+
+	err := client.ConfigSet(ctx, config)
+	require.NoError(t, err)
+}
+
+func TestConfigSet_Error(t *testing.T) {
+	sockPath, cleanup := mockKeaServer(t, func(cmd KeaCommand) []KeaResponse {
+		return []KeaResponse{{
+			Result: 1,
+			Text:   "invalid configuration: subnet4 is empty",
+		}}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, "dhcp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.ConfigSet(ctx, map[string]any{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "result=1")
+	assert.Contains(t, err.Error(), "invalid configuration")
+}
+
+func TestConfigReload(t *testing.T) {
+	sockPath, cleanup := mockKeaServer(t, func(cmd KeaCommand) []KeaResponse {
+		assert.Equal(t, "config-reload", cmd.Command)
+
+		return []KeaResponse{{
+			Result: 0,
+			Text:   "Configuration successful.",
+		}}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, "dhcp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.ConfigReload(ctx)
+	require.NoError(t, err)
+}
+
+func TestConfigReload_Error(t *testing.T) {
+	sockPath, cleanup := mockKeaServer(t, func(cmd KeaCommand) []KeaResponse {
+		return []KeaResponse{{
+			Result: 1,
+			Text:   "configuration file not found",
+		}}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, "dhcp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.ConfigReload(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "result=1")
+}
+
+func TestConfigWrite(t *testing.T) {
+	sockPath, cleanup := mockKeaServer(t, func(cmd KeaCommand) []KeaResponse {
+		assert.Equal(t, "config-write", cmd.Command)
+
+		// Verify filename argument.
+		argBytes, _ := json.Marshal(cmd.Arguments)
+		var args map[string]any
+		json.Unmarshal(argBytes, &args)
+		assert.Equal(t, "/etc/kea/kea-dhcp4.conf", args["filename"])
+
+		return []KeaResponse{{
+			Result: 0,
+			Text:   "Configuration written to /etc/kea/kea-dhcp4.conf",
+		}}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, "dhcp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.ConfigWrite(ctx, "/etc/kea/kea-dhcp4.conf")
+	require.NoError(t, err)
+}
+
+func TestConfigWrite_NoFilename(t *testing.T) {
+	sockPath, cleanup := mockKeaServer(t, func(cmd KeaCommand) []KeaResponse {
+		assert.Equal(t, "config-write", cmd.Command)
+		assert.Nil(t, cmd.Arguments)
+
+		return []KeaResponse{{
+			Result: 0,
+			Text:   "Configuration written.",
+		}}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, "dhcp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.ConfigWrite(ctx, "")
+	require.NoError(t, err)
+}
