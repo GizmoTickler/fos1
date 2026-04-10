@@ -307,16 +307,20 @@ func (m *Manager) StopAllDaemons(ctx context.Context) error {
 	return nil
 }
 
-// ApplyConfiguration applies a new FRR configuration
+// ApplyConfiguration applies a new FRR configuration.
+// It validates the config before writing to disk, and rolls back to the backup
+// if validation or daemon reload fails. Errors are returned, not silently logged.
 func (m *Manager) ApplyConfiguration(ctx context.Context, config *Config, enabledDaemons map[DaemonType]bool) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	klog.V(2).Info("Applying FRR configuration")
 
-	// Backup current configuration
-	if err := m.generator.BackupConfig(); err != nil {
-		klog.Warningf("Failed to backup configuration: %v", err)
+	// Backup current configuration before any changes.
+	// BackupConfig returns the actual path it wrote to, avoiding timestamp mismatch.
+	backupPath, err := m.generator.BackupConfig()
+	if err != nil {
+		klog.Warningf("Failed to backup configuration (continuing): %v", err)
 	}
 
 	// Generate daemons file
@@ -334,17 +338,47 @@ func (m *Manager) ApplyConfiguration(ctx context.Context, config *Config, enable
 		klog.Warningf("Failed to generate vtysh.conf: %v", err)
 	}
 
-	// Reload configuration for all running daemons
+	// Validate config BEFORE reloading daemons
+	if err := m.generator.ValidateConfig(); err != nil {
+		klog.Errorf("Configuration validation failed, rolling back: %v", err)
+		m.rollbackConfig(backupPath)
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
+
+	// Reload configuration for all running daemons, collecting errors
+	var reloadErrors []string
 	for daemon, enabled := range enabledDaemons {
 		if enabled && m.isDaemonRunning(ctx, daemon) {
 			if err := m.ReloadDaemon(ctx, daemon); err != nil {
-				klog.Errorf("Failed to reload daemon %s: %v", daemon, err)
+				reloadErrors = append(reloadErrors, fmt.Sprintf("daemon %s: %v", daemon, err))
 			}
 		}
 	}
 
+	if len(reloadErrors) > 0 {
+		errMsg := fmt.Sprintf("daemon reload failed: %s", strings.Join(reloadErrors, "; "))
+		klog.Errorf("Reload failed, rolling back: %s", errMsg)
+		m.rollbackConfig(backupPath)
+		return fmt.Errorf("%s", errMsg)
+	}
+
 	klog.V(2).Info("Successfully applied FRR configuration")
 	return nil
+}
+
+// rollbackConfig restores the configuration from a backup file.
+// If backupPath is empty, no rollback is attempted.
+func (m *Manager) rollbackConfig(backupPath string) {
+	if backupPath == "" {
+		klog.Warning("No backup available for rollback")
+		return
+	}
+
+	if err := m.generator.RestoreBackup(backupPath); err != nil {
+		klog.Errorf("Failed to rollback configuration from %s: %v", backupPath, err)
+	} else {
+		klog.V(2).Infof("Successfully rolled back configuration from %s", backupPath)
+	}
 }
 
 // GetClient returns the FRR client for direct command execution

@@ -1,8 +1,10 @@
 package frr
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -10,15 +12,49 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// CommandExecutor abstracts command execution for testing
+type CommandExecutor interface {
+	// Run executes a command and returns combined output and error
+	Run(name string, args ...string) ([]byte, error)
+}
+
+// realExecutor executes commands on the real OS
+type realExecutor struct{}
+
+func (e *realExecutor) Run(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return stderr.Bytes(), fmt.Errorf("%w: %s", err, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}
+
 // ConfigGenerator generates FRR configuration files
 type ConfigGenerator struct {
 	configPath string
+	executor   CommandExecutor
+	vtyshPath  string
 }
 
 // NewConfigGenerator creates a new configuration generator
 func NewConfigGenerator(configPath string) *ConfigGenerator {
 	return &ConfigGenerator{
 		configPath: configPath,
+		executor:   &realExecutor{},
+		vtyshPath:  "/usr/bin/vtysh",
+	}
+}
+
+// NewConfigGeneratorWithExecutor creates a new configuration generator with a custom executor (for testing)
+func NewConfigGeneratorWithExecutor(configPath string, executor CommandExecutor, vtyshPath string) *ConfigGenerator {
+	return &ConfigGenerator{
+		configPath: configPath,
+		executor:   executor,
+		vtyshPath:  vtyshPath,
 	}
 }
 
@@ -345,8 +381,9 @@ func (g *ConfigGenerator) GenerateInterfaceConfig(interfaceName string, commands
 	}
 }
 
-// BackupConfig backs up the current configuration
-func (g *ConfigGenerator) BackupConfig() error {
+// BackupConfig backs up the current configuration and returns the backup file path.
+// If no configuration file exists, it returns an empty path and nil error.
+func (g *ConfigGenerator) BackupConfig() (string, error) {
 	confPath := filepath.Join(g.configPath, "frr.conf")
 	backupPath := filepath.Join(g.configPath, fmt.Sprintf("frr.conf.backup.%d", time.Now().Unix()))
 
@@ -354,22 +391,23 @@ func (g *ConfigGenerator) BackupConfig() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			klog.V(2).Info("No existing configuration to backup")
-			return nil
+			return "", nil
 		}
-		return fmt.Errorf("failed to read config for backup: %w", err)
+		return "", fmt.Errorf("failed to read config for backup: %w", err)
 	}
 
 	if err := os.WriteFile(backupPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write backup: %w", err)
+		return "", fmt.Errorf("failed to write backup: %w", err)
 	}
 
 	klog.V(2).Infof("Backed up configuration to: %s", backupPath)
-	return nil
+	return backupPath, nil
 }
 
-// ValidateConfig validates the configuration syntax
+// ValidateConfig validates the configuration syntax using vtysh --dryrun.
+// It runs "vtysh -f <conffile> --dryrun" which parses the config without applying it.
+// Returns nil if the config is syntactically valid, or an error describing the problem.
 func (g *ConfigGenerator) ValidateConfig() error {
-	// Use vtysh to validate the configuration
 	confPath := filepath.Join(g.configPath, "frr.conf")
 
 	// Check if file exists
@@ -377,8 +415,13 @@ func (g *ConfigGenerator) ValidateConfig() error {
 		return fmt.Errorf("configuration file does not exist: %s", confPath)
 	}
 
-	// TODO: Add actual validation using vtysh --check or similar
-	klog.V(2).Info("Configuration validation not yet implemented")
+	// Run vtysh -f <conffile> --dryrun to syntax-check without applying
+	output, err := g.executor.Run(g.vtyshPath, "-f", confPath, "--dryrun")
+	if err != nil {
+		return fmt.Errorf("configuration validation failed: %w, output: %s", err, string(output))
+	}
+
+	klog.V(2).Infof("Configuration validated successfully: %s", confPath)
 	return nil
 }
 
