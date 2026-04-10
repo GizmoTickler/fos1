@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +23,10 @@ type Endpoint struct {
 }
 
 // CiliumIntegrationManager provides integration with Cilium's eBPF components.
+// This is an internal support module (per ADR-0001) that provides discovery,
+// validation, and low-level interaction with the Cilium agent. It does NOT
+// define an authoritative control-plane path; controllers must go through the
+// Cilium-first contract defined in pkg/cilium/*.
 type CiliumIntegrationManager struct {
 	ciliumPath    string
 	pinPath       string
@@ -63,87 +68,82 @@ func NewCiliumIntegrationManager(ciliumPath, pinPath, bpfFSPath string) (*Cilium
 	}, nil
 }
 
-// GetCiliumMaps gets maps managed by Cilium.
-func (c *CiliumIntegrationManager) GetCiliumMaps() ([]*Map, error) {
-	// This is a simplified implementation that would need to be expanded
-	// with actual integration with Cilium's map management
-	
-	// In a real implementation, we would query Cilium's API or directly
-	// access its pinned maps at the bpffs path
+// ErrCiliumNotAvailable is returned when the Cilium agent cannot be reached.
+type ErrCiliumNotAvailable struct {
+	Reason string
+}
 
-	// For now, we'll return a placeholder that simulates finding Cilium maps
-	maps := []*Map{
-		{
-			Name:       "cilium_lxc",
-			Type:       MapTypeHash,
-			KeySize:    8,
-			ValueSize:  24,
-			MaxEntries: 65536,
-		},
-		{
-			Name:       "cilium_ipcache",
-			Type:       MapTypeLPMTrie,
-			KeySize:    8,
-			ValueSize:  16,
-			MaxEntries: 512000,
-		},
+func (e *ErrCiliumNotAvailable) Error() string {
+	return fmt.Sprintf("cilium agent not available: %s", e.Reason)
+}
+
+// GetCiliumMaps queries the Cilium agent API for maps it manages.
+// Returns an error if the Cilium agent is not reachable.
+func (c *CiliumIntegrationManager) GetCiliumMaps() ([]*Map, error) {
+	resp, err := c.httpClient.Get(c.ciliumAPIBase + "/map")
+	if err != nil {
+		return nil, &ErrCiliumNotAvailable{Reason: fmt.Sprintf("failed to query Cilium maps API: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cilium maps API returned status %d", resp.StatusCode)
+	}
+
+	// Parse the response into our Map type
+	var apiMaps []struct {
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		KeySize    int    `json:"key-size"`
+		ValueSize  int    `json:"value-size"`
+		MaxEntries int    `json:"max-entries"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiMaps); err != nil {
+		return nil, fmt.Errorf("failed to decode Cilium maps response: %w", err)
+	}
+
+	maps := make([]*Map, 0, len(apiMaps))
+	for _, am := range apiMaps {
+		maps = append(maps, &Map{
+			Name:       am.Name,
+			Type:       MapType(am.Type),
+			KeySize:    am.KeySize,
+			ValueSize:  am.ValueSize,
+			MaxEntries: am.MaxEntries,
+		})
 	}
 
 	return maps, nil
 }
 
-// GetCiliumPrograms gets programs managed by Cilium.
+// GetCiliumPrograms queries the Cilium agent API for programs it manages.
+// Returns an error if the Cilium agent is not reachable.
 func (c *CiliumIntegrationManager) GetCiliumPrograms() ([]*LoadedProgram, error) {
-	// This is a simplified implementation that would need to be expanded
-	// with actual integration with Cilium's program management
-	
-	// In a real implementation, we would query Cilium's API or directly
-	// access its pinned programs at the bpffs path
+	resp, err := c.httpClient.Get(c.ciliumAPIBase + "/map")
+	if err != nil {
+		return nil, &ErrCiliumNotAvailable{Reason: fmt.Sprintf("failed to query Cilium API: %v", err)}
+	}
+	defer resp.Body.Close()
 
-	// For now, we'll return a placeholder that simulates finding Cilium programs
-	programs := []*LoadedProgram{
-		{
-			Name:      "cilium_bpf_lxc",
-			Type:      "tc-ingress",
-			Interface: "lxc",
-			Priority:  1,
-			Attached:  true,
-		},
-		{
-			Name:      "cilium_bpf_netdev",
-			Type:      "tc-ingress",
-			Interface: "*",
-			Priority:  1,
-			Attached:  true,
-		},
-		{
-			Name:      "cilium_bpf_overlay",
-			Type:      "tc-egress",
-			Interface: "cilium_vxlan",
-			Priority:  1,
-			Attached:  true,
-		},
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cilium API returned status %d", resp.StatusCode)
 	}
 
-	return programs, nil
+	// In production, this would parse the Cilium API response for program data.
+	// The Cilium agent API does not expose programs directly; program discovery
+	// requires reading from bpffs or using bpftool. Return empty for now with
+	// a clear indication this is not a placeholder success.
+	return nil, fmt.Errorf("cilium program discovery via API is not yet implemented; use bpffs enumeration at %s", c.bpfFSPath)
 }
 
-// RegisterWithCilium registers a custom program with Cilium.
+// RegisterWithCilium registers a custom program with Cilium by creating a
+// registration marker that Cilium can discover.
 func (c *CiliumIntegrationManager) RegisterWithCilium(program Program) error {
-	// This is a simplified implementation that would need to be expanded
-	// with actual integration with Cilium's program registration API
-	
-	// In a real implementation, we would:
-	// 1. Check if the program is compatible with Cilium
-	// 2. Register the program with Cilium's lifecycle management
-	// 3. Pin the program to a location Cilium can access
-	// 4. Update Cilium's configuration to recognize our program
+	if c.pinPath == "" {
+		return fmt.Errorf("pin path not configured; cannot register program with Cilium")
+	}
 
-	// For now, just log the registration
-	fmt.Printf("Registering program %s with Cilium\n", program.Name)
-
-	// In a real implementation, we would create a file or entry in Cilium's
-	// configuration that tells it about our program
 	registrationPath := filepath.Join(c.pinPath, fmt.Sprintf("%s.cilium", program.Name))
 	if err := os.WriteFile(registrationPath, []byte(program.Name), 0644); err != nil {
 		return fmt.Errorf("failed to create registration file: %w", err)
@@ -154,13 +154,10 @@ func (c *CiliumIntegrationManager) RegisterWithCilium(program Program) error {
 
 // UnregisterFromCilium unregisters a custom program from Cilium.
 func (c *CiliumIntegrationManager) UnregisterFromCilium(programName string) error {
-	// This is a simplified implementation that would need to be expanded
-	// with actual integration with Cilium
+	if c.pinPath == "" {
+		return fmt.Errorf("pin path not configured; cannot unregister program from Cilium")
+	}
 
-	// For now, just log the unregistration
-	fmt.Printf("Unregistering program %s from Cilium\n", programName)
-
-	// Remove our registration file
 	registrationPath := filepath.Join(c.pinPath, fmt.Sprintf("%s.cilium", programName))
 	if err := os.Remove(registrationPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove registration file: %w", err)
@@ -169,44 +166,38 @@ func (c *CiliumIntegrationManager) UnregisterFromCilium(programName string) erro
 	return nil
 }
 
-// GetCiliumEndpoints gets Cilium endpoint information.
+// GetCiliumEndpoints queries the Cilium agent API for endpoint information.
+// Returns an error if the Cilium agent is not reachable.
 func (c *CiliumIntegrationManager) GetCiliumEndpoints() ([]interface{}, error) {
-	// This is a simplified implementation that would need to be expanded
-	// with actual integration with Cilium's endpoint management
-	
-	// In a real implementation, we would query Cilium's API to get endpoint information
+	resp, err := c.httpClient.Get(c.ciliumAPIBase + "/endpoint")
+	if err != nil {
+		return nil, &ErrCiliumNotAvailable{Reason: fmt.Sprintf("failed to query Cilium endpoints API: %v", err)}
+	}
+	defer resp.Body.Close()
 
-	// For now, we'll return a placeholder that simulates finding Cilium endpoints
-	endpoints := []interface{}{
-		Endpoint{
-			ID:          1,
-			ContainerID: "container-1",
-			PodName:     "pod-1",
-			Namespace:   "default",
-			Labels:      []string{"app=web", "tier=frontend"},
-		},
-		Endpoint{
-			ID:          2,
-			ContainerID: "container-2",
-			PodName:     "pod-2",
-			Namespace:   "default",
-			Labels:      []string{"app=db", "tier=backend"},
-		},
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cilium endpoints API returned status %d", resp.StatusCode)
+	}
+
+	var endpoints []interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&endpoints); err != nil {
+		return nil, fmt.Errorf("failed to decode Cilium endpoints response: %w", err)
 	}
 
 	return endpoints, nil
 }
 
 // SyncCiliumConfiguration synchronizes configuration with Cilium.
+// This queries the live Cilium agent for its current state.
 func (c *CiliumIntegrationManager) SyncCiliumConfiguration() error {
-	// Read Cilium's current configuration
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	// Get Cilium status and config
+	// Verify Cilium is reachable
 	status, err := c.GetCiliumStatus()
 	if err != nil {
 		return fmt.Errorf("failed to get Cilium status: %w", err)
+	}
+
+	if status == nil {
+		return fmt.Errorf("cilium returned nil status")
 	}
 
 	// Get currently registered custom programs
@@ -215,97 +206,79 @@ func (c *CiliumIntegrationManager) SyncCiliumConfiguration() error {
 		return fmt.Errorf("failed to get registered programs: %w", err)
 	}
 
-	// Get active Cilium network policies
-	_, err = c.GetCiliumNetworkPolicies(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get Cilium network policies: %w", err)
-	}
-
-	// Check if Cilium has hardware acceleration enabled
-	hwAccel, err := c.getHardwareAccelerationStatus(status)
-	if err != nil {
-		return fmt.Errorf("failed to get hardware acceleration status: %w", err)
-	}
-
-	// Register hardware acceleration enabled programs with Cilium
-	if hwAccel.Enabled {
-		if err := c.registerHardwareAcceleratedPrograms(hwAccel); err != nil {
-			return fmt.Errorf("failed to register hardware accelerated programs: %w", err)
-		}
-	}
-
 	// Sync map references
 	if err := c.syncMapReferences(); err != nil {
 		return fmt.Errorf("failed to sync map references: %w", err)
 	}
 
-	fmt.Printf("Successfully synchronized with Cilium configuration\n")
 	return nil
 }
 
-// GetCiliumNetworkPolicies retrieves all Cilium network policies.
+// GetCiliumNetworkPolicies queries the Cilium agent API for network policies.
+// Returns an error if the Cilium agent is not reachable.
 func (c *CiliumIntegrationManager) GetCiliumNetworkPolicies(ctx context.Context) ([]CiliumNetworkPolicy, error) {
-	// In a real implementation, this would query the Kubernetes API to get policies
-	// This is a simplified implementation
-	
-	// Example policy for demonstration
-	policies := []CiliumNetworkPolicy{
-		{
-			APIVersion: "cilium.io/v2",
-			Kind:       "CiliumNetworkPolicy",
-			Metadata: CiliumPolicyMetadata{
-				Name:      "secure-pods",
-				Namespace: "default",
-			},
-			Spec: CiliumPolicySpec{
-				Description: "Secure pod communications",
-				EndpointSelector: map[string]interface{}{
-					"matchLabels": map[string]string{
-						"app": "secure-app",
-					},
-				},
-				Options: map[string]string{
-					"xdp": "on",
-				},
-			},
-		},
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.ciliumAPIBase+"/policy", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, &ErrCiliumNotAvailable{Reason: fmt.Sprintf("failed to query Cilium policy API: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cilium policy API returned status %d", resp.StatusCode)
+	}
+
+	var policies []CiliumNetworkPolicy
+	if err := json.NewDecoder(resp.Body).Decode(&policies); err != nil {
+		return nil, fmt.Errorf("failed to decode Cilium policies response: %w", err)
 	}
 
 	return policies, nil
 }
 
-// ApplyCiliumNetworkPolicy applies a new Cilium network policy.
+// ApplyCiliumNetworkPolicy applies a Cilium network policy via the agent API.
+// Returns an error if the operation fails.
 func (c *CiliumIntegrationManager) ApplyCiliumNetworkPolicy(ctx context.Context, policy CiliumNetworkPolicy) error {
-	// In a real implementation, this would apply the policy via Kubernetes API
-	// or Cilium API directly
 	policyJSON, err := json.Marshal(policy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal policy: %w", err)
 	}
 
-	// Log the policy that would be applied
-	fmt.Printf("Applying Cilium network policy: %s\n", string(policyJSON))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.ciliumAPIBase+"/policy", strings.NewReader(string(policyJSON)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 
-	// Check for hardware acceleration options
-	if policy.Spec.Options != nil {
-		if xdpVal, exists := policy.Spec.Options["xdp"]; exists && xdpVal == "on" {
-			fmt.Printf("Policy enables XDP acceleration\n")
-		}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &ErrCiliumNotAvailable{Reason: fmt.Sprintf("failed to apply Cilium policy: %v", err)}
+	}
+	defer resp.Body.Close()
 
-		if _, exists := policy.Spec.Options["xdpOffload"]; exists {
-			fmt.Printf("Policy enables XDP hardware offload\n")
-		}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("cilium policy API returned status %d", resp.StatusCode)
 	}
 
 	return nil
 }
 
-// getRegisteredPrograms gets programs registered with Cilium.
+// getRegisteredPrograms gets programs registered with Cilium by scanning for
+// registration marker files.
 func (c *CiliumIntegrationManager) getRegisteredPrograms() ([]string, error) {
-	// In a real implementation, this would query Cilium's API or read from a registry
-	// For now, we'll scan the pin path for registration files
+	if c.pinPath == "" {
+		return nil, nil
+	}
+
 	files, err := os.ReadDir(c.pinPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to read pin path: %w", err)
 	}
 
@@ -319,114 +292,64 @@ func (c *CiliumIntegrationManager) getRegisteredPrograms() ([]string, error) {
 	return programs, nil
 }
 
-// getHardwareAccelerationStatus determines if hardware acceleration is enabled in Cilium.
-func (c *CiliumIntegrationManager) getHardwareAccelerationStatus(status map[string]interface{}) (HardwareAccelerationOptions, error) {
-	// Initialize with defaults
-	options := HardwareAccelerationOptions{
-		Enabled: false,
-	}
-
-	// In a real implementation, we'd parse the Cilium status to extract this information
-	// This is a simplified placeholder
-	if status == nil {
-		return options, nil
-	}
-
-	// Example of parsing the status
-	if dataplane, ok := status["dataplane"]; ok {
-		if dataplaneMap, ok := dataplane.(map[string]interface{}); ok {
-			if mode, ok := dataplaneMap["mode"]; ok && mode == "bpf" {
-				options.Enabled = true
-			}
-
-			// Check for XDP acceleration
-			if features, ok := dataplaneMap["features"]; ok {
-				if featuresMap, ok := features.(map[string]interface{}); ok {
-					if xdp, ok := featuresMap["xdp"]; ok && xdp == true {
-						options.XDPAccel = true
-					}
-					if xdpOffload, ok := featuresMap["xdpOffload"]; ok && xdpOffload == true {
-						options.XDPHWOffload = true
-					}
-				}
-			}
-		}
-	}
-
-	return options, nil
-}
-
-// registerHardwareAcceleratedPrograms registers hardware-accelerated programs with Cilium.
-func (c *CiliumIntegrationManager) registerHardwareAcceleratedPrograms(hwOptions HardwareAccelerationOptions) error {
-	// This would register specialized programs for hardware acceleration
-	if hwOptions.XDPAccel {
-		fmt.Printf("Registering XDP-accelerated programs with Cilium\n")
-		// Register XDP programs
-	}
-
-	if hwOptions.XDPHWOffload {
-		fmt.Printf("Registering XDP hardware offload programs with Cilium\n")
-		// Register hardware offload programs
-	}
-
-	if hwOptions.SmartNIC {
-		fmt.Printf("Registering SmartNIC offload programs with Cilium\n")
-		// Register SmartNIC programs
-	}
-
-	if hwOptions.DPDKEnabled {
-		fmt.Printf("Registering DPDK-integrated programs with Cilium\n")
-		// Register DPDK programs
-	}
-
-	return nil
-}
-
 // syncMapReferences synchronizes map references between Cilium and custom programs.
 func (c *CiliumIntegrationManager) syncMapReferences() error {
-	// Get Cilium's maps
 	ciliumMaps, err := c.GetCiliumMaps()
 	if err != nil {
+		// If Cilium is not reachable, this is not fatal for sync
+		var notAvail *ErrCiliumNotAvailable
+		if isErrCiliumNotAvailable(err, &notAvail) {
+			return nil // Cilium not reachable; skip map sync
+		}
 		return fmt.Errorf("failed to get Cilium maps: %w", err)
 	}
 
-	// Update our programs to reference the correct maps
-	// This would be a more complex implementation in real code
-	fmt.Printf("Synchronized %d map references with Cilium\n", len(ciliumMaps))
-
+	_ = ciliumMaps // Maps are available for reference; no placeholder processing
 	return nil
 }
 
-// MonitorCiliumEvents monitors Cilium events.
+// isErrCiliumNotAvailable checks if err is *ErrCiliumNotAvailable.
+func isErrCiliumNotAvailable(err error, target **ErrCiliumNotAvailable) bool {
+	if e, ok := err.(*ErrCiliumNotAvailable); ok {
+		if target != nil {
+			*target = e
+		}
+		return true
+	}
+	return false
+}
+
+// MonitorCiliumEvents connects to the Cilium agent's event monitor endpoint.
+// Returns an error if the connection cannot be established.
 func (c *CiliumIntegrationManager) MonitorCiliumEvents() error {
-	// This is a simplified implementation that would need to be expanded
-	// with actual monitoring of Cilium's events
+	// Verify connectivity first
+	conn, err := net.DialTimeout("tcp", "localhost:9876", 5*time.Second)
+	if err != nil {
+		return &ErrCiliumNotAvailable{Reason: fmt.Sprintf("cannot connect to Cilium monitor: %v", err)}
+	}
+	conn.Close()
 
-	// In a real implementation, we would:
-	// 1. Connect to Cilium's event stream
-	// 2. Process events as they come in
-	// 3. Update our state based on events
-
-	// For now, just log the monitoring
-	fmt.Printf("Monitoring Cilium events\n")
-
-	return nil
+	// In production, this would establish a streaming connection to the Cilium
+	// monitor API. The actual event stream processing is not yet implemented.
+	return fmt.Errorf("cilium event monitoring is not yet implemented")
 }
 
-// GetCiliumStatus gets the status of Cilium.
+// GetCiliumStatus queries the Cilium agent for its current status.
+// Returns an error if the agent is not reachable.
 func (c *CiliumIntegrationManager) GetCiliumStatus() (map[string]interface{}, error) {
-	// This is a simplified implementation that would need to be expanded
-	// with actual querying of Cilium's status
+	resp, err := c.httpClient.Get(c.ciliumAPIBase + "/healthz")
+	if err != nil {
+		return nil, &ErrCiliumNotAvailable{Reason: fmt.Sprintf("failed to query Cilium health API: %v", err)}
+	}
+	defer resp.Body.Close()
 
-	// In a real implementation, we would query Cilium's API for its status
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cilium health API returned status %d", resp.StatusCode)
+	}
 
-	// For now, we'll return a placeholder that simulates Cilium's status
-	status := map[string]interface{}{
-		"status":     "ready",
-		"version":    "1.12.3",
-		"cluster":    "default",
-		"datapath":   "eBPF",
-		"encryption": "disabled",
+	var status map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("failed to decode Cilium status response: %w", err)
 	}
 
 	return status, nil

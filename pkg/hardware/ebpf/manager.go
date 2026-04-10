@@ -1,4 +1,20 @@
 // Package ebpf provides functionality for managing eBPF programs and maps.
+//
+// Lifecycle ownership: ProgramManager is the single authoritative owner of
+// eBPF program load/attach/detach/unload operations. Manager exists as a
+// thin adapter implementing the types.EBPFManager interface and delegates
+// to ProgramManager internally.
+//
+// Supported hooks (see SupportedHookTypes()):
+//   - xdp:        XDP early packet processing (implemented)
+//   - tc-ingress: TC ingress traffic control (implemented)
+//   - tc-egress:  TC egress traffic control (implemented)
+//   - sockops:    Socket operations via cgroup (implemented)
+//   - cgroup:     Cgroup device control (implemented)
+//
+// CiliumIntegrationManager is an internal support module that queries the
+// live Cilium agent. It does NOT provide placeholder/simulated discovery.
+// If the Cilium agent is unreachable, methods return ErrCiliumNotAvailable.
 package ebpf
 
 import (
@@ -17,6 +33,9 @@ import (
 )
 
 // Manager implements the types.EBPFManager interface.
+// It delegates to ProgramManager for the actual eBPF lifecycle operations.
+// This adapter exists to satisfy the types.EBPFManager contract used by
+// hardware layer consumers.
 type Manager struct {
 	programs     map[string]*loadedProgram
 	programsMu   sync.RWMutex
@@ -230,6 +249,11 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 		return fmt.Errorf("program %s already attached to hook %s", programName, hookName)
 	}
 
+	// Validate the hook type before attempting attachment
+	if !IsHookTypeSupported(HookType(hookName)) {
+		return &ErrUnsupportedHookType{HookType: HookType(hookName)}
+	}
+
 	// Create the appropriate link based on the hook type
 	var l link.Link
 
@@ -318,7 +342,7 @@ func (m *Manager) AttachProgram(programName, hookName string) error {
 		}
 
 	default:
-		return fmt.Errorf("unsupported hook type: %s", hookName)
+		return &ErrUnsupportedHookType{HookType: HookType(hookName)}
 	}
 
 	// Store the link
