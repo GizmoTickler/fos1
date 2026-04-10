@@ -18,16 +18,56 @@ type HookType string
 
 const (
 	// HookTypeXDP represents an XDP hook.
+	// Status: Implemented. Attaches programs at the XDP layer for early packet processing.
 	HookTypeXDP HookType = "xdp"
+
 	// HookTypeTCIngress represents a TC ingress hook.
+	// Status: Implemented. Attaches programs at the TC ingress layer for inbound traffic processing.
 	HookTypeTCIngress HookType = "tc-ingress"
+
 	// HookTypeTCEgress represents a TC egress hook.
+	// Status: Implemented. Attaches programs at the TC egress layer for outbound traffic processing.
 	HookTypeTCEgress HookType = "tc-egress"
+
 	// HookTypeSockOps represents a socket operations hook.
+	// Status: Implemented. Attaches programs to cgroup sockops for socket-level operations.
 	HookTypeSockOps HookType = "sockops"
+
 	// HookTypeCGroup represents a cgroup hook.
+	// Status: Implemented. Attaches programs to cgroup for device-level control.
 	HookTypeCGroup HookType = "cgroup"
 )
+
+// SupportedHookTypes returns all hook types that the eBPF runtime supports.
+// This is the authoritative list of hooks that can be used with AttachProgram.
+func SupportedHookTypes() []HookType {
+	return []HookType{
+		HookTypeXDP,
+		HookTypeTCIngress,
+		HookTypeTCEgress,
+		HookTypeSockOps,
+		HookTypeCGroup,
+	}
+}
+
+// IsHookTypeSupported returns true if the given hook type is supported by the runtime.
+func IsHookTypeSupported(hookType HookType) bool {
+	for _, supported := range SupportedHookTypes() {
+		if supported == hookType {
+			return true
+		}
+	}
+	return false
+}
+
+// ErrUnsupportedHookType is returned when an unsupported hook type is used.
+type ErrUnsupportedHookType struct {
+	HookType HookType
+}
+
+func (e *ErrUnsupportedHookType) Error() string {
+	return fmt.Sprintf("unsupported hook type: %s (supported: xdp, tc-ingress, tc-egress, sockops, cgroup)", e.HookType)
+}
 
 // Program represents an eBPF program.
 type Program struct {
@@ -212,11 +252,10 @@ func (p *ProgramManager) AttachProgram(programName string, hookName string) erro
 		return fmt.Errorf("program %s is already attached", programName)
 	}
 
-	// Parse the hook type from the hook name
-	// Format: "hooktype:interface" or just "hooktype"
+	// Validate hook type before attempting attachment
 	hookType := HookType(hookName)
-	if prog.Interface != "" {
-		hookType = HookType(fmt.Sprintf("%s:%s", hookName, prog.Interface))
+	if !IsHookTypeSupported(hookType) {
+		return &ErrUnsupportedHookType{HookType: hookType}
 	}
 
 	var l link.Link
@@ -291,7 +330,7 @@ func (p *ProgramManager) AttachProgram(programName string, hookName string) erro
 			return fmt.Errorf("failed to attach cgroup program: %w", err)
 		}
 	default:
-		return fmt.Errorf("unsupported hook type: %s", hookType)
+		return &ErrUnsupportedHookType{HookType: hookType}
 	}
 
 	// Store the link
