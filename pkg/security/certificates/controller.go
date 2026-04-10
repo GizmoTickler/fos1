@@ -28,6 +28,9 @@ type Controller struct {
 	// Certificate manager
 	certManager *CertManager
 
+	// SecretWatcher watches cert-manager-backed Secrets and dispatches to consumers
+	secretWatcher *SecretWatcher
+
 	// Informers
 	certificateInformer cache.SharedIndexInformer
 	issuerInformer      cache.SharedIndexInformer
@@ -108,11 +111,22 @@ func NewController(
 		"Issuers",
 	)
 
+	// Create secret watcher for dispatching cert-manager Secret updates to consumers
+	secretWatcher, err := NewSecretWatcher(kubeClient, &SecretWatcherConfig{
+		Namespace:    config.Namespace,
+		ResyncPeriod: config.ResyncPeriod,
+		Workers:      config.Workers,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secret watcher: %w", err)
+	}
+
 	// Create controller
 	controller := &Controller{
 		kubeClient:          kubeClient,
 		certClient:          certClient,
 		certManager:         certManager,
+		secretWatcher:       secretWatcher,
 		certificateInformer: certificateInformer,
 		issuerInformer:      issuerInformer,
 		certificateLister:   certificateLister,
@@ -158,6 +172,13 @@ func (c *Controller) Run(ctx context.Context) error {
 	if !cache.WaitForCacheSync(ctx.Done(), c.certificateInformer.HasSynced, c.issuerInformer.HasSynced) {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
+
+	// Start the secret watcher (runs in background goroutine)
+	go func() {
+		if err := c.secretWatcher.Run(ctx); err != nil {
+			klog.Errorf("Secret watcher stopped with error: %v", err)
+		}
+	}()
 
 	klog.Info("Starting certificate workers")
 	for i := 0; i < c.config.Workers; i++ {
@@ -350,6 +371,12 @@ func (c *Controller) GetCertificateStatus(namespace, name string) (*CertificateS
 	}
 
 	return status, nil
+}
+
+// RegisterConsumer registers a CertificateConsumer with the secret watcher.
+// Consumers must be registered before the controller is started.
+func (c *Controller) RegisterConsumer(consumer CertificateConsumer) {
+	c.secretWatcher.RegisterConsumer(consumer)
 }
 
 // GetIssuerStatus gets the status of an issuer
