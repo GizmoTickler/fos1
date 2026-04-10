@@ -80,7 +80,7 @@ Caveat:
 
 ### Ticket 5: Define And Implement VRF / Policy-Based Routing Reconciliation Semantics
 Status:
-- pending
+- completed
 
 Scope:
 - define route table, VRF, and policy-rule ownership across controller, kernel helper, and Cilium path
@@ -100,7 +100,7 @@ Acceptance:
 
 ### Ticket 6: Implement Real Cilium NAT Core For SNAT And DNAT
 Status:
-- pending
+- completed
 
 Primary areas:
 - `pkg/network/nat/manager.go`
@@ -113,7 +113,7 @@ Acceptance:
 
 ### Ticket 7: Extend NAT Support To NAT66, NAT64, And Port Forwarding
 Status:
-- pending
+- completed
 
 Acceptance:
 - advanced NAT variants work through the same authoritative path
@@ -121,7 +121,7 @@ Acceptance:
 
 ### Ticket 8: Make The NAT Controller Fully Statusful And Idempotent
 Status:
-- pending
+- completed
 
 Primary areas:
 - `pkg/controllers/nat_controller.go`
@@ -133,7 +133,7 @@ Acceptance:
 
 ### Ticket 9: Harden FRR Configuration Validation And Reload Flow
 Status:
-- pending
+- completed
 
 Scope:
 - `ConfigGenerator.ValidateConfig()` in `pkg/network/routing/frr/config.go` currently returns nil with a TODO for vtysh validation
@@ -154,7 +154,7 @@ Acceptance:
 
 ### Ticket 10: Wire BGP And OSPF Controllers To Real FRR State
 Status:
-- pending
+- completed
 
 Scope:
 - `BGPHandler.Start()` and `OSPFHandler.Start()` in `pkg/network/routing/protocols/` translate config to FRR types and call the FRR client, but do not read back applied state
@@ -175,7 +175,7 @@ Acceptance:
 
 ### Ticket 11: Implement Real Kea Control-Socket Reconciliation In The DHCP Controller
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/dhcp/kea/client.go` has a Kea control agent client with real HTTP command execution and tests
@@ -197,7 +197,7 @@ Acceptance:
 
 ### Ticket 12: Wire The DNS Manager To Real CoreDNS And AdGuard Operations
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/dns/manager/manager.go` has multiple placeholder methods: `UpdateZone`, `UpdatePTRZone`, `UpdateFilters`, `UpdateClient`, `UpdateReflection` all return nil without doing real work
@@ -222,7 +222,7 @@ Acceptance:
 
 ### Ticket 13: Finish NTP Controller Reconciliation And NTS Wiring
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/ntp/controller/controller.go` has placeholder reconciliation and returns placeholder status
@@ -246,7 +246,7 @@ Acceptance:
 
 ### Ticket 14: Standardize On One WireGuard Backend And Fix Controller Reconciliation
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/vpn/wireguard.go` contains the WireGuard interface management backend
@@ -266,7 +266,7 @@ Acceptance:
 
 ### Ticket 15: Integrate cert-manager Outputs Into Service Consumers
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/security/certificates/manager.go` wraps the cert-manager client with real cert-manager API types
@@ -285,7 +285,7 @@ Acceptance:
 
 ### Ticket 16: Make IDS Managers Reflect Real Suricata And Zeek Engine State
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/security/ids/manager.go` returns hardcoded example data for `GetStatus()`, `GetAlerts()`, and `GetStatistics()` instead of querying real engines
@@ -309,7 +309,7 @@ Acceptance:
 
 ### Ticket 17: Wire DPI Events Into Real Cilium Policy Responses
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/security/dpi/policy_pipeline.go` has a `PolicyPipeline` that processes DPI events and generates Cilium policies with severity thresholds, deduplication, and TTL expiry
@@ -333,7 +333,7 @@ Acceptance:
 
 ### Ticket 18: Fix Auth Manager Provider Construction And Harden Provider Behavior
 Status:
-- pending
+- completed
 
 Scope:
 - `pkg/security/auth/manager.go` has factory methods for local, LDAP, OAuth, SAML, RADIUS, and certificate providers that all return `"<type> provider not implemented"` errors
