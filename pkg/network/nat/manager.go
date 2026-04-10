@@ -2,6 +2,8 @@ package nat
 
 import (
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,9 +14,9 @@ import (
 
 // manager implements the Manager interface
 type manager struct {
-	mutex      sync.RWMutex
-	policies   map[string]Config // key: namespace/name
-	statuses   map[string]*Status
+	mutex        sync.RWMutex
+	policies     map[string]Config // key: namespace/name
+	statuses     map[string]*Status
 	ciliumClient cilium.Client
 }
 
@@ -27,18 +29,118 @@ func NewManager(ciliumClient cilium.Client) Manager {
 	}
 }
 
-// ApplyNATPolicy applies a NAT policy
-func (m *manager) ApplyNATPolicy(config Config) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+// validateConfig validates a NAT configuration before applying it.
+// It rejects bad address family combinations and missing required fields.
+func validateConfig(config Config) error {
+	if config.Name == "" {
+		return fmt.Errorf("NAT policy name is required")
+	}
+	if config.Namespace == "" {
+		return fmt.Errorf("NAT policy namespace is required")
+	}
 
-	key := fmt.Sprintf("%s/%s", config.Namespace, config.Name)
-	klog.Infof("Applying NAT policy %s", key)
+	switch config.Type {
+	case TypeSNAT, TypeMasquerade:
+		if len(config.SourceAddresses) == 0 {
+			return fmt.Errorf("source addresses are required for %s", config.Type)
+		}
+		if config.Interface == "" {
+			return fmt.Errorf("interface is required for %s", config.Type)
+		}
+	case TypeDNAT:
+		if config.ExternalIP == "" {
+			return fmt.Errorf("external IP is required for DNAT")
+		}
+		if len(config.PortMappings) == 0 {
+			return fmt.Errorf("port mappings are required for DNAT")
+		}
+		for _, pm := range config.PortMappings {
+			if pm.InternalIP == "" {
+				return fmt.Errorf("internal IP is required in port mapping")
+			}
+			if pm.ExternalPort <= 0 || pm.ExternalPort > 65535 {
+				return fmt.Errorf("external port must be between 1 and 65535, got %d", pm.ExternalPort)
+			}
+			if pm.InternalPort <= 0 || pm.InternalPort > 65535 {
+				return fmt.Errorf("internal port must be between 1 and 65535, got %d", pm.InternalPort)
+			}
+		}
+	case TypeFull:
+		if len(config.SourceAddresses) == 0 {
+			return fmt.Errorf("source addresses are required for full NAT")
+		}
+		if config.Interface == "" {
+			return fmt.Errorf("interface is required for full NAT")
+		}
+	case TypeNAT66:
+		if len(config.SourceAddresses) == 0 {
+			return fmt.Errorf("source addresses are required for NAT66")
+		}
+		if config.Interface == "" {
+			return fmt.Errorf("interface is required for NAT66")
+		}
+		// Validate that source addresses are IPv6
+		for _, addr := range config.SourceAddresses {
+			if !isIPv6CIDR(addr) {
+				return fmt.Errorf("NAT66 requires IPv6 source addresses, got %q", addr)
+			}
+		}
+		// NAT66 must not have IPv6 set to false explicitly when addresses are IPv6
+		// (IPv6 flag is forced true in applyNAT66)
+	case TypeNAT64:
+		if len(config.SourceAddresses) == 0 {
+			return fmt.Errorf("source addresses are required for NAT64")
+		}
+		if config.Interface == "" {
+			return fmt.Errorf("interface is required for NAT64")
+		}
+		// Validate that source addresses are IPv6 (NAT64 translates from IPv6 to IPv4)
+		for _, addr := range config.SourceAddresses {
+			if !isIPv6CIDR(addr) {
+				return fmt.Errorf("NAT64 requires IPv6 source addresses, got %q", addr)
+			}
+		}
+	default:
+		return fmt.Errorf("unsupported NAT type: %s", config.Type)
+	}
 
-	// Store the policy
-	m.policies[key] = config
+	// Validate address family consistency for SNAT/Masquerade
+	if config.Type == TypeSNAT || config.Type == TypeMasquerade {
+		for _, addr := range config.SourceAddresses {
+			addrIsV6 := isIPv6CIDR(addr)
+			if config.IPv6 && !addrIsV6 {
+				return fmt.Errorf("IPv6 mode enabled but source address %q is IPv4", addr)
+			}
+			if !config.IPv6 && addrIsV6 {
+				return fmt.Errorf("IPv4 mode enabled but source address %q is IPv6", addr)
+			}
+		}
+	}
 
-	// Initialize or update status
+	return nil
+}
+
+// isIPv6CIDR returns true if the given CIDR or IP string is IPv6
+func isIPv6CIDR(cidr string) bool {
+	// Try parsing as CIDR first
+	if strings.Contains(cidr, "/") {
+		ip, _, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return false
+		}
+		return ip.To4() == nil
+	}
+	// Try parsing as plain IP
+	ip := net.ParseIP(cidr)
+	if ip == nil {
+		return false
+	}
+	return ip.To4() == nil
+}
+
+// setStatus sets the status for a policy key. It updates existing Ready
+// conditions or appends a new one.
+func (m *manager) setStatus(key string, ready bool, reason, message string) {
 	status, exists := m.statuses[key]
 	if !exists {
 		status = &Status{
@@ -48,62 +150,83 @@ func (m *manager) ApplyNATPolicy(config Config) error {
 				Bytes:        0,
 				Translations: 0,
 			},
-			Conditions: []Condition{
-				{
-					Type:               "Ready",
-					Status:             "True",
-					LastTransitionTime: time.Now(),
-					Reason:             "PolicyApplied",
-					Message:            "NAT policy has been applied",
-				},
-			},
 		}
 		m.statuses[key] = status
-	} else {
-		// Update the Ready condition
-		found := false
-		for i, condition := range status.Conditions {
-			if condition.Type == "Ready" {
-				status.Conditions[i] = Condition{
-					Type:               "Ready",
-					Status:             "True",
-					LastTransitionTime: time.Now(),
-					Reason:             "PolicyApplied",
-					Message:            "NAT policy has been applied",
-				}
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			status.Conditions = append(status.Conditions, Condition{
-				Type:               "Ready",
-				Status:             "True",
-				LastTransitionTime: time.Now(),
-				Reason:             "PolicyApplied",
-				Message:            "NAT policy has been applied",
-			})
-		}
 	}
 
-	// Apply the policy based on its type
+	readyStr := "True"
+	if !ready {
+		readyStr = "False"
+	}
+
+	condition := Condition{
+		Type:               "Ready",
+		Status:             readyStr,
+		LastTransitionTime: time.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+
+	found := false
+	for i, c := range status.Conditions {
+		if c.Type == "Ready" {
+			status.Conditions[i] = condition
+			found = true
+			break
+		}
+	}
+	if !found {
+		status.Conditions = append(status.Conditions, condition)
+	}
+}
+
+// ApplyNATPolicy applies a NAT policy
+func (m *manager) ApplyNATPolicy(config Config) error {
+	// Validate before acquiring the lock for expensive Cilium calls
+	if err := validateConfig(config); err != nil {
+		return fmt.Errorf("invalid NAT policy: %w", err)
+	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	key := fmt.Sprintf("%s/%s", config.Namespace, config.Name)
+	klog.Infof("Applying NAT policy %s (type=%s)", key, config.Type)
+
+	// Store the policy
+	m.policies[key] = config
+
+	// Apply the policy through the Cilium control plane
+	var err error
 	switch config.Type {
 	case TypeSNAT:
-		return m.applySNAT(config)
+		err = m.applySNAT(config)
 	case TypeDNAT:
-		return m.applyDNAT(config)
+		err = m.applyDNAT(config)
 	case TypeMasquerade:
-		return m.applyMasquerade(config)
+		err = m.applyMasquerade(config)
 	case TypeFull:
-		return m.applyFullNAT(config)
+		err = m.applyFullNAT(config)
 	case TypeNAT66:
-		return m.applyNAT66(config)
+		err = m.applyNAT66(config)
 	case TypeNAT64:
-		return m.applyNAT64(config)
+		err = m.applyNAT64(config)
 	default:
+		// Already caught by validateConfig, but defensive
+		delete(m.policies, key)
 		return fmt.Errorf("unsupported NAT type: %s", config.Type)
 	}
+
+	// Set status based on Cilium enforcement result
+	if err != nil {
+		// Remove the policy and status since the Cilium enforcement failed
+		delete(m.policies, key)
+		delete(m.statuses, key)
+		return fmt.Errorf("failed to enforce NAT policy %s via Cilium: %w", key, err)
+	}
+
+	m.setStatus(key, true, "PolicyApplied", "NAT policy has been applied via Cilium")
+	return nil
 }
 
 // RemoveNATPolicy removes a NAT policy
@@ -140,6 +263,7 @@ func (m *manager) RemoveNATPolicy(name, namespace string) error {
 	}
 
 	if err != nil {
+		m.setStatus(key, false, "CiliumRemovalFailed", fmt.Sprintf("Failed to remove NAT policy via Cilium: %v", err))
 		return err
 	}
 
@@ -181,14 +305,12 @@ func (m *manager) ListNATPolicies() ([]Config, error) {
 func (m *manager) applySNAT(config Config) error {
 	klog.Infof("Applying SNAT policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
 	}
 
-	// Apply the NAT configuration using Cilium
 	return m.ciliumClient.CreateNAT(nil, natConfig)
 }
 
@@ -196,9 +318,7 @@ func (m *manager) applySNAT(config Config) error {
 func (m *manager) applyDNAT(config Config) error {
 	klog.Infof("Applying DNAT policy %s/%s", config.Namespace, config.Name)
 
-	// For each port mapping, create a port forwarding rule
 	for _, mapping := range config.PortMappings {
-		// Create a port forwarding configuration
 		portForwardConfig := &cilium.PortForwardConfig{
 			ExternalIP:   config.ExternalIP,
 			ExternalPort: mapping.ExternalPort,
@@ -208,9 +328,9 @@ func (m *manager) applyDNAT(config Config) error {
 			Description:  mapping.Description,
 		}
 
-		// Apply the port forwarding configuration using Cilium
 		if err := m.ciliumClient.CreatePortForward(nil, portForwardConfig); err != nil {
-			return fmt.Errorf("failed to create port forwarding: %w", err)
+			return fmt.Errorf("failed to create port forwarding for %s:%d: %w",
+				config.ExternalIP, mapping.ExternalPort, err)
 		}
 	}
 
@@ -221,14 +341,13 @@ func (m *manager) applyDNAT(config Config) error {
 func (m *manager) applyMasquerade(config Config) error {
 	klog.Infof("Applying Masquerade policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with masquerade
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
-		DestinationIface: config.Interface,
-		IPv6:             config.IPv6,
+		SourceNetwork:     config.SourceAddresses[0],
+		DestinationIface:  config.Interface,
+		IPv6:              config.IPv6,
+		MasqueradeEnabled: true,
 	}
 
-	// Apply the NAT configuration using Cilium
 	return m.ciliumClient.CreateNAT(nil, natConfig)
 }
 
@@ -236,14 +355,14 @@ func (m *manager) applyMasquerade(config Config) error {
 func (m *manager) applyFullNAT(config Config) error {
 	klog.Infof("Applying Full NAT policy %s/%s", config.Namespace, config.Name)
 
-	// Apply SNAT
 	if err := m.applySNAT(config); err != nil {
-		return fmt.Errorf("failed to apply SNAT: %w", err)
+		return fmt.Errorf("failed to apply SNAT component: %w", err)
 	}
 
-	// Apply DNAT
-	if err := m.applyDNAT(config); err != nil {
-		return fmt.Errorf("failed to apply DNAT: %w", err)
+	if len(config.PortMappings) > 0 {
+		if err := m.applyDNAT(config); err != nil {
+			return fmt.Errorf("failed to apply DNAT component: %w", err)
+		}
 	}
 
 	return nil
@@ -253,14 +372,12 @@ func (m *manager) applyFullNAT(config Config) error {
 func (m *manager) applyNAT66(config Config) error {
 	klog.Infof("Applying NAT66 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with IPv6
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
-		IPv6:             true,
+		IPv6:             true, // NAT66 is always IPv6
 	}
 
-	// Apply the NAT configuration using Cilium
 	return m.ciliumClient.CreateNAT(nil, natConfig)
 }
 
@@ -268,13 +385,12 @@ func (m *manager) applyNAT66(config Config) error {
 func (m *manager) applyNAT64(config Config) error {
 	klog.Infof("Applying NAT64 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT64 configuration
 	nat64Config := &cilium.NAT64Config{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
+		Prefix64:         cilium.DefaultNAT64Prefix,
 	}
 
-	// Apply the NAT64 configuration using Cilium
 	return m.ciliumClient.CreateNAT64(nil, nat64Config)
 }
 
@@ -282,14 +398,12 @@ func (m *manager) applyNAT64(config Config) error {
 func (m *manager) removeSNAT(config Config) error {
 	klog.Infof("Removing SNAT policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
 	}
 
-	// Remove the NAT configuration using Cilium
 	return m.ciliumClient.RemoveNAT(nil, natConfig)
 }
 
@@ -297,9 +411,7 @@ func (m *manager) removeSNAT(config Config) error {
 func (m *manager) removeDNAT(config Config) error {
 	klog.Infof("Removing DNAT policy %s/%s", config.Namespace, config.Name)
 
-	// For each port mapping, remove the port forwarding rule
 	for _, mapping := range config.PortMappings {
-		// Create a port forwarding configuration
 		portForwardConfig := &cilium.PortForwardConfig{
 			ExternalIP:   config.ExternalIP,
 			ExternalPort: mapping.ExternalPort,
@@ -308,7 +420,6 @@ func (m *manager) removeDNAT(config Config) error {
 			InternalPort: mapping.InternalPort,
 		}
 
-		// Remove the port forwarding configuration using Cilium
 		if err := m.ciliumClient.RemovePortForward(nil, portForwardConfig); err != nil {
 			return fmt.Errorf("failed to remove port forwarding: %w", err)
 		}
@@ -321,14 +432,13 @@ func (m *manager) removeDNAT(config Config) error {
 func (m *manager) removeMasquerade(config Config) error {
 	klog.Infof("Removing Masquerade policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with masquerade
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
-		DestinationIface: config.Interface,
-		IPv6:             config.IPv6,
+		SourceNetwork:     config.SourceAddresses[0],
+		DestinationIface:  config.Interface,
+		IPv6:              config.IPv6,
+		MasqueradeEnabled: true,
 	}
 
-	// Remove the NAT configuration using Cilium
 	return m.ciliumClient.RemoveNAT(nil, natConfig)
 }
 
@@ -336,14 +446,14 @@ func (m *manager) removeMasquerade(config Config) error {
 func (m *manager) removeFullNAT(config Config) error {
 	klog.Infof("Removing Full NAT policy %s/%s", config.Namespace, config.Name)
 
-	// Remove SNAT
 	if err := m.removeSNAT(config); err != nil {
 		return fmt.Errorf("failed to remove SNAT: %w", err)
 	}
 
-	// Remove DNAT
-	if err := m.removeDNAT(config); err != nil {
-		return fmt.Errorf("failed to remove DNAT: %w", err)
+	if len(config.PortMappings) > 0 {
+		if err := m.removeDNAT(config); err != nil {
+			return fmt.Errorf("failed to remove DNAT: %w", err)
+		}
 	}
 
 	return nil
@@ -353,14 +463,12 @@ func (m *manager) removeFullNAT(config Config) error {
 func (m *manager) removeNAT66(config Config) error {
 	klog.Infof("Removing NAT66 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with IPv6
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             true,
 	}
 
-	// Remove the NAT configuration using Cilium
 	return m.ciliumClient.RemoveNAT(nil, natConfig)
 }
 
@@ -368,12 +476,11 @@ func (m *manager) removeNAT66(config Config) error {
 func (m *manager) removeNAT64(config Config) error {
 	klog.Infof("Removing NAT64 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT64 configuration
 	nat64Config := &cilium.NAT64Config{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
+		Prefix64:         cilium.DefaultNAT64Prefix,
 	}
 
-	// Remove the NAT64 configuration using Cilium
 	return m.ciliumClient.RemoveNAT64(nil, nat64Config)
 }

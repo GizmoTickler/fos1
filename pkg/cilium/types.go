@@ -152,6 +152,9 @@ type KafkaRule struct {
 	ApiKey int
 }
 
+// DefaultNAT64Prefix is the well-known NAT64 prefix per RFC 6052
+const DefaultNAT64Prefix = "64:ff9b::/96"
+
 // CiliumNATConfig represents configuration for NAT.
 type CiliumNATConfig struct {
 	// SourceNetwork is the source network to NAT
@@ -162,6 +165,9 @@ type CiliumNATConfig struct {
 
 	// IPv6 indicates whether to use NAT66 for IPv6
 	IPv6 bool
+
+	// MasqueradeEnabled indicates this is a masquerade (dynamic SNAT) rule
+	MasqueradeEnabled bool
 
 	// ExcludedCIDRs are CIDRs to exclude from NAT
 	ExcludedCIDRs []string
