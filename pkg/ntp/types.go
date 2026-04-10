@@ -88,7 +88,12 @@ type SecurityConfig struct {
 
 // NTSConfig defines Network Time Security settings
 type NTSConfig struct {
-	Enabled bool
+	Enabled        bool
+	ServerCertFile string // Path to the NTS server certificate
+	ServerKeyFile  string // Path to the NTS server private key
+	TrustedCerts   string // Path to trusted certificates for NTS validation
+	NTSDumpDir     string // Directory for NTS cookie dump files
+	NTSPort        int    // Port for NTS-KE (Key Establishment) protocol
 }
 
 // AuthenticationConfig defines authentication settings
@@ -119,10 +124,13 @@ type AccessRule struct {
 
 // VLANConfig defines NTP configuration for a VLAN
 type VLANConfig struct {
-	VLANRef     string
-	Enabled     bool
-	Broadcast   bool
-	ClientsOnly bool
+	VLANRef      string
+	Enabled      bool
+	Broadcast    bool
+	ClientsOnly  bool
+	IPv4Address  string // IPv4 address of the NTP server on this VLAN
+	IPv6Address  string // IPv6 address of the NTP server on this VLAN
+	Domain       string // DNS domain suffix for this VLAN
 }
 
 // MonitoringConfig defines monitoring settings

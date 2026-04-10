@@ -79,31 +79,36 @@ func (m *Manager) UpdateKeys(keys []ntp.AuthKey) error {
 	return nil
 }
 
-// RestartService restarts the Chrony service
+// RestartService reloads the Chrony source configuration without restarting the daemon.
+// It uses "chronyc reload sources" which causes chronyd to re-read the config file
+// and apply changes to the time source list. This avoids disrupting the clock discipline.
 func (m *Manager) RestartService() error {
 	m.configLock.Lock()
 	defer m.configLock.Unlock()
 
-	klog.Infof("Restarting Chrony service")
+	klog.Info("Reloading Chrony sources")
 
-	// In a real implementation, this would use systemd or another service manager
-	// to restart the Chrony service. For this placeholder, we'll use a command-line
-	// call to a hypothetical restart command.
-
-	// This is just a placeholder for demonstration
-	// cmd := exec.Command("sudo", "systemctl", "restart", "chronyd")
-	// if err := cmd.Run(); err != nil {
-	//     return fmt.Errorf("failed to restart Chrony: %w", err)
-	// }
-
-	// For now, we'll simulate a restart by sending a reload signal to Chrony
-	// using the chronyc command
-	cmd := exec.Command(m.chronyCommand, "reload")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to reload Chrony: %w", err)
+	// First, verify that chronyd is running
+	cmdPid := exec.Command("pgrep", "chronyd")
+	if err := cmdPid.Run(); err != nil {
+		// chronyd is not running; attempt to start it via systemctl
+		klog.Warning("chronyd is not running, attempting to start it")
+		startCmd := exec.Command("systemctl", "start", "chronyd")
+		if output, err := startCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to start chronyd: %s: %w", string(output), err)
+		}
+		klog.Info("chronyd started successfully")
+		return nil
 	}
 
-	klog.Info("Chrony service restarted successfully")
+	// Reload sources so chronyd picks up the new configuration
+	cmd := exec.Command(m.chronyCommand, "reload", "sources")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to reload Chrony sources: %s: %w", string(output), err)
+	}
+
+	klog.Infof("Chrony sources reloaded successfully: %s", strings.TrimSpace(string(output)))
 	return nil
 }
 

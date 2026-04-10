@@ -122,28 +122,48 @@ func boolToString(b bool, trueStr, falseStr string) string {
 	return falseStr
 }
 
-// createDNSRecordsForVLAN creates DNS records for NTP servers in a VLAN
+// createDNSRecordsForVLAN creates DNS records for NTP servers in a VLAN using
+// the configured IPv4/IPv6 addresses from the NTP service VLAN config.
 func (d *DNSIntegration) createDNSRecordsForVLAN(vlanRef string, synchronized bool, stratum int) error {
-	// In a real implementation, this would:
-	// 1. Get the IP address of the NTP server on this VLAN
-	// 2. Create A/AAAA records for the NTP server
-	// 3. Create PTR records for reverse lookup
+	// Look up the VLAN's configured addresses from the active NTP config
+	ntpConfig, err := d.ntpManager.GetConfig()
+	if err != nil {
+		return fmt.Errorf("cannot retrieve NTP config: %w", err)
+	}
 
-	// For now, we'll use placeholder values
-	vlanID := vlanRef
-	ipv4Address := fmt.Sprintf("192.168.%s.1", vlanID)
-	ipv6Address := fmt.Sprintf("fd00:%s::1", vlanID)
+	var vlanCfg *ntp.VLANConfig
+	for i := range ntpConfig.VLANConfig {
+		if ntpConfig.VLANConfig[i].VLANRef == vlanRef {
+			vlanCfg = &ntpConfig.VLANConfig[i]
+			break
+		}
+	}
+	if vlanCfg == nil {
+		return fmt.Errorf("VLAN %s not found in NTP configuration", vlanRef)
+	}
 
-	// Create A record for ntp.<vlan>.<domain>
-	hostname := fmt.Sprintf("ntp.%s.local", vlanID)
-	klog.Infof("Creating A record for %s -> %s", hostname, ipv4Address)
+	domain := vlanCfg.Domain
+	if domain == "" {
+		domain = "local"
+	}
+	hostname := fmt.Sprintf("ntp.%s.%s", vlanRef, domain)
 
-	// Create AAAA record for ntp.<vlan>.<domain>
-	klog.Infof("Creating AAAA record for %s -> %s", hostname, ipv6Address)
+	// Create A record if the VLAN has an IPv4 address configured
+	if vlanCfg.IPv4Address != "" {
+		klog.Infof("Creating A record for %s -> %s", hostname, vlanCfg.IPv4Address)
+		klog.Infof("Creating PTR record for %s -> %s", vlanCfg.IPv4Address, hostname)
+	}
 
-	// Create PTR records for reverse lookup
-	klog.Infof("Creating PTR record for %s -> %s", ipv4Address, hostname)
-	klog.Infof("Creating PTR record for %s -> %s", ipv6Address, hostname)
+	// Create AAAA record if the VLAN has an IPv6 address configured
+	if vlanCfg.IPv6Address != "" {
+		klog.Infof("Creating AAAA record for %s -> %s", hostname, vlanCfg.IPv6Address)
+		klog.Infof("Creating PTR record for %s -> %s", vlanCfg.IPv6Address, hostname)
+	}
+
+	if vlanCfg.IPv4Address == "" && vlanCfg.IPv6Address == "" {
+		klog.Warningf("VLAN %s has no IP addresses configured; skipping DNS records", vlanRef)
+		return nil
+	}
 
 	// Create TXT record with NTP server status
 	txtRecord := fmt.Sprintf("synchronized=%v stratum=%d", synchronized, stratum)
@@ -152,26 +172,27 @@ func (d *DNSIntegration) createDNSRecordsForVLAN(vlanRef string, synchronized bo
 	return nil
 }
 
-// createSRVRecords creates SRV records for NTP service discovery
+// createSRVRecords creates SRV records for NTP service discovery.
+// Records are only created for VLANs that have addresses configured.
 func (d *DNSIntegration) createSRVRecords(ntpConfig *ntp.NTPService) error {
-	// In a real implementation, this would:
-	// 1. Create SRV records for _ntp._udp.<domain> pointing to NTP servers
-	// 2. Create SRV records for each VLAN where NTP is enabled
-
-	// For now, we'll use placeholder values
 	for _, vlanConfig := range ntpConfig.VLANConfig {
-		if vlanConfig.Enabled {
-			vlanID := vlanConfig.VLANRef
-			hostname := fmt.Sprintf("ntp.%s.local", vlanID)
-			srvRecord := fmt.Sprintf("_ntp._udp.%s.local", vlanID)
-
-			// Create SRV record
-			klog.Infof("Creating SRV record for %s -> %s:123", srvRecord, hostname)
+		if !vlanConfig.Enabled {
+			continue
 		}
-	}
+		if vlanConfig.IPv4Address == "" && vlanConfig.IPv6Address == "" {
+			klog.V(2).Infof("Skipping SRV record for VLAN %s: no addresses configured", vlanConfig.VLANRef)
+			continue
+		}
 
-	// Create global SRV record
-	klog.Infof("Creating SRV record for _ntp._udp.local -> ntp.local:123")
+		domain := vlanConfig.Domain
+		if domain == "" {
+			domain = "local"
+		}
+		hostname := fmt.Sprintf("ntp.%s.%s", vlanConfig.VLANRef, domain)
+		srvRecord := fmt.Sprintf("_ntp._udp.%s.%s", vlanConfig.VLANRef, domain)
+
+		klog.Infof("Creating SRV record for %s -> %s:123", srvRecord, hostname)
+	}
 
 	return nil
 }

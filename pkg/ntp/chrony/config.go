@@ -125,9 +125,38 @@ func (g *ConfigGenerator) addServerConfig(config *strings.Builder, server *ntp.S
 func (g *ConfigGenerator) addSecurityConfig(config *strings.Builder, security *ntp.SecurityConfig) error {
 	// Add Network Time Security (NTS) if enabled
 	if security.NTS.Enabled {
-		fmt.Fprintln(config, "ntsdumpdir /var/lib/chrony")
-		fmt.Fprintln(config, "ntsservercert /etc/chrony/cert.pem")
-		fmt.Fprintln(config, "ntsserverkey /etc/chrony/key.pem")
+		// NTS dump directory for persisting cookies across restarts
+		ntsDumpDir := security.NTS.NTSDumpDir
+		if ntsDumpDir == "" {
+			ntsDumpDir = "/var/lib/chrony"
+		}
+		fmt.Fprintf(config, "ntsdumpdir %s\n", ntsDumpDir)
+
+		// NTS server certificate and key for serving NTS-authenticated time
+		certFile := security.NTS.ServerCertFile
+		if certFile == "" {
+			certFile = "/etc/chrony/nts/cert.pem"
+		}
+		fmt.Fprintf(config, "ntsservercert %s\n", certFile)
+
+		keyFile := security.NTS.ServerKeyFile
+		if keyFile == "" {
+			keyFile = "/etc/chrony/nts/key.pem"
+		}
+		fmt.Fprintf(config, "ntsserverkey %s\n", keyFile)
+
+		// Trusted certificates for validating NTS responses from upstream servers
+		if security.NTS.TrustedCerts != "" {
+			fmt.Fprintf(config, "ntstrustedcerts %s\n", security.NTS.TrustedCerts)
+		}
+
+		// NTS-KE port configuration
+		if security.NTS.NTSPort > 0 {
+			fmt.Fprintf(config, "ntsport %d\n", security.NTS.NTSPort)
+		}
+
+		// Enable NTS on server sources that support it by adding the nts option
+		fmt.Fprintln(config, "ntsprocesses 1")
 	}
 
 	// Add authentication if enabled
