@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -29,6 +30,66 @@ type vrfRouteAdder interface {
 	AddVRFRoute(route Route, vrfID int) error
 }
 
+type routeManifestList struct {
+	Items []routeManifest `json:"items"`
+}
+
+type routeManifest struct {
+	Metadata routeManifestMetadata `json:"metadata"`
+	Spec     routeManifestSpec     `json:"spec"`
+}
+
+type routeManifestMetadata struct {
+	Namespace string            `json:"namespace"`
+	Name      string            `json:"name"`
+	Labels    map[string]string `json:"labels"`
+}
+
+type routeManifestSpec struct {
+	Destination string `json:"destination"`
+	Gateway     string `json:"gateway"`
+	Interface   string `json:"interface"`
+	Metric      int    `json:"metric"`
+	Table       string `json:"table"`
+	VRF         string `json:"vrf"`
+	Type        string `json:"type"`
+}
+
+func routeFromManifest(item routeManifest) (Route, error) {
+	_, destination, err := net.ParseCIDR(item.Spec.Destination)
+	if err != nil {
+		return Route{}, fmt.Errorf("invalid route destination %q: %w", item.Spec.Destination, err)
+	}
+
+	var tableID int
+	if item.Spec.Table != "" {
+		if t, err := strconv.Atoi(item.Spec.Table); err == nil {
+			tableID = t
+		} else {
+			switch item.Spec.Table {
+			case "main":
+				tableID = 254
+			case "local":
+				tableID = 255
+			case "default":
+				tableID = 253
+			default:
+				return Route{}, fmt.Errorf("unsupported route table %q", item.Spec.Table)
+			}
+		}
+	}
+
+	return Route{
+		Destination: destination,
+		Gateway:     net.ParseIP(item.Spec.Gateway),
+		OutputIface: item.Spec.Interface,
+		Priority:    item.Spec.Metric,
+		Table:       tableID,
+		Type:        item.Spec.Type,
+		VRF:         item.Spec.VRF,
+	}, nil
+}
+
 // RouteTable represents a routing table with its routes
 type RouteTable struct {
 	ID     int
@@ -38,6 +99,8 @@ type RouteTable struct {
 
 // Route represents a route entry
 type Route struct {
+	Namespace   string
+	Name        string
 	Destination *net.IPNet
 	Gateway     net.IP
 	InputIface  string
@@ -45,6 +108,7 @@ type Route struct {
 	Priority    int
 	Table       int
 	Type        string // "static", "dynamic", "policy"
+	VRF         string
 }
 
 const (

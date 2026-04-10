@@ -133,3 +133,33 @@ func (c *KubernetesCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy 
 	log.Printf("Created Cilium policy %s", policy.Name)
 	return nil
 }
+
+func (c *KubernetesCiliumClient) ListRoutes(ctx context.Context) ([]Route, error) {
+	return []Route{}, nil
+}
+
+func (c *KubernetesCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	return []Route{}, nil
+}
+
+// AddRoute applies a route through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) AddRoute(route Route) error {
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteRoute removes a route through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) DeleteRoute(route Route) error {
+	return applyRouteManifest(route, "delete")
+}
+
+// AddVRFRoute applies a route in a VRF through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) AddVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteVRFRoute removes a route in a VRF through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) DeleteVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "delete")
+}

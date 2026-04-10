@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 )
@@ -364,4 +365,169 @@ func sanitizeNetworkName(network string) string {
 		".", "-",
 	)
 	return r.Replace(network)
+}
+
+// ListRoutes returns the routes known to the Route CRD store.
+func (c *DefaultCiliumClient) ListRoutes(ctx context.Context) ([]Route, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "routes.networking.fos1.io", "-A", "-o", "json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list routes: %w\nOutput: %s", err, string(output))
+	}
+	return routesFromKubectlJSON(output)
+}
+
+// ListVRFRoutes returns the routes associated with a VRF.
+func (c *DefaultCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	routes, err := c.ListRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	vrfName := fmt.Sprintf("vrf-%d", vrfID)
+	filtered := make([]Route, 0)
+	for _, route := range routes {
+		if route.VRF == vrfName {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered, nil
+}
+
+// AddRoute applies a route to Cilium using a CRD-backed route resource.
+func (c *DefaultCiliumClient) AddRoute(route Route) error {
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteRoute removes a route from Cilium.
+func (c *DefaultCiliumClient) DeleteRoute(route Route) error {
+	return deleteRouteManifest(route)
+}
+
+// AddVRFRoute applies a route within a VRF context.
+func (c *DefaultCiliumClient) AddVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteVRFRoute removes a route within a VRF context.
+func (c *DefaultCiliumClient) DeleteVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return deleteRouteManifest(route)
+}
+
+// applyRouteManifest converts a route object into a Kubernetes manifest and applies it.
+func applyRouteManifest(route Route, action string) error {
+	if route.Destination == nil {
+		return fmt.Errorf("route destination is required")
+	}
+
+	destination := route.Destination.String()
+	routeName := routeNameForRoute(route)
+	metadata := map[string]interface{}{
+		"name": routeName,
+		"labels": map[string]string{
+			"app":          "fos1",
+			"component":    "route",
+			"destination":  sanitizeNetworkName(destination),
+			"output-iface": sanitizeNetworkName(route.OutputIface),
+			"vrf":          sanitizeNetworkName(route.VRF),
+		},
+	}
+	if route.VRF == "" {
+		delete(metadata["labels"].(map[string]string), "vrf")
+	}
+
+	spec := map[string]interface{}{
+		"destination": destination,
+		"gateway":     normalizeRouteGateway(route.Gateway),
+		"interface":   route.OutputIface,
+		"metric":      route.Priority,
+		"table":       fmt.Sprintf("%d", route.Table),
+		"type":        route.Type,
+		"action":      action,
+	}
+	if route.VRF != "" {
+		spec["vrf"] = route.VRF
+	}
+	if route.Gateway == nil {
+		spec["gateway"] = ""
+	}
+
+	manifest := map[string]interface{}{
+		"apiVersion": "networking.fos1.io/v1",
+		"kind":       "Route",
+		"metadata":   metadata,
+		"spec":       spec,
+	}
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to encode route manifest: %w", err)
+	}
+
+	return applyYAML(string(data))
+}
+
+func deleteRouteManifest(route Route) error {
+	if route.Destination == nil {
+		return fmt.Errorf("route destination is required")
+	}
+	namespace := route.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+	cmd := exec.Command("kubectl", "delete", "route", routeNameForRoute(route), "-n", namespace)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to delete route: %w\nOutput: %s", err, string(output))
+	}
+	return nil
+}
+
+// applyYAML applies YAML using kubectl.
+func applyYAML(yamlContent string) error {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(yamlContent)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to apply policy: %w\nOutput: %s", err, string(output))
+	}
+
+	return nil
+}
+
+func routeNameForRoute(route Route) string {
+	destination := "unknown"
+	if route.Destination != nil {
+		destination = route.Destination.String()
+	}
+	if route.VRF != "" {
+		return fmt.Sprintf("route-%s-%s", sanitizeNetworkName(route.VRF), sanitizeNetworkName(destination))
+	}
+	return fmt.Sprintf("route-%s", sanitizeNetworkName(destination))
+}
+
+func routesFromKubectlJSON(data []byte) ([]Route, error) {
+	var list routeManifestList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("failed to parse route list: %w", err)
+	}
+	routes := make([]Route, 0, len(list.Items))
+	for _, item := range list.Items {
+		route, err := routeFromManifest(item)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	return routes, nil
+}
+
+// normalizeRouteGateway safely returns the gateway string for route serialization.
+func normalizeRouteGateway(gw net.IP) string {
+	if gw == nil {
+		return ""
+	}
+	return gw.String()
 }

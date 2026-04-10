@@ -36,6 +36,14 @@ func (m *MockCiliumClientForRouting) ApplyNetworkPolicy(ctx context.Context, pol
 	return nil
 }
 
+func (m *MockCiliumClientForRouting) ListRoutes(ctx context.Context) ([]Route, error) {
+	return []Route{}, nil
+}
+
+func (m *MockCiliumClientForRouting) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	return []Route{}, nil
+}
+
 func (m *MockCiliumClientForRouting) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
 	return nil
 }
@@ -95,6 +103,13 @@ func (m *MockCiliumClientForRouting) AddVRFRoute(route Route, vrfID int) error {
 		m.vrfRoutesAdded[vrfID] = make([]Route, 0)
 	}
 	m.vrfRoutesAdded[vrfID] = append(m.vrfRoutesAdded[vrfID], route)
+	return nil
+}
+
+func (m *MockCiliumClientForRouting) DeleteVRFRoute(route Route, vrfID int) error {
+	if m.shouldError {
+		return errRouteTestFailed
+	}
 	return nil
 }
 

@@ -170,7 +170,12 @@ func (r *Router) syncVRFs() {
 	}
 }
 
-// syncPolicyRules synchronizes policy-based routing rules with Cilium
+// syncPolicyRules synchronizes policy-based routing rules with Cilium.
+//
+// This method is the authoritative enforcement path for policy-based routing
+// rules. It applies each rule as a CiliumNetworkPolicy, ensuring the Cilium
+// control plane has the current desired state. The operation is idempotent:
+// re-applying the same rules results in no-op updates via kubectl apply.
 func (r *Router) syncPolicyRules() {
 	if !r.options.EnablePBR {
 		return
@@ -179,10 +184,58 @@ func (r *Router) syncPolicyRules() {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// In a real implementation, this would use Cilium's API to sync policy rules
-	// For now, just log the rules
+	ctx := r.ctx
+
 	for _, rule := range r.policyRules {
-		klog.V(4).Infof("Policy rule: priority %d, table %d", rule.Priority, rule.Table)
+		policyName := fmt.Sprintf("pbr-rule-pri%d-tbl%d", rule.Priority, rule.Table)
+
+		labels := map[string]string{
+			"app":       "fos1",
+			"component": "pbr-rule",
+			"priority":  fmt.Sprintf("%d", rule.Priority),
+			"table":     fmt.Sprintf("%d", rule.Table),
+		}
+
+		fromEndpoints := []Endpoint{}
+		if rule.SourceIP != nil {
+			fromEndpoints = append(fromEndpoints, Endpoint{
+				Labels: map[string]string{"source-cidr": rule.SourceIP.String()},
+			})
+		}
+		if rule.InputInterface != "" {
+			fromEndpoints = append(fromEndpoints, Endpoint{
+				Labels: map[string]string{"interface": rule.InputInterface},
+			})
+		}
+
+		toEndpoints := []Endpoint{}
+		if rule.DestinationIP != nil {
+			toEndpoints = append(toEndpoints, Endpoint{
+				Labels: map[string]string{"destination-cidr": rule.DestinationIP.String()},
+			})
+		}
+		if rule.OutputInterface != "" {
+			toEndpoints = append(toEndpoints, Endpoint{
+				Labels: map[string]string{"interface": rule.OutputInterface},
+			})
+		}
+
+		ciliumPolicy := &CiliumPolicy{
+			Name:   policyName,
+			Labels: labels,
+			Rules: []CiliumRule{
+				{
+					FromEndpoints: fromEndpoints,
+					ToEndpoints:   toEndpoints,
+				},
+			},
+		}
+
+		if err := r.client.ApplyNetworkPolicy(ctx, ciliumPolicy); err != nil {
+			klog.Errorf("Failed to sync policy rule priority %d table %d: %v", rule.Priority, rule.Table, err)
+		} else {
+			klog.V(4).Infof("Synced policy rule: priority %d, table %d", rule.Priority, rule.Table)
+		}
 	}
 }
 
@@ -206,9 +259,41 @@ func (r *Router) AddVRF(name string, tables []int, interfaces []string) (int, er
 		Interfaces: interfaces,
 	}
 
-	// Configure Cilium for this VRF
-	// In a real implementation, this would use Cilium's API to configure the VRF
-	klog.Infof("Added VRF %s with ID %d", name, vrfID)
+	// Configure Cilium for this VRF by applying a network policy that
+	// identifies traffic belonging to this VRF domain.
+	vrfLabel := fmt.Sprintf("vrf-%d", vrfID)
+	policyName := fmt.Sprintf("vrf-%s-identity", name)
+	ciliumPolicy := &CiliumPolicy{
+		Name: policyName,
+		Labels: map[string]string{
+			"app":       "fos1",
+			"component": "vrf-identity",
+			"vrf":       name,
+			"vrf-id":    fmt.Sprintf("%d", vrfID),
+		},
+		Rules: []CiliumRule{},
+	}
+
+	// Add per-interface rules for VRF membership
+	for _, iface := range interfaces {
+		ciliumPolicy.Rules = append(ciliumPolicy.Rules, CiliumRule{
+			FromEndpoints: []Endpoint{
+				{Labels: map[string]string{"interface": iface}},
+			},
+			ToEndpoints: []Endpoint{
+				{Labels: map[string]string{"vrf": vrfLabel}},
+			},
+		})
+	}
+
+	ctx := r.ctx
+	if err := r.client.ApplyNetworkPolicy(ctx, ciliumPolicy); err != nil {
+		// Roll back the in-memory state on Cilium failure
+		delete(r.vrfs, vrfID)
+		return 0, fmt.Errorf("failed to apply VRF identity policy for %s: %w", name, err)
+	}
+
+	klog.Infof("Added VRF %s with ID %d (label: %s)", name, vrfID, vrfLabel)
 
 	return vrfID, nil
 }
@@ -233,8 +318,19 @@ func (r *Router) DeleteVRF(vrfID int) error {
 		return fmt.Errorf("cannot delete the default VRF")
 	}
 
-	// Remove the VRF from Cilium
-	// In a real implementation, this would use Cilium's API to remove the VRF
+	// Remove the VRF from Cilium by cleaning up routes associated with this VRF.
+	ctx := r.ctx
+	vrfRoutes, err := r.client.ListVRFRoutes(ctx, vrfID)
+	if err != nil {
+		klog.Warningf("Failed to list routes for VRF %s (ID %d) during deletion: %v", vrf.Name, vrfID, err)
+	} else {
+		for _, route := range vrfRoutes {
+			if delErr := r.client.DeleteVRFRoute(route, vrfID); delErr != nil {
+				klog.Warningf("Failed to delete VRF route during VRF %s deletion: %v", vrf.Name, delErr)
+			}
+		}
+	}
+
 	delete(r.vrfs, vrfID)
 	klog.Infof("Deleted VRF %s with ID %d", vrf.Name, vrfID)
 
@@ -268,8 +364,42 @@ func (r *Router) AddPolicyRule(rule RoutingPolicyRule) error {
 		return fmt.Errorf("routing table %d does not exist", rule.Table)
 	}
 
-	// Add the rule to Cilium
-	// In a real implementation, this would use Cilium's API to add the rule
+	// Apply the policy rule through Cilium immediately.
+	policyName := fmt.Sprintf("pbr-rule-pri%d-tbl%d", rule.Priority, rule.Table)
+	labels := map[string]string{
+		"app":       "fos1",
+		"component": "pbr-rule",
+		"priority":  fmt.Sprintf("%d", rule.Priority),
+		"table":     fmt.Sprintf("%d", rule.Table),
+	}
+
+	fromEndpoints := []Endpoint{}
+	if rule.SourceIP != nil {
+		fromEndpoints = append(fromEndpoints, Endpoint{
+			Labels: map[string]string{"source-cidr": rule.SourceIP.String()},
+		})
+	}
+	if rule.InputInterface != "" {
+		fromEndpoints = append(fromEndpoints, Endpoint{
+			Labels: map[string]string{"interface": rule.InputInterface},
+		})
+	}
+
+	ciliumPolicy := &CiliumPolicy{
+		Name:   policyName,
+		Labels: labels,
+		Rules: []CiliumRule{
+			{
+				FromEndpoints: fromEndpoints,
+			},
+		},
+	}
+
+	ctx := r.ctx
+	if err := r.client.ApplyNetworkPolicy(ctx, ciliumPolicy); err != nil {
+		return fmt.Errorf("failed to apply policy rule priority %d to Cilium: %w", rule.Priority, err)
+	}
+
 	r.policyRules = append(r.policyRules, rule)
 	klog.Infof("Added policy rule with priority %d to table %d", rule.Priority, rule.Table)
 

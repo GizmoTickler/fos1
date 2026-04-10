@@ -86,3 +86,33 @@ func (c *DirectCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Cil
 
 	return nil
 }
+
+func (c *DirectCiliumClient) ListRoutes(ctx context.Context) ([]Route, error) {
+	return []Route{}, nil
+}
+
+func (c *DirectCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	return []Route{}, nil
+}
+
+// AddRoute applies a route through the direct client.
+func (c *DirectCiliumClient) AddRoute(route Route) error {
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteRoute removes a route through the direct client.
+func (c *DirectCiliumClient) DeleteRoute(route Route) error {
+	return applyRouteManifest(route, "delete")
+}
+
+// AddVRFRoute applies a route in a VRF through the direct client.
+func (c *DirectCiliumClient) AddVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteVRFRoute removes a route in a VRF through the direct client.
+func (c *DirectCiliumClient) DeleteVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "delete")
+}

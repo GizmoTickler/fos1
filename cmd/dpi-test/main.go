@@ -65,6 +65,13 @@ func (s *SimpleCiliumClient) ConfigureVLANRouting(ctx context.Context, config *c
 	return nil
 }
 
+func (s *SimpleCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error)              { return nil, nil }
+func (s *SimpleCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) { return nil, nil }
+func (s *SimpleCiliumClient) AddRoute(route cilium.Route) error                                    { return nil }
+func (s *SimpleCiliumClient) DeleteRoute(route cilium.Route) error                                 { return nil }
+func (s *SimpleCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error                      { return nil }
+func (s *SimpleCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error                   { return nil }
+
 func main() {
 	// Parse command-line flags
 	zeekLogsPath := flag.String("zeek-logs", "/usr/local/zeek/logs/current", "Path to Zeek logs directory")
