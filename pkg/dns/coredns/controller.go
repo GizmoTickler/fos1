@@ -425,6 +425,79 @@ func (c *Controller) applyConfiguration() error {
 	return nil
 }
 
+// GetZone returns a zone by name, or nil if not found.
+func (c *Controller) GetZone(name string) *Zone {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.zones[name]
+}
+
+// GetPTRZone returns a PTR zone by name, or nil if not found.
+func (c *Controller) GetPTRZone(name string) *PTRZone {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.ptrZones[name]
+}
+
+// ListZones returns the names of all forward zones.
+func (c *Controller) ListZones() []string {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	names := make([]string, 0, len(c.zones))
+	for name := range c.zones {
+		names = append(names, name)
+	}
+	return names
+}
+
+// UpdateZone replaces or creates a forward zone with the given records and SOA,
+// writes the zone file to disk, and triggers a CoreDNS reload.
+func (c *Controller) UpdateZone(zone *Zone) error {
+	if zone == nil {
+		return fmt.Errorf("zone is nil")
+	}
+	if zone.Domain == "" {
+		return fmt.Errorf("zone domain is required")
+	}
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Ensure SOA is set
+	if zone.SOA == nil {
+		zone.SOA = defaultSOA(zone.Domain)
+	}
+	zone.Updated = time.Now()
+
+	c.zones[zone.Domain] = zone
+
+	return c.applyConfiguration()
+}
+
+// UpdatePTRZone replaces or creates a reverse zone with the given records and SOA,
+// writes the zone file to disk, and triggers a CoreDNS reload.
+func (c *Controller) UpdatePTRZone(ptrZone *PTRZone) error {
+	if ptrZone == nil {
+		return fmt.Errorf("PTR zone is nil")
+	}
+	if ptrZone.Name == "" {
+		return fmt.Errorf("PTR zone name is required")
+	}
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Ensure SOA is set
+	if ptrZone.SOA == nil {
+		ptrZone.SOA = defaultSOA(ptrZone.Name)
+	}
+	ptrZone.Updated = time.Now()
+
+	c.ptrZones[ptrZone.Name] = ptrZone
+
+	return c.applyConfiguration()
+}
+
 // countRecords counts the total number of records across all zones
 func (c *Controller) countRecords() int {
 	count := 0
