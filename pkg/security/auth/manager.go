@@ -708,44 +708,97 @@ func (l *NoopAuditLogger) GetEvents(filter *AuditEventFilter) ([]*AuditEvent, er
 	return nil, nil
 }
 
-// NewLocalProvider creates a new local authentication provider
+// ProviderConstructorFunc is a function that creates a Provider from a ProviderInfo.
+// Provider packages register their constructors via RegisterProviderConstructor.
+type ProviderConstructorFunc func(info *ProviderInfo) (Provider, error)
+
+// providerConstructors holds registered provider constructors keyed by type name.
+var providerConstructors = map[string]ProviderConstructorFunc{}
+
+// RegisterProviderConstructor registers a provider constructor for a given type.
+// This is called by provider implementation packages (e.g., providers) at init
+// time to wire real implementations without creating import cycles.
+func RegisterProviderConstructor(providerType string, constructor ProviderConstructorFunc) {
+	providerConstructors[providerType] = constructor
+}
+
+// NewLocalProvider creates a new local authentication provider.
+// It validates the ProviderInfo and delegates to the registered constructor.
 func NewLocalProvider(info *ProviderInfo) (Provider, error) {
-	// This is a placeholder
-	// In a real implementation, you would create a local provider
-	return nil, fmt.Errorf("local provider not implemented")
+	if info == nil {
+		return nil, fmt.Errorf("provider info is nil")
+	}
+	if info.Config.Local == nil {
+		return nil, fmt.Errorf("local provider configuration is required")
+	}
+	constructor, ok := providerConstructors["local"]
+	if !ok {
+		return nil, fmt.Errorf("local provider constructor not registered: ensure the providers package is imported")
+	}
+	info.Type = "local"
+	return constructor(info)
 }
 
-// NewLDAPProvider creates a new LDAP authentication provider
+// NewLDAPProvider creates a new LDAP authentication provider.
+// It validates the ProviderInfo and delegates to the registered constructor.
 func NewLDAPProvider(info *ProviderInfo) (Provider, error) {
-	// This is a placeholder
-	// In a real implementation, you would create an LDAP provider
-	return nil, fmt.Errorf("LDAP provider not implemented")
+	if info == nil {
+		return nil, fmt.Errorf("provider info is nil")
+	}
+	if info.Config.LDAP == nil {
+		return nil, fmt.Errorf("LDAP provider configuration is required")
+	}
+	if info.Config.LDAP.URL == "" {
+		return nil, fmt.Errorf("LDAP URL is required")
+	}
+	if info.Config.LDAP.UserBaseDN == "" {
+		return nil, fmt.Errorf("LDAP user base DN is required")
+	}
+	constructor, ok := providerConstructors["ldap"]
+	if !ok {
+		return nil, fmt.Errorf("LDAP provider constructor not registered: ensure the providers package is imported")
+	}
+	info.Type = "ldap"
+	return constructor(info)
 }
 
-// NewOAuthProvider creates a new OAuth authentication provider
+// NewOAuthProvider creates a new OAuth authentication provider.
+// It validates the ProviderInfo and delegates to the registered constructor.
 func NewOAuthProvider(info *ProviderInfo) (Provider, error) {
-	// This is a placeholder
-	// In a real implementation, you would create an OAuth provider
-	return nil, fmt.Errorf("OAuth provider not implemented")
+	if info == nil {
+		return nil, fmt.Errorf("provider info is nil")
+	}
+	if info.Config.OAuth == nil {
+		return nil, fmt.Errorf("OAuth provider configuration is required")
+	}
+	if info.Config.OAuth.ClientID == "" {
+		return nil, fmt.Errorf("OAuth client ID is required")
+	}
+	if info.Config.OAuth.ClientSecret == "" {
+		return nil, fmt.Errorf("OAuth client secret is required")
+	}
+	constructor, ok := providerConstructors["oauth"]
+	if !ok {
+		return nil, fmt.Errorf("OAuth provider constructor not registered: ensure the providers package is imported")
+	}
+	info.Type = "oauth"
+	return constructor(info)
 }
 
-// NewSAMLProvider creates a new SAML authentication provider
+// NewSAMLProvider creates a new SAML authentication provider.
+// SAML provider support is not yet available.
 func NewSAMLProvider(info *ProviderInfo) (Provider, error) {
-	// This is a placeholder
-	// In a real implementation, you would create a SAML provider
-	return nil, fmt.Errorf("SAML provider not implemented")
+	return nil, fmt.Errorf("SAML provider is not yet supported: no implementation available")
 }
 
-// NewRADIUSProvider creates a new RADIUS authentication provider
+// NewRADIUSProvider creates a new RADIUS authentication provider.
+// RADIUS provider support is not yet available.
 func NewRADIUSProvider(info *ProviderInfo) (Provider, error) {
-	// This is a placeholder
-	// In a real implementation, you would create a RADIUS provider
-	return nil, fmt.Errorf("RADIUS provider not implemented")
+	return nil, fmt.Errorf("RADIUS provider is not yet supported: no implementation available")
 }
 
-// NewCertificateProvider creates a new certificate authentication provider
+// NewCertificateProvider creates a new certificate authentication provider.
+// Certificate provider support is not yet available.
 func NewCertificateProvider(info *ProviderInfo) (Provider, error) {
-	// This is a placeholder
-	// In a real implementation, you would create a certificate provider
-	return nil, fmt.Errorf("certificate provider not implemented")
+	return nil, fmt.Errorf("certificate provider is not yet supported: no implementation available")
 }

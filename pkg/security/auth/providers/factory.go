@@ -7,6 +7,15 @@ import (
 	"github.com/GizmoTickler/fos1/pkg/security/auth"
 )
 
+func init() {
+	// Register provider constructors with the auth package so that
+	// auth.NewLocalProvider / NewLDAPProvider / NewOAuthProvider can
+	// delegate to real implementations without an import cycle.
+	auth.RegisterProviderConstructor("local", NewLocalProviderFromInfo)
+	auth.RegisterProviderConstructor("ldap", NewLDAPProviderFromInfo)
+	auth.RegisterProviderConstructor("oauth", NewOAuthProviderFromInfo)
+}
+
 // Factory creates authentication providers
 type Factory struct {
 	// Providers are the registered provider constructors
