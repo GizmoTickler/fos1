@@ -384,8 +384,8 @@ func (c *OSPFController) updateOSPFConfigStatus(obj *unstructured.Unstructured) 
 			"address":          neighbor.Address,
 			"state":            neighbor.State,
 			"uptime":           neighbor.Uptime.String(),
-			"prefixesReceived": neighbor.PrefixesReceived,
-			"prefixesSent":     neighbor.PrefixesSent,
+			"prefixesReceived": int64(neighbor.PrefixesReceived),
+			"prefixesSent":     int64(neighbor.PrefixesSent),
 		}
 		
 		neighborsUntyped = append(neighborsUntyped, neighborMap)

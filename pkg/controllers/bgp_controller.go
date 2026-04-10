@@ -420,8 +420,8 @@ func (c *BGPController) updateBGPConfigStatus(obj *unstructured.Unstructured) er
 			"address":          neighbor.Address,
 			"state":            neighbor.State,
 			"uptime":           neighbor.Uptime.String(),
-			"prefixesReceived": neighbor.PrefixesReceived,
-			"prefixesSent":     neighbor.PrefixesSent,
+			"prefixesReceived": int64(neighbor.PrefixesReceived),
+			"prefixesSent":     int64(neighbor.PrefixesSent),
 		}
 		
 		neighborsUntyped = append(neighborsUntyped, neighborMap)

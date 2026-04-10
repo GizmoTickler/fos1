@@ -446,7 +446,7 @@ func (c *MultiWANController) updateMultiWANStatus(obj *unstructured.Unstructured
 		wanMap := map[string]interface{}{
 			"name":       wan.Name,
 			"state":      wan.State,
-			"rtt":        wan.RTT,
+			"rtt":        int64(wan.RTT),
 			"packetLoss": wan.PacketLoss,
 		}
 		activeWANsUntyped = append(activeWANsUntyped, wanMap)
