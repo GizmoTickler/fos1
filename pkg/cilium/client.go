@@ -34,36 +34,64 @@ func (c *DefaultCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Ci
 	return c.applyYAML(policyYAML)
 }
 
-// CreateNAT creates NAT rules using Cilium's capabilities
+// CreateNAT creates NAT rules using Cilium's capabilities.
+// For SNAT/masquerade, this creates an egress policy with source CIDR matching
+// and masquerade annotation on the destination interface.
+// For NAT66, the same structure is used with IPv6 CIDRs.
 func (c *DefaultCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
-	// For IPv6, we need to use NAT66
-	natType := "nat"
+	if config.SourceNetwork == "" {
+		return fmt.Errorf("source network is required for NAT policy")
+	}
+	if config.DestinationIface == "" {
+		return fmt.Errorf("destination interface is required for NAT policy")
+	}
+
+	// Determine the NAT type for naming and labels
+	natType := "snat"
+	if config.MasqueradeEnabled {
+		natType = "masquerade"
+	}
 	if config.IPv6 {
 		natType = "nat66"
 	}
 
-	// Create NAT policy that will be applied to Cilium
 	policyName := fmt.Sprintf("%s-%s", natType, sanitizeNetworkName(config.SourceNetwork))
-	policy := &CiliumPolicy{
-		Name: policyName,
-		Labels: map[string]string{
-			"type": natType,
-			"network": sanitizeNetworkName(config.SourceNetwork),
-		},
-		Rules: []CiliumRule{
+
+	// Build the egress rule: traffic from SourceNetwork destined for the
+	// egress interface is masqueraded (SNAT). Cilium implements masquerade
+	// via eBPF on the egress path when the policy selects the traffic.
+	egressRule := CiliumRule{
+		FromCIDR: []string{config.SourceNetwork},
+		ToEndpoints: []Endpoint{
 			{
-				ToEndpoints: []Endpoint{
-					{
-						Labels: map[string]string{
-							"interface": config.DestinationIface,
-						},
-					},
+				Labels: map[string]string{
+					"interface": config.DestinationIface,
 				},
 			},
 		},
 	}
 
-	// Apply the policy
+	// Add excluded CIDRs so internal traffic is not masqueraded
+	if len(config.ExcludedCIDRs) > 0 {
+		egressRule.ToCIDR = config.ExcludedCIDRs
+		egressRule.Denied = false // excluded CIDRs are used as exceptions, not denials
+	}
+
+	labels := map[string]string{
+		"type":      natType,
+		"network":   sanitizeNetworkName(config.SourceNetwork),
+		"interface": sanitizeNetworkName(config.DestinationIface),
+	}
+	if config.MasqueradeEnabled {
+		labels["masquerade"] = "true"
+	}
+
+	policy := &CiliumPolicy{
+		Name:   policyName,
+		Labels: labels,
+		Rules:  []CiliumRule{egressRule},
+	}
+
 	return c.ApplyNetworkPolicy(ctx, policy)
 }
 
@@ -185,8 +213,11 @@ func (c *DefaultCiliumClient) ConfigureDPIIntegration(ctx context.Context, confi
 
 // RemoveNAT removes NAT rules
 func (c *DefaultCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATConfig) error {
-	// For IPv6, we need to use NAT66
-	natType := "nat"
+	// Determine the NAT type for policy name resolution
+	natType := "snat"
+	if config.MasqueradeEnabled {
+		natType = "masquerade"
+	}
 	if config.IPv6 {
 		natType = "nat66"
 	}
@@ -204,32 +235,53 @@ func (c *DefaultCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATCo
 	return nil
 }
 
-// CreateNAT64 creates NAT64 rules (IPv6 to IPv4)
+// CreateNAT64 creates NAT64 rules (IPv6 to IPv4).
+// The policy matches IPv6 source traffic and routes it through the NAT64
+// gateway using the well-known prefix (64:ff9b::/96 by default).
 func (c *DefaultCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Config) error {
-	// Create NAT64 policy name
+	if config.SourceNetwork == "" {
+		return fmt.Errorf("source network is required for NAT64 policy")
+	}
+	if config.DestinationIface == "" {
+		return fmt.Errorf("destination interface is required for NAT64 policy")
+	}
+
+	// Use the configured prefix or default to the well-known NAT64 prefix
+	nat64Prefix := config.Prefix64
+	if nat64Prefix == "" {
+		nat64Prefix = DefaultNAT64Prefix
+	}
+
 	policyName := fmt.Sprintf("nat64-%s", sanitizeNetworkName(config.SourceNetwork))
 
-	// Create a policy that enables NAT64 for the source network
-	policy := &CiliumPolicy{
-		Name: policyName,
-		Labels: map[string]string{
-			"type": "nat64",
-			"network": sanitizeNetworkName(config.SourceNetwork),
-		},
-		Rules: []CiliumRule{
+	// The NAT64 rule matches IPv6 source traffic and allows egress to
+	// the NAT64 prefix on the destination interface. Cilium's eBPF
+	// datapath performs the actual 6-to-4 translation.
+	nat64Rule := CiliumRule{
+		FromCIDR: []string{config.SourceNetwork},
+		ToCIDR:   []string{nat64Prefix},
+		ToEndpoints: []Endpoint{
 			{
-				ToEndpoints: []Endpoint{
-					{
-						Labels: map[string]string{
-							"interface": config.DestinationIface,
-						},
-					},
+				Labels: map[string]string{
+					"interface": config.DestinationIface,
 				},
 			},
 		},
 	}
 
-	// Apply the policy
+	labels := map[string]string{
+		"type":         "nat64",
+		"network":      sanitizeNetworkName(config.SourceNetwork),
+		"interface":    sanitizeNetworkName(config.DestinationIface),
+		"nat64-prefix": sanitizeNetworkName(nat64Prefix),
+	}
+
+	policy := &CiliumPolicy{
+		Name:   policyName,
+		Labels: labels,
+		Rules:  []CiliumRule{nat64Rule},
+	}
+
 	return c.ApplyNetworkPolicy(ctx, policy)
 }
 
@@ -248,40 +300,68 @@ func (c *DefaultCiliumClient) RemoveNAT64(ctx context.Context, config *NAT64Conf
 	return nil
 }
 
-// CreatePortForward creates port forwarding rules
+// CreatePortForward creates port forwarding rules (DNAT).
+// This creates a Cilium policy that accepts traffic on the external IP/port
+// and redirects it to the internal IP/port via DNAT semantics.
 func (c *DefaultCiliumClient) CreatePortForward(ctx context.Context, config *PortForwardConfig) error {
-	// Create port forwarding policy name
+	if config.ExternalIP == "" {
+		return fmt.Errorf("external IP is required for port forwarding")
+	}
+	if config.InternalIP == "" {
+		return fmt.Errorf("internal IP is required for port forwarding")
+	}
+	if config.ExternalPort <= 0 || config.ExternalPort > 65535 {
+		return fmt.Errorf("external port must be between 1 and 65535, got %d", config.ExternalPort)
+	}
+	if config.InternalPort <= 0 || config.InternalPort > 65535 {
+		return fmt.Errorf("internal port must be between 1 and 65535, got %d", config.InternalPort)
+	}
+	if config.Protocol == "" {
+		return fmt.Errorf("protocol is required for port forwarding")
+	}
+
 	policyName := fmt.Sprintf("portforward-%s-%d-%s",
 		sanitizeNetworkName(config.ExternalIP),
 		config.ExternalPort,
 		config.Protocol)
 
-	// Create a policy that enables port forwarding
-	policy := &CiliumPolicy{
-		Name: policyName,
-		Labels: map[string]string{
-			"type": "portforward",
-			"externalIP": sanitizeNetworkName(config.ExternalIP),
-			"externalPort": fmt.Sprintf("%d", config.ExternalPort),
-			"protocol": config.Protocol,
-		},
-		Rules: []CiliumRule{
+	// The DNAT rule: ingress traffic to externalIP:externalPort is redirected
+	// to internalIP:internalPort. The ToCIDR specifies the backend, and
+	// ToPorts specifies the external-facing port that triggers the redirect.
+	dnatRule := CiliumRule{
+		ToCIDR: []string{fmt.Sprintf("%s/32", config.InternalIP)},
+		ToPorts: []PortRule{
 			{
-				ToPorts: []PortRule{
+				Ports: []Port{
 					{
-						Ports: []Port{
-							{
-								Port: uint16(config.ExternalPort),
-								Protocol: config.Protocol,
-							},
-						},
+						Port:     uint16(config.ExternalPort),
+						Protocol: config.Protocol,
 					},
 				},
 			},
 		},
+		FromCIDR: []string{fmt.Sprintf("%s/32", config.ExternalIP)},
 	}
 
-	// Apply the policy
+	labels := map[string]string{
+		"type":         "portforward",
+		"externalIP":   sanitizeNetworkName(config.ExternalIP),
+		"externalPort": fmt.Sprintf("%d", config.ExternalPort),
+		"internalIP":   sanitizeNetworkName(config.InternalIP),
+		"internalPort": fmt.Sprintf("%d", config.InternalPort),
+		"protocol":     config.Protocol,
+	}
+	if config.Description != "" {
+		labels["description"] = sanitizeNetworkName(config.Description)
+	}
+
+	policy := &CiliumPolicy{
+		Name:        policyName,
+		Description: config.Description,
+		Labels:      labels,
+		Rules:       []CiliumRule{dnatRule},
+	}
+
 	return c.ApplyNetworkPolicy(ctx, policy)
 }
 
