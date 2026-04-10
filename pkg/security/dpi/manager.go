@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +33,9 @@ type DPIManager struct {
 	eventChan        chan common.DPIEvent
 	eventHandlers    []func(common.DPIEvent)
 
+	// Policy pipeline for DPI event -> Cilium policy automation
+	policyPipeline   *PolicyPipeline
+
 	// Control
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -52,6 +54,9 @@ type DPIManagerOptions struct {
 	SuricataRulesPath string
 	SuricataListPath string
 	SuricataMode     string // "ids" or "ips"
+
+	// Policy pipeline rules for automated DPI -> Cilium policy enforcement
+	PolicyRules      []PolicyRule
 
 	// General options
 	KubernetesMode   bool   // Whether running in Kubernetes
@@ -88,17 +93,34 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Build the policy pipeline with configured rules (or sensible defaults)
+	pipelineRules := opts.PolicyRules
+	if len(pipelineRules) == 0 {
+		pipelineRules = []PolicyRule{
+			{
+				Name:            "high-severity-block",
+				MinSeverity:     3,
+				Categories:      []string{},
+				Action:          ActionBlock,
+				Duration:        30 * time.Minute,
+				AggregateWindow: 5 * time.Minute,
+			},
+		}
+	}
+	pipeline := NewPolicyPipeline(opts.CiliumClient, pipelineRules)
+
 	manager := &DPIManager{
-		profiles:     make(map[string]*DPIProfile),
-		flows:        make(map[string]*DPIFlow),
-		flowStats:    make(map[string]*FlowStatistics),
-		appDetector:  NewApplicationDetector(),
-		ciliumClient: opts.CiliumClient,
-		networkCtrl:  cilium.NewNetworkController(opts.CiliumClient),
-		eventChan:    make(chan common.DPIEvent, 1000),
-		eventHandlers: make([]func(common.DPIEvent), 0),
-		ctx:          ctx,
-		cancel:       cancel,
+		profiles:       make(map[string]*DPIProfile),
+		flows:          make(map[string]*DPIFlow),
+		flowStats:      make(map[string]*FlowStatistics),
+		appDetector:    NewApplicationDetector(),
+		ciliumClient:   opts.CiliumClient,
+		networkCtrl:    cilium.NewNetworkController(opts.CiliumClient),
+		eventChan:      make(chan common.DPIEvent, 1000),
+		eventHandlers:  make([]func(common.DPIEvent), 0),
+		policyPipeline: pipeline,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	// Initialize Zeek connector if paths are provided
@@ -336,6 +358,12 @@ func (m *DPIManager) Start() error {
 
 	// Apply DPI profiles and flows to configure what to inspect
 	m.applyProfilesToEngines()
+
+	// Start the policy pipeline expiry cleanup goroutine
+	if m.policyPipeline != nil {
+		m.policyPipeline.Start(m.ctx)
+		fmt.Println("Started DPI policy pipeline")
+	}
 
 	// Start a goroutine to periodically update protocol statistics
 	go m.periodicStatsUpdate()
@@ -848,12 +876,8 @@ func (m *DPIManager) handleHTTPFlow(event common.DPIEvent) {
 	}
 }
 
-// handleAlertEvent handles an alert event
+// handleAlertEvent handles an alert event by routing it through the policy pipeline.
 func (m *DPIManager) handleAlertEvent(event common.DPIEvent) {
-	// Process alert event
-	// In a real implementation, would trigger policy updates,
-	// send notifications, etc.
-
 	// Check the source of the alert
 	source := "unknown"
 	if event.RawData != nil {
@@ -866,14 +890,19 @@ func (m *DPIManager) handleAlertEvent(event common.DPIEvent) {
 	fmt.Printf("Alert event from %s: %s (severity %d) - %s\n",
 		source, event.Signature, event.Severity, event.Description)
 
-	// For high-severity alerts, create a blocking policy
-	if event.Severity >= 3 {
-		// If this is a Suricata alert and we're in IPS mode, Suricata will handle the blocking
-		if source == "suricata" && m.suricataConnector != nil && m.suricataConnector.GetMode() == "ips" {
-			fmt.Printf("Suricata IPS will handle blocking for alert: %s\n", event.Signature)
-		} else {
-			// Otherwise, create a blocking policy ourselves
-			m.createBlockingPolicy(event)
+	// If this is a Suricata alert and we're in IPS mode, Suricata handles inline blocking
+	if source == "suricata" && m.suricataConnector != nil && m.suricataConnector.GetMode() == "ips" {
+		fmt.Printf("Suricata IPS will handle inline blocking for alert: %s\n", event.Signature)
+		// Still route through the pipeline for visibility/audit, but Suricata
+		// is the primary enforcement point in IPS mode.
+	}
+
+	// Route all alert events through the policy pipeline for rule-based enforcement.
+	// The pipeline handles severity thresholds, category matching, deduplication,
+	// and Cilium policy creation/expiry.
+	if m.policyPipeline != nil {
+		if err := m.policyPipeline.ProcessEvent(m.ctx, event); err != nil {
+			fmt.Printf("Policy pipeline error for alert %s: %v\n", event.Signature, err)
 		}
 	}
 }
@@ -887,40 +916,9 @@ func (m *DPIManager) handleNoticeEvent(event common.DPIEvent) {
 	fmt.Printf("Notice event: %s - %s\n", event.Signature, event.Description)
 }
 
-// createBlockingPolicy creates a blocking policy for an event
-func (m *DPIManager) createBlockingPolicy(event common.DPIEvent) {
-	// Create a policy to block traffic related to the event
-	policy := &cilium.CiliumPolicy{
-		Name: fmt.Sprintf("dpi-block-%s-%s", event.EventType, normalizeString(event.Signature)),
-		Labels: map[string]string{
-			"app":       "dpi",
-			"event":     event.EventType,
-			"signature": normalizeString(event.Signature),
-			"severity":  fmt.Sprintf("%d", event.Severity),
-		},
-	}
-
-	// Add rules based on the event
-	if event.SourceIP != "" {
-		policy.Rules = append(policy.Rules, cilium.CiliumRule{
-			FromCIDR: []string{event.SourceIP + "/32"},
-			Denied:   true,
-		})
-	}
-
-	if event.DestIP != "" {
-		policy.Rules = append(policy.Rules, cilium.CiliumRule{
-			ToCIDR: []string{event.DestIP + "/32"},
-			Denied:  true,
-		})
-	}
-
-	// Apply the policy
-	if err := m.ciliumClient.ApplyNetworkPolicy(m.ctx, policy); err != nil {
-		fmt.Printf("Failed to apply blocking policy: %v\n", err)
-	} else {
-		fmt.Printf("Applied blocking policy for %s\n", event.Signature)
-	}
+// GetPolicyPipeline returns the policy pipeline for external inspection or configuration.
+func (m *DPIManager) GetPolicyPipeline() *PolicyPipeline {
+	return m.policyPipeline
 }
 
 // EventChan returns the event channel for sending events to the DPI manager
@@ -1038,17 +1036,3 @@ func isImportantProtocol(proto string) bool {
 	return importantProtocols[proto]
 }
 
-// normalizeString normalizes a string for use in policy names
-func normalizeString(s string) string {
-	// Replace spaces and special characters with hyphens
-	s = strings.ReplaceAll(s, " ", "-")
-	s = strings.ReplaceAll(s, ".", "-")
-	s = strings.ReplaceAll(s, ":", "-")
-	s = strings.ReplaceAll(s, "/", "-")
-	s = strings.ReplaceAll(s, "\\", "-")
-
-	// Convert to lowercase
-	s = strings.ToLower(s)
-
-	return s
-}

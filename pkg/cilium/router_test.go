@@ -59,6 +59,10 @@ func (c *MockCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *
 	return nil
 }
 
+func (c *MockCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	return nil
+}
+
 // AddRoute adds a route to the mock client
 func (c *MockCiliumClient) AddRoute(route Route) error {
 	key := routeKey(route)

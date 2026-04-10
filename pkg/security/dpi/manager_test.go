@@ -66,6 +66,11 @@ func (m *MockCiliumClient) ConfigureVLANRouting(ctx context.Context, config *cil
 	return nil
 }
 
+// DeleteNetworkPolicy is a mock implementation
+func (m *MockCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	return nil
+}
+
 // TestDPIManager_AddProfile tests the AddProfile method
 func TestDPIManager_AddProfile(t *testing.T) {
 	// Create a mock Cilium client
@@ -256,22 +261,35 @@ func TestDPIManager_HandleAlertEvent(t *testing.T) {
 	// Send the event
 	manager.handleAlertEvent(event)
 
-	// Verify a blocking policy was created
+	// Verify a blocking policy was created via the policy pipeline
 	if !mockClient.ApplyNetworkPolicyCalled {
 		t.Errorf("Expected ApplyNetworkPolicy to be called")
 	}
 	if mockClient.LastPolicy == nil {
 		t.Errorf("Expected LastPolicy to be set")
 	} else {
-		// Verify the policy is correct
-		if mockClient.LastPolicy.Labels["app"] != "dpi" {
-			t.Errorf("Expected policy label 'app' to be 'dpi', got '%s'", mockClient.LastPolicy.Labels["app"])
+		// The policy pipeline labels use fos1.io/ prefixed keys
+		if mockClient.LastPolicy.Labels["fos1.io/auto-generated"] != "true" {
+			t.Errorf("Expected policy label 'fos1.io/auto-generated' to be 'true', got '%s'", mockClient.LastPolicy.Labels["fos1.io/auto-generated"])
 		}
-		if mockClient.LastPolicy.Labels["event"] != "alert" {
-			t.Errorf("Expected policy label 'event' to be 'alert', got '%s'", mockClient.LastPolicy.Labels["event"])
+		if mockClient.LastPolicy.Labels["fos1.io/source-ip"] != "192.168.1.10" {
+			t.Errorf("Expected policy label 'fos1.io/source-ip' to be '192.168.1.10', got '%s'", mockClient.LastPolicy.Labels["fos1.io/source-ip"])
 		}
-		if mockClient.LastPolicy.Labels["severity"] != "3" {
-			t.Errorf("Expected policy label 'severity' to be '3', got '%s'", mockClient.LastPolicy.Labels["severity"])
+		if mockClient.LastPolicy.Labels["fos1.io/action"] != "block" {
+			t.Errorf("Expected policy label 'fos1.io/action' to be 'block', got '%s'", mockClient.LastPolicy.Labels["fos1.io/action"])
+		}
+
+		// Verify CIDR-based deny rule exists
+		if len(mockClient.LastPolicy.Rules) == 0 {
+			t.Errorf("Expected at least one rule in the policy")
+		} else {
+			rule := mockClient.LastPolicy.Rules[0]
+			if !rule.Denied {
+				t.Error("Expected deny rule for high-severity alert")
+			}
+			if len(rule.FromCIDR) == 0 || rule.FromCIDR[0] != "192.168.1.10/32" {
+				t.Errorf("Expected FromCIDR '192.168.1.10/32', got %v", rule.FromCIDR)
+			}
 		}
 	}
 }

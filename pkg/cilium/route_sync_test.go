@@ -68,6 +68,10 @@ func (m *MockCiliumClientForRouting) ConfigureDPIIntegration(ctx context.Context
 	return nil
 }
 
+func (m *MockCiliumClientForRouting) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	return nil
+}
+
 // addRouteToCilium is called by the RouteSynchronizer to add a route
 func (m *MockCiliumClientForRouting) AddRoute(route Route) error {
 	if m.shouldError {

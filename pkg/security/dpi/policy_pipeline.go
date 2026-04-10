@@ -30,6 +30,16 @@ type PolicyRule struct {
 	AggregateWindow time.Duration // deduplicate events within this window
 }
 
+// EnforcementAction records an auditable enforcement action taken by the pipeline.
+type EnforcementAction struct {
+	Timestamp  time.Time
+	ActionType string // "created", "removed", "expired"
+	PolicyName string
+	SourceIP   string
+	Rule       string
+	Detail     string
+}
+
 // ActivePolicy tracks a policy that has been applied to the firewall.
 type ActivePolicy struct {
 	Name       string
@@ -39,6 +49,10 @@ type ActivePolicy struct {
 	ExpiresAt  time.Time
 	EventCount int
 	Rule       string // name of the PolicyRule that created this
+
+	// Enforcement audit metadata
+	TriggerEvent common.DPIEvent      // the event that triggered this policy
+	Actions      []EnforcementAction  // audit trail of enforcement actions
 }
 
 // PolicyPipeline processes DPI events and auto-generates firewall policies
@@ -132,30 +146,42 @@ func (p *PolicyPipeline) ruleMatches(rule PolicyRule, event common.DPIEvent) boo
 
 // createPolicy creates and applies a Cilium policy for the matched event.
 func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, event common.DPIEvent, policyKey string) error {
-	policyName := fmt.Sprintf("dpi-auto-%s-%s", rule.Name, event.SourceIP)
+	policyName := fmt.Sprintf("dpi-auto-%s-%s", rule.Name, sanitizePolicyName(event.SourceIP))
 
 	policy := &cilium.CiliumPolicy{
 		Name:        policyName,
 		Description: fmt.Sprintf("Auto-generated from DPI event: %s (severity=%d)", event.Description, event.Severity),
 		Labels: map[string]string{
 			"fos1.io/auto-generated": "true",
-			"fos1.io/dpi-rule":      rule.Name,
-			"fos1.io/source-ip":     event.SourceIP,
+			"fos1.io/dpi-rule":       rule.Name,
+			"fos1.io/source-ip":      event.SourceIP,
+			"fos1.io/action":         string(rule.Action),
 		},
+	}
+
+	// Build CIDR for the source IP
+	srcCIDR := event.SourceIP
+	if srcCIDR != "" && !containsPolicySlash(srcCIDR) {
+		srcCIDR = srcCIDR + "/32"
 	}
 
 	switch rule.Action {
 	case ActionBlock:
+		// Create a deny rule that blocks traffic from the source CIDR
 		policy.Rules = []cilium.CiliumRule{{
-			Action: "deny",
+			FromCIDR: []string{srcCIDR},
+			Denied:   true,
+			Action:   "deny",
 		}}
 	case ActionLog:
 		policy.Rules = []cilium.CiliumRule{{
-			Action: "log",
+			FromCIDR: []string{srcCIDR},
+			Action:   "log",
 		}}
 	case ActionRateLimit:
 		policy.Rules = []cilium.CiliumRule{{
-			Action: "allow",
+			FromCIDR: []string{srcCIDR},
+			Action:   "allow",
 		}}
 	}
 
@@ -165,12 +191,23 @@ func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, even
 
 	now := time.Now()
 	ap := &ActivePolicy{
-		Name:       policyName,
-		SourceIP:   event.SourceIP,
-		Policy:     policy,
-		CreatedAt:  now,
-		EventCount: 1,
-		Rule:       rule.Name,
+		Name:         policyName,
+		SourceIP:     event.SourceIP,
+		Policy:       policy,
+		CreatedAt:    now,
+		EventCount:   1,
+		Rule:         rule.Name,
+		TriggerEvent: event,
+		Actions: []EnforcementAction{
+			{
+				Timestamp:  now,
+				ActionType: "created",
+				PolicyName: policyName,
+				SourceIP:   event.SourceIP,
+				Rule:       rule.Name,
+				Detail:     fmt.Sprintf("action=%s severity=%d category=%s description=%q", rule.Action, event.Severity, event.Category, event.Description),
+			},
+		},
 	}
 
 	if rule.Duration > 0 {
@@ -179,8 +216,8 @@ func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, even
 
 	p.activePolicies[policyKey] = ap
 
-	klog.Infof("Created DPI auto-policy %s: action=%s source=%s severity=%d",
-		policyName, rule.Action, event.SourceIP, event.Severity)
+	klog.Infof("Created DPI auto-policy %s: action=%s source=%s severity=%d category=%s",
+		policyName, rule.Action, event.SourceIP, event.Severity, event.Category)
 
 	return nil
 }
@@ -202,7 +239,8 @@ func (p *PolicyPipeline) Start(ctx context.Context) {
 	}()
 }
 
-// cleanupExpired removes policies that have exceeded their TTL.
+// cleanupExpired removes policies that have exceeded their TTL,
+// deleting the corresponding Cilium network policy for each.
 func (p *PolicyPipeline) cleanupExpired(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -213,7 +251,15 @@ func (p *PolicyPipeline) cleanupExpired(ctx context.Context) {
 			continue // permanent policy
 		}
 		if now.After(ap.ExpiresAt) {
-			klog.Infof("Expiring DPI auto-policy %s (TTL exceeded)", ap.Name)
+			// Delete the Cilium policy from the cluster
+			if err := p.ciliumClient.DeleteNetworkPolicy(ctx, ap.Name); err != nil {
+				klog.Warningf("Failed to delete expired DPI auto-policy %s: %v", ap.Name, err)
+				continue // retry on next tick
+			}
+
+			klog.Infof("Expired and removed DPI auto-policy %s (TTL exceeded, was active for %s, triggered %d events)",
+				ap.Name, now.Sub(ap.CreatedAt).Round(time.Second), ap.EventCount)
+
 			delete(p.activePolicies, key)
 			delete(p.recentEvents, key)
 		}
@@ -232,14 +278,22 @@ func (p *PolicyPipeline) GetActivePolicies() []*ActivePolicy {
 	return result
 }
 
-// RemovePolicy manually removes an active policy.
-func (p *PolicyPipeline) RemovePolicy(policyKey string) error {
+// RemovePolicy manually removes an active policy and deletes the corresponding Cilium policy.
+func (p *PolicyPipeline) RemovePolicy(ctx context.Context, policyKey string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if _, exists := p.activePolicies[policyKey]; !exists {
+	ap, exists := p.activePolicies[policyKey]
+	if !exists {
 		return fmt.Errorf("policy %s not found", policyKey)
 	}
+
+	// Delete the Cilium policy from the cluster
+	if err := p.ciliumClient.DeleteNetworkPolicy(ctx, ap.Name); err != nil {
+		return fmt.Errorf("failed to delete Cilium policy %s: %w", ap.Name, err)
+	}
+
+	klog.Infof("Manually removed DPI auto-policy %s", ap.Name)
 
 	delete(p.activePolicies, policyKey)
 	delete(p.recentEvents, policyKey)
@@ -251,4 +305,33 @@ func (p *PolicyPipeline) ActivePolicyCount() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.activePolicies)
+}
+
+// containsPolicySlash checks if a string contains a slash (for CIDR notation).
+func containsPolicySlash(s string) bool {
+	for _, c := range s {
+		if c == '/' {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizePolicyName converts an IP or string into a valid K8s resource name component.
+func sanitizePolicyName(s string) string {
+	result := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			result = append(result, c)
+		} else if c >= 'A' && c <= 'Z' {
+			result = append(result, c+32) // lowercase
+		} else {
+			result = append(result, '-')
+		}
+	}
+	if len(result) > 63 {
+		result = result[:63]
+	}
+	return string(result)
 }
