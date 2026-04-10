@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	ciliumclientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned"
@@ -148,4 +149,52 @@ func (c *KubernetesCiliumClient) DeleteNetworkPolicy(ctx context.Context, policy
 	}
 	log.Printf("Deleted Cilium policy %s", policyName)
 	return nil
+}
+
+// ListRoutes returns routes from the CRD store.
+func (c *KubernetesCiliumClient) ListRoutes(ctx context.Context) ([]Route, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "routes.networking.fos1.io", "-A", "-o", "json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list routes: %w\nOutput: %s", err, string(output))
+	}
+	return routesFromKubectlJSON(output)
+}
+
+// ListVRFRoutes returns routes for a specific VRF.
+func (c *KubernetesCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	routes, err := c.ListRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	vrfName := fmt.Sprintf("vrf-%d", vrfID)
+	filtered := make([]Route, 0)
+	for _, route := range routes {
+		if route.VRF == vrfName {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered, nil
+}
+
+// AddRoute applies a route through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) AddRoute(route Route) error {
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteRoute removes a route through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) DeleteRoute(route Route) error {
+	return deleteRouteManifest(route)
+}
+
+// AddVRFRoute applies a route in a VRF through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) AddVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteVRFRoute removes a route in a VRF through the Kubernetes-backed client.
+func (c *KubernetesCiliumClient) DeleteVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return deleteRouteManifest(route)
 }

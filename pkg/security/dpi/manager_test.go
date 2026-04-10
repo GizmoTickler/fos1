@@ -71,6 +71,13 @@ func (m *MockCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName s
 	return nil
 }
 
+func (m *MockCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error)              { return nil, nil }
+func (m *MockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) { return nil, nil }
+func (m *MockCiliumClient) AddRoute(route cilium.Route) error                                    { return nil }
+func (m *MockCiliumClient) DeleteRoute(route cilium.Route) error                                 { return nil }
+func (m *MockCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error                      { return nil }
+func (m *MockCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error                   { return nil }
+
 // TestDPIManager_AddProfile tests the AddProfile method
 func TestDPIManager_AddProfile(t *testing.T) {
 	// Create a mock Cilium client

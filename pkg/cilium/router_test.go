@@ -27,6 +27,14 @@ func (c *MockCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Ciliu
 	return nil
 }
 
+func (c *MockCiliumClient) ListRoutes(ctx context.Context) ([]Route, error) {
+	return nil, nil
+}
+
+func (c *MockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	return nil, nil
+}
+
 func (c *MockCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
 	return nil
 }

@@ -45,6 +45,13 @@ func (c *testCiliumClient) ApplyNetworkPolicy(_ context.Context, policy *cilium.
 	return nil
 }
 
+func (c *testCiliumClient) DeleteNetworkPolicy(_ context.Context, policyName string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.policies, policyName)
+	return nil
+}
+
 func (c *testCiliumClient) ListRoutes(_ context.Context) ([]cilium.Route, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -283,7 +290,7 @@ func TestVRFTableID_InvalidExplicitID_FallsBack(t *testing.T) {
 
 func TestSyncVRFPolicies_EmptyVRF(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	vrf := routing.VRF{
 		Name:       "empty-vrf",
@@ -292,7 +299,7 @@ func TestSyncVRFPolicies_EmptyVRF(t *testing.T) {
 		LeakRoutes: []routing.RouteLeak{},
 	}
 
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err != nil {
 		t.Fatalf("SyncVRFPolicies for empty VRF should succeed, got: %v", err)
 	}
@@ -310,7 +317,7 @@ func TestSyncVRFPolicies_EmptyVRF(t *testing.T) {
 
 func TestSyncVRFPolicies_WithRoutes(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	vrf := routing.VRF{
 		Name:       "test-vrf",
@@ -325,7 +332,7 @@ func TestSyncVRFPolicies_WithRoutes(t *testing.T) {
 		},
 	}
 
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err != nil {
 		t.Fatalf("SyncVRFPolicies failed: %v", err)
 	}
@@ -359,7 +366,7 @@ func TestSyncVRFPolicies_WithRoutes(t *testing.T) {
 
 func TestSyncVRFPolicies_Idempotent(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	vrf := routing.VRF{
 		Name:       "idempotent-vrf",
@@ -373,7 +380,7 @@ func TestSyncVRFPolicies_Idempotent(t *testing.T) {
 	}
 
 	// First sync
-	if err := sync.SyncVRFPolicies(vrf); err != nil {
+	if err := s.SyncVRFPolicies(vrf); err != nil {
 		t.Fatalf("First SyncVRFPolicies failed: %v", err)
 	}
 
@@ -381,7 +388,7 @@ func TestSyncVRFPolicies_Idempotent(t *testing.T) {
 	policyCountAfterFirst := len(client.policies)
 
 	// Second sync (should be idempotent - routes already exist, policies re-applied via kubectl apply)
-	if err := sync.SyncVRFPolicies(vrf); err != nil {
+	if err := s.SyncVRFPolicies(vrf); err != nil {
 		t.Fatalf("Second SyncVRFPolicies failed: %v", err)
 	}
 
@@ -400,7 +407,7 @@ func TestSyncVRFPolicies_Idempotent(t *testing.T) {
 
 func TestSyncVRFPolicies_RemovesStaleRoutes(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	// Pre-populate a stale route in the VRF
 	_, staleNet, _ := net.ParseCIDR("192.168.99.0/24")
@@ -423,7 +430,7 @@ func TestSyncVRFPolicies_RemovesStaleRoutes(t *testing.T) {
 		},
 	}
 
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err != nil {
 		t.Fatalf("SyncVRFPolicies failed: %v", err)
 	}
@@ -441,7 +448,7 @@ func TestSyncVRFPolicies_RemovesStaleRoutes(t *testing.T) {
 
 func TestSyncVRFPolicies_NoRoutes(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	vrf := routing.VRF{
 		Name:       "no-routes-vrf",
@@ -450,7 +457,7 @@ func TestSyncVRFPolicies_NoRoutes(t *testing.T) {
 		LeakRoutes: []routing.RouteLeak{},
 	}
 
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err != nil {
 		t.Fatalf("SyncVRFPolicies with no routes failed: %v", err)
 	}
@@ -468,16 +475,16 @@ func TestSyncVRFPolicies_NoRoutes(t *testing.T) {
 
 func TestSyncVRFPolicies_InvalidTableID(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
-	// TableID 0 is invalid for custom tables
+	// TableID 0 is invalid for custom tables, will be resolved via name hash
 	vrf := routing.VRF{
 		Name:    "bad-table",
-		TableID: 0, // Will be resolved via name hash, which should be valid
+		TableID: 0,
 	}
 
 	// This should still work because vrfNameToTableID maps to 1-252
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err != nil {
 		t.Fatalf("SyncVRFPolicies should succeed with name-derived table ID: %v", err)
 	}
@@ -486,7 +493,7 @@ func TestSyncVRFPolicies_InvalidTableID(t *testing.T) {
 func TestSyncVRFPolicies_CiliumClientError(t *testing.T) {
 	client := newTestCiliumClient()
 	client.shouldError = true
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	vrf := routing.VRF{
 		Name:       "error-vrf",
@@ -497,7 +504,7 @@ func TestSyncVRFPolicies_CiliumClientError(t *testing.T) {
 		},
 	}
 
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err == nil {
 		t.Fatal("SyncVRFPolicies should return error when Cilium client fails")
 	}
@@ -505,7 +512,7 @@ func TestSyncVRFPolicies_CiliumClientError(t *testing.T) {
 
 func TestSyncVRFPolicies_InvalidDestination(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	vrf := routing.VRF{
 		Name:    "bad-dest-vrf",
@@ -516,7 +523,7 @@ func TestSyncVRFPolicies_InvalidDestination(t *testing.T) {
 	}
 
 	// Should succeed, skipping the invalid destination with a warning
-	err := sync.SyncVRFPolicies(vrf)
+	err := s.SyncVRFPolicies(vrf)
 	if err != nil {
 		t.Fatalf("SyncVRFPolicies should skip invalid destinations: %v", err)
 	}
@@ -620,7 +627,7 @@ func TestVrfNameToTableID_Deterministic(t *testing.T) {
 
 func TestRealCiliumSynchronizer_SyncRoute(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	route := routing.Route{
 		Destination: "10.0.0.0/24",
@@ -630,7 +637,7 @@ func TestRealCiliumSynchronizer_SyncRoute(t *testing.T) {
 		VRF:         "",
 	}
 
-	if err := sync.SyncRoute(route); err != nil {
+	if err := s.SyncRoute(route); err != nil {
 		t.Fatalf("SyncRoute failed: %v", err)
 	}
 
@@ -641,7 +648,7 @@ func TestRealCiliumSynchronizer_SyncRoute(t *testing.T) {
 
 func TestRealCiliumSynchronizer_RemoveRoute(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	// Add a route first
 	route := routing.Route{
@@ -649,13 +656,13 @@ func TestRealCiliumSynchronizer_RemoveRoute(t *testing.T) {
 		NextHops:    []routing.NextHop{{Address: "192.168.1.1"}},
 		Table:       "main",
 	}
-	if err := sync.SyncRoute(route); err != nil {
+	if err := s.SyncRoute(route); err != nil {
 		t.Fatalf("SyncRoute failed: %v", err)
 	}
 
 	// Now remove it
 	params := routing.RouteParams{Table: "main", VRF: ""}
-	if err := sync.RemoveRoute("10.0.0.0/24", params); err != nil {
+	if err := s.RemoveRoute("10.0.0.0/24", params); err != nil {
 		t.Fatalf("RemoveRoute failed: %v", err)
 	}
 
@@ -668,7 +675,7 @@ func TestRealCiliumSynchronizer_RemoveRoute(t *testing.T) {
 
 func TestSyncVRFPolicies_InterfaceOrdering(t *testing.T) {
 	client := newTestCiliumClient()
-	sync := &realCiliumSynchronizer{client: client}
+	s := &realCiliumSynchronizer{client: client}
 
 	// Provide interfaces in unsorted order
 	vrf := routing.VRF{
@@ -678,7 +685,7 @@ func TestSyncVRFPolicies_InterfaceOrdering(t *testing.T) {
 		LeakRoutes: []routing.RouteLeak{},
 	}
 
-	if err := sync.SyncVRFPolicies(vrf); err != nil {
+	if err := s.SyncVRFPolicies(vrf); err != nil {
 		t.Fatalf("SyncVRFPolicies failed: %v", err)
 	}
 

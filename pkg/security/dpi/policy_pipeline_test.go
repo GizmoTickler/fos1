@@ -58,6 +58,12 @@ func (m *pipelineMockCiliumClient) CreatePortForward(ctx context.Context, config
 func (m *pipelineMockCiliumClient) RemovePortForward(ctx context.Context, config *cilium.PortForwardConfig) error {
 	return nil
 }
+func (m *pipelineMockCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error)              { return nil, nil }
+func (m *pipelineMockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) { return nil, nil }
+func (m *pipelineMockCiliumClient) AddRoute(route cilium.Route) error                                    { return nil }
+func (m *pipelineMockCiliumClient) DeleteRoute(route cilium.Route) error                                 { return nil }
+func (m *pipelineMockCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error                      { return nil }
+func (m *pipelineMockCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error                   { return nil }
 func (m *pipelineMockCiliumClient) ConfigureVLANRouting(ctx context.Context, config *cilium.CiliumVLANRoutingConfig) error {
 	return nil
 }

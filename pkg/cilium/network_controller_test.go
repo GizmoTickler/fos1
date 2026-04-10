@@ -69,6 +69,18 @@ func (m *MockNetworkCiliumClient) ConfigureDPIIntegration(ctx context.Context, c
 	return nil
 }
 
+func (m *MockNetworkCiliumClient) ListRoutes(ctx context.Context) ([]Route, error)              { return nil, nil }
+func (m *MockNetworkCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) { return nil, nil }
+func (m *MockNetworkCiliumClient) AddRoute(route Route) error                                    { return nil }
+func (m *MockNetworkCiliumClient) DeleteRoute(route Route) error                                 { return nil }
+func (m *MockNetworkCiliumClient) AddVRFRoute(route Route, vrfID int) error                      { return nil }
+func (m *MockNetworkCiliumClient) DeleteVRFRoute(route Route, vrfID int) error                   { return nil }
+func (m *MockNetworkCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATConfig) error  { return nil }
+func (m *MockNetworkCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Config) error    { return nil }
+func (m *MockNetworkCiliumClient) RemoveNAT64(ctx context.Context, config *NAT64Config) error    { return nil }
+func (m *MockNetworkCiliumClient) CreatePortForward(ctx context.Context, config *PortForwardConfig) error { return nil }
+func (m *MockNetworkCiliumClient) RemovePortForward(ctx context.Context, config *PortForwardConfig) error { return nil }
+
 // TestNetworkController_ConfigureNAT tests the ConfigureNAT method
 func TestNetworkController_ConfigureNAT(t *testing.T) {
 	// Create a mock client

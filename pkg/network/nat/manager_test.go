@@ -80,6 +80,14 @@ func (m *mockCiliumClient) ConfigureDPIIntegration(_ context.Context, _ *cilium.
 	return nil
 }
 
+func (m *mockCiliumClient) DeleteNetworkPolicy(_ context.Context, _ string) error              { return nil }
+func (m *mockCiliumClient) ListRoutes(_ context.Context) ([]cilium.Route, error)               { return nil, nil }
+func (m *mockCiliumClient) ListVRFRoutes(_ context.Context, _ int) ([]cilium.Route, error)     { return nil, nil }
+func (m *mockCiliumClient) AddRoute(_ cilium.Route) error                                      { return nil }
+func (m *mockCiliumClient) DeleteRoute(_ cilium.Route) error                                   { return nil }
+func (m *mockCiliumClient) AddVRFRoute(_ cilium.Route, _ int) error                            { return nil }
+func (m *mockCiliumClient) DeleteVRFRoute(_ cilium.Route, _ int) error                         { return nil }
+
 // validSNATConfig returns a valid SNAT config for testing
 func validSNATConfig() Config {
 	return Config{

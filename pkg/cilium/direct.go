@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os/exec"
 )
 
 // DirectCiliumClient implements the CiliumClient interface for direct API calls
@@ -91,4 +92,52 @@ func (c *DirectCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Cil
 	fmt.Printf("Policy: %+v\n", policy)
 
 	return nil
+}
+
+// ListRoutes returns routes from the CRD store.
+func (c *DirectCiliumClient) ListRoutes(ctx context.Context) ([]Route, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "routes.networking.fos1.io", "-A", "-o", "json")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list routes: %w\nOutput: %s", err, string(output))
+	}
+	return routesFromKubectlJSON(output)
+}
+
+// ListVRFRoutes returns routes for a specific VRF.
+func (c *DirectCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
+	routes, err := c.ListRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	vrfName := fmt.Sprintf("vrf-%d", vrfID)
+	filtered := make([]Route, 0)
+	for _, route := range routes {
+		if route.VRF == vrfName {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered, nil
+}
+
+// AddRoute applies a route through the direct client.
+func (c *DirectCiliumClient) AddRoute(route Route) error {
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteRoute removes a route through the direct client.
+func (c *DirectCiliumClient) DeleteRoute(route Route) error {
+	return deleteRouteManifest(route)
+}
+
+// AddVRFRoute applies a route in a VRF through the direct client.
+func (c *DirectCiliumClient) AddVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return applyRouteManifest(route, "upsert")
+}
+
+// DeleteVRFRoute removes a route in a VRF through the direct client.
+func (c *DirectCiliumClient) DeleteVRFRoute(route Route, vrfID int) error {
+	route.VRF = fmt.Sprintf("vrf-%d", vrfID)
+	return deleteRouteManifest(route)
 }

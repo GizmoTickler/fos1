@@ -343,6 +343,24 @@ type CiliumClient interface {
 	// DeleteNetworkPolicy removes a Cilium network policy by name
 	DeleteNetworkPolicy(ctx context.Context, policyName string) error
 
+	// ListRoutes lists routes known to the Cilium control plane
+	ListRoutes(ctx context.Context) ([]Route, error)
+
+	// ListVRFRoutes lists routes for a specific VRF
+	ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error)
+
+	// AddRoute applies a route to the Cilium-managed control plane
+	AddRoute(route Route) error
+
+	// DeleteRoute removes a route from the Cilium-managed control plane
+	DeleteRoute(route Route) error
+
+	// AddVRFRoute applies a route within a VRF context
+	AddVRFRoute(route Route, vrfID int) error
+
+	// DeleteVRFRoute removes a route within a VRF context
+	DeleteVRFRoute(route Route, vrfID int) error
+
 	// CreateNAT creates NAT rules using Cilium's capabilities
 	CreateNAT(ctx context.Context, config *CiliumNATConfig) error
 
