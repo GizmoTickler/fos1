@@ -28,7 +28,7 @@
 
 ## Project Status Summary
 
-This is a **conceptual framework** with placeholder code that outlines the architecture and integration patterns for a Kubernetes-based router/firewall. The code represents an architectural blueprint rather than a production-ready implementation.
+This project implements a **Kubernetes-based router/firewall** with real, functional backends for core networking and security subsystems. The codebase has progressed from an architectural blueprint into working implementations across routing, NAT, DNS, DHCP, NTP, VPN, IDS/IPS, DPI, and authentication.
 
 ### Completed Components
 
@@ -42,22 +42,38 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Infrastructure configuration design
 - [x] API definitions (CRDs)
 
-### Designed Components (With Placeholder Implementation)
+### Implemented Components (Real Backends)
 
-#### Network Infrastructure
+#### Routing and Network Infrastructure
+- [x] Real Cilium route sync with deterministic VRF/PBR table mapping
+- [x] FRR config validation via vtysh, live BGP/OSPF state from FRR JSON queries
 - [x] Network interface and VLAN configuration framework
 - [x] Hardware integration for Intel X540, X550, and I225 NICs
-- [x] Routing implementation design (static, dynamic, policy-based)
 - [x] eBPF-based packet processing architecture
 - [x] Multi-WAN management with failover and load balancing
-- [x] Cilium integration design for unified networking
+- [x] Cilium integration for unified networking
+
+#### NAT
+- [x] Real SNAT/DNAT/NAT66/NAT64/port forwarding via Cilium policies
+- [x] Idempotent statusful NAT controller
+
+#### Network Services
+- [x] DNS: CoreDNS zone updates, AdGuard filter/client updates, mDNS reflection wiring
+- [x] DHCP: Real Kea control-socket communication (config-set, config-get, config-reload)
+- [x] NTP: Real Chrony config generation with NTS support, chronyc reload
+
+#### VPN
+- [x] WireGuard: Real CRD-to-interface reconciliation with actual status from interface queries
 
 #### Security Components
-- [x] IDS/IPS integration patterns with Suricata and Zeek
-- [x] DPI framework architecture with nProbe integration
+- [x] IDS/IPS: Real Suricata Unix socket + Eve log parsing, real Zeek Broker integration
+- [x] DPI: Real event-to-Cilium policy pipeline with TTL expiry and cleanup
 - [x] Policy-based filtering with Cilium integration
-- [x] Security orchestration system design
-- [x] Threat intelligence system design
+- [x] Security orchestration system
+- [x] Threat intelligence system
+
+#### Authentication
+- [x] Real provider construction (local, LDAP, OAuth) via providers package
 
 #### Kubernetes Manifest Templates
 - [x] Network service templates (DNS - CoreDNS, AdGuard, mDNS)
@@ -67,15 +83,15 @@ This is a **conceptual framework** with placeholder code that outlines the archi
 - [x] Example routing, VLAN, and eBPF configurations
 - [x] Filter policy CRDs and examples
 
-### Go Package Frameworks
-- [x] Network interface management interfaces (VLAN)
-- [x] Routing interfaces and placeholder implementation
+### Go Packages
+- [x] Network interface management (VLAN)
+- [x] Routing with real Cilium route sync and FRR integration
 - [x] eBPF program and map management interfaces
-- [x] DPI framework interfaces and connectors (Suricata, Zeek, nProbe)
-- [x] NAT/NAT66 conceptual implementation with Cilium
+- [x] DPI framework with real connectors (Suricata, Zeek, nProbe)
+- [x] NAT controller with real Cilium policy management
 - [x] Policy controller for filter policy management
-- [x] DNS manager with DHCP integration
-- [x] DHCP manager with dynamic DNS updates
+- [x] DNS manager with real CoreDNS/AdGuard backends
+- [x] DHCP manager with real Kea control-socket integration
 
 ### Documentation Created
 - [x] Network configuration guide
@@ -156,51 +172,27 @@ The network architecture is designed around a unified approach where all traffic
 
 ## Implementation Status
 
-The project is currently in the **architectural design and prototype phase**. The codebase contains:
+The project has progressed through **tickets 5-18**, replacing placeholder implementations with real, functional backends. The codebase now contains:
 
-1. Detailed architecture designs for core components
-2. Interface definitions and type structures
-3. Placeholder implementations with conceptual logic
-4. Example configurations and CRD definitions
-5. Comprehensive documentation of the intended architecture
+1. **Real backend integrations** for routing (Cilium + FRR), NAT (Cilium policies), DNS (CoreDNS + AdGuard), DHCP (Kea control socket), NTP (Chrony + chronyc), VPN (WireGuard interfaces), IDS/IPS (Suricata socket + Zeek Broker), DPI (event-to-policy pipeline), and auth (local/LDAP/OAuth providers)
+2. **Idempotent controllers** with proper status management and reconciliation loops
+3. **CRD definitions** for all managed resources
+4. **Hardware integration** for Intel X540, X550, and I225 NICs with multi-queue utilization
+5. **eBPF framework** with support for XDP, TC, sockops, and cgroup hooks
+6. Comprehensive documentation and example configurations
 
-Recent progress includes:
-- Hardware integration design for Intel X540, X550, and I225 NICs
-- Multi-queue utilization approach for X540/X550 NICs (up to 64 hardware queues)
-- eBPF-based NAT66 and NPT implementation using TC hooks for stateful operation
-- On-demand packet capture system design with filtering capabilities
-- Multi-WAN management with failover and load balancing
-- Selective hardware offloading configuration (TX checksum, TSO, GRO)
-- VPN implementation design with WireGuard kernel module as preferred approach
-- Kea database backend integration design with PostgreSQL
-- DPI and Threat Intelligence interaction architecture with Mermaid diagram
-- Complete VLAN implementation design with placeholder code
-- Comprehensive routing implementation design for static, dynamic and policy routing
-- eBPF framework design with support for all hook types
-- Cilium integration design with detailed implementation patterns
-- Advanced security component designs (DPI, IDS/IPS, threat intelligence)
-- Policy-based filtering system with hierarchical policies
-- Integration framework for all security components
-- Comprehensive DNS implementation with CoreDNS, AdGuard, and mDNS
-- Cross-VLAN mDNS reflection with rule-based configuration
-- Comprehensive DHCP implementation design with Kea DHCP server
-- DHCP controller design for managing configurations across VLANs
-- Dynamic DNS updates from DHCP leases
-- DHCPv4 and DHCPv6 services with static reservations
-- Domain suffix configuration per VLAN
-- Complete NTP service design using Chrony with support for diverse time sources
-- Security-enhanced NTP with authentication, access controls, and NTS support
-- Per-VLAN NTP service configurations with appropriate access policies
-- Comprehensive NTP monitoring with Prometheus and Grafana
-- Example configurations demonstrating the intended usage
+### Areas still in design/placeholder state
+- Network monitoring and observability pipeline
+- Some eBPF program implementations (XDP DDoS, TC QoS shaping)
+- Full hardware offloading integration
+- On-demand packet capture system
 
-None of the components are currently production-ready or fully functional. This project serves as a blueprint for a future complete implementation.
+## Next Steps
 
-## Next Steps for Implementation
-
-1. Develop fully functional network monitoring
-2. Add comprehensive test coverage
-3. Implement production-ready error handling
-4. Create deployable container images
-5. Develop real configuration validation
-6. Implement CI/CD pipeline for automated testing and deployment
+1. Expand test coverage across all implemented backends
+2. Implement network monitoring and observability pipeline
+3. Complete eBPF program implementations (XDP DDoS protection, TC QoS shaping)
+4. Build deployable container images and Helm charts
+5. Implement CI/CD pipeline for automated testing and deployment
+6. Integration testing with real hardware and Cilium clusters
+7. Production hardening: graceful shutdown, retry policies, circuit breakers

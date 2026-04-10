@@ -1,4 +1,7 @@
-# Implementation Plan
+# Implementation Plan (Archived)
+
+> **This document is superseded by [`docs/implementation-plan.md`](docs/implementation-plan.md) and [`docs/design/implementation_backlog.md`](docs/design/implementation_backlog.md).** The current plan is codebase-driven and ticket-based. This file is retained for historical reference only.
+
 **Version:** 1.0
 **Date:** 2025-11-12
 **Repository:** Kubernetes-Based Router/Firewall (FOS1)

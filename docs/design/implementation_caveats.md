@@ -31,6 +31,76 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 - The new Cilium-backed routing adapter requires a real Cilium client; callers that still construct the routing controller without one will fail fast.
 - VRF/table translation is still best-effort and uses current string/ID heuristics, not a full authoritative VRF registry.
 
+## Ticket 5 — VRF/PBR
+
+### Caveats
+- VRF identity uses FNV-1a hash mod 252 for string names; this introduces collision risk for large VRF counts. Recommend explicit TableID in production.
+- `SyncRoutingTable` hardcodes vrfID=0 for non-main VRFs instead of resolving VRF name to table ID.
+- Route namespace not set in `applyRouteManifest` metadata.
+
+## Ticket 6+7 — NAT Core
+
+### Caveats
+- Cilium client methods called with `nil` context; should use `context.Background()`.
+- Only the first source address is used when multiple are provided; the rest are silently ignored.
+- DNAT partial apply is not rolled back if the second port mapping fails.
+
+## Ticket 8 — NAT Controller
+
+### Caveats
+- `isDNATPartialFailure` can panic on short error strings; should use `strings.HasPrefix`.
+- Controller `extractConfig` does not handle `nat66` or `nat64` types.
+- Removed status is set then immediately deleted (dead code).
+
+## Ticket 9+10 — FRR/BGP/OSPF
+
+### Caveats
+- No rollback for `GenerateDaemonsFile`/`GenerateFRRConf` failures, leaving partial state possible.
+- OSPF `refreshStatus` has no nil guard on `frrClient`.
+
+## Ticket 11 — DHCP
+
+### Caveats
+- Controller does not persist status updates to the API server (in-memory only).
+- `GetLeases` always returns `nil, nil` on success (unused method).
+
+## Ticket 12 — DNS
+
+### Caveats
+- Default fallback zone "local" returned when no zone matches, which could mask config errors.
+- PTR zones not cached locally (asymmetry with forward zones).
+
+## Ticket 13 — NTP
+
+### Caveats
+- DNS records logged but not persisted to DNS backend.
+- Missing trailing newlines in some files (style).
+
+## Ticket 14 — WireGuard
+
+### Caveats
+- Typo in resource constant: "wiregaurd" should be "wireguard".
+- Secret resolution deferred; stores "secret:name/key" strings instead of reading K8s secrets.
+- Status update uses CoreV1 RESTClient for CRD resources (wrong API group).
+
+## Ticket 16 — IDS
+
+### Caveats
+- EnableIPS/DisableIPS only toggle a local boolean; they do not reconfigure Suricata.
+- Per-interface stats always empty (no per-interface socket query).
+- Alert IDs are positional (change across calls).
+
+## Ticket 17 — DPI to Cilium
+
+### Caveats
+- `DirectCiliumClient.DeleteNetworkPolicy` is log-only (consistent with its design as a dev client).
+- No namespace in kubectl delete for policies.
+
+## Ticket 18 — Auth
+
+### Caveats
+- `providerConstructors` map has no concurrent-write guard; safe during init, but `RegisterProviderConstructor` is exported.
+
 ## Notes for Review
 
 - Anything listed here should be treated as a deliberate tradeoff, not a hidden bug.

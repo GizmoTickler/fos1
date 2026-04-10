@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Real Cilium route sync with VRF/PBR support (ticket 5)
+- Real Cilium NAT enforcement for SNAT/DNAT/NAT66/NAT64/port forwarding (tickets 6-7)
+- Idempotent statusful NAT controller with spec-hash comparison (ticket 8)
+- FRR config validation via vtysh --dryrun with rollback on failure (ticket 9)
+- Live BGP/OSPF state queries from FRR JSON output (ticket 10)
+- Real Kea DHCP control-socket reconciliation (ticket 11)
+- DNS manager wired to CoreDNS zones, AdGuard filters, mDNS reflection (ticket 12)
+- NTP controller with real Chrony config generation and NTS support (ticket 13)
+- WireGuard CRD-to-interface reconciliation with real status (ticket 14)
+- IDS manager with real Suricata Unix socket and Zeek Broker integration (ticket 16)
+- DPI event-to-Cilium policy pipeline with TTL expiry and cleanup (ticket 17)
+- Auth manager wired to real local/LDAP/OAuth providers (ticket 18)
+
+### Changed
+- CiliumClient interface extended with DeleteNetworkPolicy and route operations
+- NAT manager now calls Cilium client instead of storing status only
+- Implementation plan and backlog updated to reflect completed work
+
+### Added (prior to tickets 5-18)
 - Hardware integration design document detailing low-level interaction with network interfaces
 - Support for Intel X540, X550, and I225 NICs in the hardware integration design
 - eBPF-based NAT66 and NPT implementation approach using TC hooks for stateful operation
