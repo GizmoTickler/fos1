@@ -12,9 +12,9 @@ import (
 
 // manager implements the Manager interface
 type manager struct {
-	mutex      sync.RWMutex
-	policies   map[string]Config // key: namespace/name
-	statuses   map[string]*Status
+	mutex        sync.RWMutex
+	policies     map[string]Config  // key: namespace/name
+	statuses     map[string]*Status // key: namespace/name
 	ciliumClient cilium.Client
 }
 
@@ -27,18 +27,131 @@ func NewManager(ciliumClient cilium.Client) Manager {
 	}
 }
 
-// ApplyNATPolicy applies a NAT policy
-func (m *manager) ApplyNATPolicy(config Config) error {
+// policyKey returns the map key for a given namespace/name
+func policyKey(namespace, name string) string {
+	return fmt.Sprintf("%s/%s", namespace, name)
+}
+
+// setCondition updates or appends a condition, only changing the transition time
+// if the condition status actually changed.
+func setCondition(status *Status, condType, condStatus, reason, message string) {
+	now := time.Now()
+	for i, c := range status.Conditions {
+		if c.Type == condType {
+			if c.Status != condStatus {
+				status.Conditions[i].LastTransitionTime = now
+			}
+			status.Conditions[i].Status = condStatus
+			status.Conditions[i].Reason = reason
+			status.Conditions[i].Message = message
+			return
+		}
+	}
+	status.Conditions = append(status.Conditions, Condition{
+		Type:               condType,
+		Status:             condStatus,
+		LastTransitionTime: now,
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
+// ApplyNATPolicy applies a NAT policy. It is idempotent: if the config hash matches
+// the last applied hash, it skips Cilium calls and returns Applied=false.
+func (m *manager) ApplyNATPolicy(config Config) (*ApplyResult, error) {
+	// Validate config before acquiring lock
+	if err := ValidateConfig(config); err != nil {
+		// Store invalid status so the controller can report it
+		m.mutex.Lock()
+		key := policyKey(config.Namespace, config.Name)
+		status := m.getOrCreateStatus(key)
+		setCondition(status, ConditionInvalid, ConditionStatusTrue, "ValidationFailed", err.Error())
+		setCondition(status, ConditionApplied, ConditionStatusFalse, "ValidationFailed", "config failed validation")
+		// Clear degraded on validation failure
+		setCondition(status, ConditionDegraded, ConditionStatusFalse, "ValidationFailed", "")
+		m.mutex.Unlock()
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	key := fmt.Sprintf("%s/%s", config.Namespace, config.Name)
-	klog.Infof("Applying NAT policy %s", key)
+	key := policyKey(config.Namespace, config.Name)
+	specHash := config.SpecHash()
+
+	// Idempotency: if the hash matches, skip Cilium calls
+	if existing, exists := m.statuses[key]; exists && existing.LastAppliedHash == specHash {
+		klog.Infof("NAT policy %s spec unchanged (hash=%s), skipping apply", key, specHash[:12])
+		return &ApplyResult{Applied: false}, nil
+	}
+
+	klog.Infof("Applying NAT policy %s (hash=%s)", key, specHash[:12])
 
 	// Store the policy
 	m.policies[key] = config
 
-	// Initialize or update status
+	// Get or create status
+	status := m.getOrCreateStatus(key)
+
+	// Clear Invalid condition since we passed validation
+	setCondition(status, ConditionInvalid, ConditionStatusFalse, "Valid", "config passed validation")
+
+	// Apply the policy based on its type
+	var applyErr error
+	switch config.Type {
+	case TypeSNAT:
+		applyErr = m.applySNAT(config)
+	case TypeDNAT:
+		applyErr = m.applyDNAT(config)
+	case TypeMasquerade:
+		applyErr = m.applyMasquerade(config)
+	case TypeFull:
+		applyErr = m.applyFullNAT(config)
+	case TypeNAT66:
+		applyErr = m.applyNAT66(config)
+	case TypeNAT64:
+		applyErr = m.applyNAT64(config)
+	default:
+		applyErr = fmt.Errorf("unsupported NAT type: %s", config.Type)
+	}
+
+	now := time.Now()
+
+	if applyErr != nil {
+		// Check if this is a partial failure (for Full NAT where SNAT succeeded but DNAT failed)
+		// For full NAT, applyFullNAT reports partial errors with "failed to apply DNAT" prefix
+		if config.Type == TypeFull && isDNATPartialFailure(applyErr) {
+			setCondition(status, ConditionApplied, ConditionStatusFalse, "PartialApply", "SNAT applied but DNAT failed")
+			setCondition(status, ConditionDegraded, ConditionStatusTrue, "PartialFailure", applyErr.Error())
+			status.LastAppliedHash = "" // Force re-apply on next reconciliation
+			status.LastAppliedTime = now
+			return &ApplyResult{Applied: true, Degraded: true, Error: applyErr.Error()}, nil
+		}
+
+		setCondition(status, ConditionApplied, ConditionStatusFalse, "ApplyFailed", applyErr.Error())
+		setCondition(status, ConditionDegraded, ConditionStatusFalse, "ApplyFailed", "")
+		status.LastAppliedHash = "" // Force re-apply on next reconciliation
+		return nil, fmt.Errorf("failed to apply NAT policy: %w", applyErr)
+	}
+
+	// Success
+	setCondition(status, ConditionApplied, ConditionStatusTrue, "PolicyApplied", "NAT policy has been enforced via Cilium")
+	setCondition(status, ConditionDegraded, ConditionStatusFalse, "FullyApplied", "all rules applied successfully")
+	status.LastAppliedHash = specHash
+	status.LastAppliedTime = now
+
+	return &ApplyResult{Applied: true}, nil
+}
+
+// isDNATPartialFailure checks if an error from applyFullNAT is a DNAT-specific failure
+// (meaning SNAT succeeded but DNAT failed)
+func isDNATPartialFailure(err error) bool {
+	return err != nil && len(err.Error()) > 0 &&
+		(err.Error()[:len("failed to apply DNAT")] == "failed to apply DNAT")
+}
+
+// getOrCreateStatus returns an existing status or creates a new one
+func (m *manager) getOrCreateStatus(key string) *Status {
 	status, exists := m.statuses[key]
 	if !exists {
 		status = &Status{
@@ -48,62 +161,11 @@ func (m *manager) ApplyNATPolicy(config Config) error {
 				Bytes:        0,
 				Translations: 0,
 			},
-			Conditions: []Condition{
-				{
-					Type:               "Ready",
-					Status:             "True",
-					LastTransitionTime: time.Now(),
-					Reason:             "PolicyApplied",
-					Message:            "NAT policy has been applied",
-				},
-			},
+			Conditions: []Condition{},
 		}
 		m.statuses[key] = status
-	} else {
-		// Update the Ready condition
-		found := false
-		for i, condition := range status.Conditions {
-			if condition.Type == "Ready" {
-				status.Conditions[i] = Condition{
-					Type:               "Ready",
-					Status:             "True",
-					LastTransitionTime: time.Now(),
-					Reason:             "PolicyApplied",
-					Message:            "NAT policy has been applied",
-				}
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			status.Conditions = append(status.Conditions, Condition{
-				Type:               "Ready",
-				Status:             "True",
-				LastTransitionTime: time.Now(),
-				Reason:             "PolicyApplied",
-				Message:            "NAT policy has been applied",
-			})
-		}
 	}
-
-	// Apply the policy based on its type
-	switch config.Type {
-	case TypeSNAT:
-		return m.applySNAT(config)
-	case TypeDNAT:
-		return m.applyDNAT(config)
-	case TypeMasquerade:
-		return m.applyMasquerade(config)
-	case TypeFull:
-		return m.applyFullNAT(config)
-	case TypeNAT66:
-		return m.applyNAT66(config)
-	case TypeNAT64:
-		return m.applyNAT64(config)
-	default:
-		return fmt.Errorf("unsupported NAT type: %s", config.Type)
-	}
+	return status
 }
 
 // RemoveNATPolicy removes a NAT policy
@@ -111,13 +173,14 @@ func (m *manager) RemoveNATPolicy(name, namespace string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	key := fmt.Sprintf("%s/%s", namespace, name)
+	key := policyKey(namespace, name)
 	klog.Infof("Removing NAT policy %s", key)
 
 	// Check if the policy exists
 	config, exists := m.policies[key]
 	if !exists {
-		return fmt.Errorf("NAT policy %s does not exist", key)
+		// Already removed, idempotent
+		return nil
 	}
 
 	// Remove the policy based on its type
@@ -140,8 +203,16 @@ func (m *manager) RemoveNATPolicy(name, namespace string) error {
 	}
 
 	if err != nil {
-		return err
+		// Set Removed condition to False since cleanup failed
+		status := m.getOrCreateStatus(key)
+		setCondition(status, ConditionRemoved, ConditionStatusFalse, "RemovalFailed", err.Error())
+		return fmt.Errorf("failed to remove NAT policy: %w", err)
 	}
+
+	// Set Removed condition before deleting
+	status := m.getOrCreateStatus(key)
+	setCondition(status, ConditionRemoved, ConditionStatusTrue, "CleanupComplete", "NAT policy removed from Cilium")
+	setCondition(status, ConditionApplied, ConditionStatusFalse, "Removed", "policy has been removed")
 
 	// Remove the policy and status
 	delete(m.policies, key)
@@ -155,7 +226,7 @@ func (m *manager) GetNATPolicyStatus(name, namespace string) (*Status, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	key := fmt.Sprintf("%s/%s", namespace, name)
+	key := policyKey(namespace, name)
 	status, exists := m.statuses[key]
 	if !exists {
 		return nil, fmt.Errorf("NAT policy %s does not exist", key)
@@ -181,14 +252,12 @@ func (m *manager) ListNATPolicies() ([]Config, error) {
 func (m *manager) applySNAT(config Config) error {
 	klog.Infof("Applying SNAT policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
 	}
 
-	// Apply the NAT configuration using Cilium
 	return m.ciliumClient.CreateNAT(nil, natConfig)
 }
 
@@ -196,9 +265,7 @@ func (m *manager) applySNAT(config Config) error {
 func (m *manager) applyDNAT(config Config) error {
 	klog.Infof("Applying DNAT policy %s/%s", config.Namespace, config.Name)
 
-	// For each port mapping, create a port forwarding rule
 	for _, mapping := range config.PortMappings {
-		// Create a port forwarding configuration
 		portForwardConfig := &cilium.PortForwardConfig{
 			ExternalIP:   config.ExternalIP,
 			ExternalPort: mapping.ExternalPort,
@@ -208,9 +275,9 @@ func (m *manager) applyDNAT(config Config) error {
 			Description:  mapping.Description,
 		}
 
-		// Apply the port forwarding configuration using Cilium
 		if err := m.ciliumClient.CreatePortForward(nil, portForwardConfig); err != nil {
-			return fmt.Errorf("failed to create port forwarding: %w", err)
+			return fmt.Errorf("failed to create port forwarding for %s:%d: %w",
+				mapping.Protocol, mapping.ExternalPort, err)
 		}
 	}
 
@@ -221,14 +288,12 @@ func (m *manager) applyDNAT(config Config) error {
 func (m *manager) applyMasquerade(config Config) error {
 	klog.Infof("Applying Masquerade policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with masquerade
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
 	}
 
-	// Apply the NAT configuration using Cilium
 	return m.ciliumClient.CreateNAT(nil, natConfig)
 }
 
@@ -236,12 +301,10 @@ func (m *manager) applyMasquerade(config Config) error {
 func (m *manager) applyFullNAT(config Config) error {
 	klog.Infof("Applying Full NAT policy %s/%s", config.Namespace, config.Name)
 
-	// Apply SNAT
 	if err := m.applySNAT(config); err != nil {
 		return fmt.Errorf("failed to apply SNAT: %w", err)
 	}
 
-	// Apply DNAT
 	if err := m.applyDNAT(config); err != nil {
 		return fmt.Errorf("failed to apply DNAT: %w", err)
 	}
@@ -253,14 +316,12 @@ func (m *manager) applyFullNAT(config Config) error {
 func (m *manager) applyNAT66(config Config) error {
 	klog.Infof("Applying NAT66 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with IPv6
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             true,
 	}
 
-	// Apply the NAT configuration using Cilium
 	return m.ciliumClient.CreateNAT(nil, natConfig)
 }
 
@@ -268,13 +329,11 @@ func (m *manager) applyNAT66(config Config) error {
 func (m *manager) applyNAT64(config Config) error {
 	klog.Infof("Applying NAT64 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT64 configuration
 	nat64Config := &cilium.NAT64Config{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 	}
 
-	// Apply the NAT64 configuration using Cilium
 	return m.ciliumClient.CreateNAT64(nil, nat64Config)
 }
 
@@ -282,14 +341,12 @@ func (m *manager) applyNAT64(config Config) error {
 func (m *manager) removeSNAT(config Config) error {
 	klog.Infof("Removing SNAT policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
 	}
 
-	// Remove the NAT configuration using Cilium
 	return m.ciliumClient.RemoveNAT(nil, natConfig)
 }
 
@@ -297,9 +354,7 @@ func (m *manager) removeSNAT(config Config) error {
 func (m *manager) removeDNAT(config Config) error {
 	klog.Infof("Removing DNAT policy %s/%s", config.Namespace, config.Name)
 
-	// For each port mapping, remove the port forwarding rule
 	for _, mapping := range config.PortMappings {
-		// Create a port forwarding configuration
 		portForwardConfig := &cilium.PortForwardConfig{
 			ExternalIP:   config.ExternalIP,
 			ExternalPort: mapping.ExternalPort,
@@ -308,7 +363,6 @@ func (m *manager) removeDNAT(config Config) error {
 			InternalPort: mapping.InternalPort,
 		}
 
-		// Remove the port forwarding configuration using Cilium
 		if err := m.ciliumClient.RemovePortForward(nil, portForwardConfig); err != nil {
 			return fmt.Errorf("failed to remove port forwarding: %w", err)
 		}
@@ -321,14 +375,12 @@ func (m *manager) removeDNAT(config Config) error {
 func (m *manager) removeMasquerade(config Config) error {
 	klog.Infof("Removing Masquerade policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with masquerade
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             config.IPv6,
 	}
 
-	// Remove the NAT configuration using Cilium
 	return m.ciliumClient.RemoveNAT(nil, natConfig)
 }
 
@@ -336,12 +388,10 @@ func (m *manager) removeMasquerade(config Config) error {
 func (m *manager) removeFullNAT(config Config) error {
 	klog.Infof("Removing Full NAT policy %s/%s", config.Namespace, config.Name)
 
-	// Remove SNAT
 	if err := m.removeSNAT(config); err != nil {
 		return fmt.Errorf("failed to remove SNAT: %w", err)
 	}
 
-	// Remove DNAT
 	if err := m.removeDNAT(config); err != nil {
 		return fmt.Errorf("failed to remove DNAT: %w", err)
 	}
@@ -353,14 +403,12 @@ func (m *manager) removeFullNAT(config Config) error {
 func (m *manager) removeNAT66(config Config) error {
 	klog.Infof("Removing NAT66 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT configuration with IPv6
 	natConfig := &cilium.CiliumNATConfig{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 		IPv6:             true,
 	}
 
-	// Remove the NAT configuration using Cilium
 	return m.ciliumClient.RemoveNAT(nil, natConfig)
 }
 
@@ -368,12 +416,10 @@ func (m *manager) removeNAT66(config Config) error {
 func (m *manager) removeNAT64(config Config) error {
 	klog.Infof("Removing NAT64 policy %s/%s", config.Namespace, config.Name)
 
-	// Create a Cilium NAT64 configuration
 	nat64Config := &cilium.NAT64Config{
-		SourceNetwork:    config.SourceAddresses[0], // Use the first source address
+		SourceNetwork:    config.SourceAddresses[0],
 		DestinationIface: config.Interface,
 	}
 
-	// Remove the NAT64 configuration using Cilium
 	return m.ciliumClient.RemoveNAT64(nil, nat64Config)
 }
