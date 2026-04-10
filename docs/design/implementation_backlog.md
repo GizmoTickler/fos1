@@ -359,11 +359,11 @@ Acceptance:
 
 ### Ticket 19: Consolidate The eBPF Runtime And Remove Placeholder Cilium Integration Discovery
 Status:
-- pending
+- completed
 
 ### Ticket 20: Build The Integration And Reconciliation Test Matrix, Then Correct Status Docs
 Status:
-- pending
+- completed
 
 ## Suggested Parallel Ownership
 

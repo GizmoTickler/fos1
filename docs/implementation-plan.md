@@ -65,10 +65,9 @@ Completed:
 - Ticket 17: DPI events wired into real Cilium policy responses
 - Ticket 18: Auth manager provider construction and hardening
 
-Remaining:
-- Ticket 15: cert-manager outputs integrated into service consumers
-- Ticket 19: eBPF runtime consolidation
-- Ticket 20: integration/reconciliation test matrix and status doc correction
+- Ticket 15: cert-manager outputs integrated into NTS consumer via SecretWatcher
+- Ticket 19: eBPF runtime consolidated, placeholder Cilium discovery removed
+- Ticket 20: reconciliation test matrix built, controller tests added, status docs corrected
 
 ## Epic 1: Datapath Unification
 
@@ -111,9 +110,9 @@ DHCP controller applies real Kea config via control socket with verification. DN
 Goal:
 - standardize usable VPN and certificate consumer behavior
 
-Status: **partially complete**
+Status: **complete**
 
-WireGuard CRDs reconcile into real interface and peer state. Ticket 15 (cert-manager consumer integration) remains.
+WireGuard CRDs reconcile into real interface and peer state. cert-manager outputs are consumed by the NTS service via a SecretWatcher that triggers Chrony reload on certificate renewal.
 
 ## Epic 6: IDS, DPI, and Auth
 
@@ -129,14 +128,18 @@ IDS state reflects real Suricata/Zeek engines. DPI events trigger real Cilium po
 Goal:
 - consolidate runtime ownership and remove placeholder Cilium integration behavior
 
-Status: **pending** (Ticket 19)
+Status: **complete**
+
+Single lifecycle owner (`ProgramManager`) established. Supported hooks explicitly defined (XDP, TC, sockops, cgroup). Placeholder Cilium discovery replaced with real API queries or explicit "not available" errors.
 
 ## Epic 8: Tests and Status Accuracy
 
 Goal:
 - make implementation status trustworthy and regressions visible
 
-Status: **pending** (Ticket 20)
+Status: **complete**
+
+Reconciliation tests added for BGP, OSPF, MultiWAN, Policy, QoS, and Cilium controllers. Test matrix document created. Project tracker corrected to reflect verified behavior. int-vs-int64 bugs found and fixed during testing.
 
 ## Milestones
 
@@ -152,14 +155,13 @@ Milestone 3: **complete**
 - Tickets 9 to 13 complete
 - routing protocols and core services wired through real reconciliation
 
-Milestone 4: **mostly complete**
-- Tickets 14, 16, 17, 18 complete
-- Ticket 15 (cert-manager consumer) remains
-- VPN, IDS/DPI, and auth substantially functional
+Milestone 4: **complete**
+- Tickets 14 to 18 complete
+- VPN, certificates, IDS/DPI, and auth fully functional
 
-Milestone 5: **pending**
-- Tickets 19 to 20
-- runtime ownership and status/testing baseline
+Milestone 5: **complete**
+- Tickets 19 to 20 complete
+- eBPF runtime consolidated, test matrix built, status docs corrected
 
 ## Architect Review Questions
 
