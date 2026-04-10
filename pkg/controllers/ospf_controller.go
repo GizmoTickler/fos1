@@ -353,59 +353,102 @@ func (c *OSPFController) handleOSPFConfigCreateOrUpdate(obj *unstructured.Unstru
 	return nil
 }
 
-// updateOSPFConfigStatus updates the status of an OSPFConfig CRD
+// updateOSPFConfigStatus updates the status of an OSPFConfig CRD with live adjacency state from FRR.
+// GetProtocolStatus now queries vtysh for real OSPF neighbor/adjacency state.
 func (c *OSPFController) updateOSPFConfigStatus(obj *unstructured.Unstructured) error {
-	// Get the namespace and name
 	namespace := obj.GetNamespace()
-	_ = obj.GetName()
 
-	// Get the OSPF status
+	// GetProtocolStatus now performs a live query against FRR
 	status, err := c.protocolManager.GetProtocolStatus("ospf")
 	if err != nil {
 		return fmt.Errorf("failed to get OSPF status: %w", err)
 	}
-	
-	// Create a copy of the object
+
 	newObj := obj.DeepCopy()
-	
-	// Update the status
+
 	if err := unstructured.SetNestedField(newObj.Object, status.State, "status", "state"); err != nil {
 		return fmt.Errorf("failed to set status.state: %w", err)
 	}
-	
+
 	if err := unstructured.SetNestedField(newObj.Object, status.Uptime.String(), "status", "uptime"); err != nil {
 		return fmt.Errorf("failed to set status.uptime: %w", err)
 	}
-	
-	// Convert neighbors to unstructured format
+
+	// Convert neighbors to unstructured format with live adjacency state
 	neighborsUntyped := make([]interface{}, 0, len(status.Neighbors))
+	fullAdjacencyCount := 0
 	for _, neighbor := range status.Neighbors {
 		neighborMap := map[string]interface{}{
-			"address":          neighbor.Address,
-			"state":            neighbor.State,
-			"uptime":           neighbor.Uptime.String(),
-			"prefixesReceived": neighbor.PrefixesReceived,
-			"prefixesSent":     neighbor.PrefixesSent,
+			"address": neighbor.Address,
+			"state":   neighbor.State,
+			"uptime":  neighbor.Uptime.String(),
 		}
-		
 		neighborsUntyped = append(neighborsUntyped, neighborMap)
+
+		// OSPF "Full" state means adjacency is fully established
+		if neighbor.State == "Full" || neighbor.State == "Full/DR" ||
+			neighbor.State == "Full/BDR" || neighbor.State == "Full/DROther" {
+			fullAdjacencyCount++
+		}
 	}
-	
+
 	if err := unstructured.SetNestedSlice(newObj.Object, neighborsUntyped, "status", "neighbors"); err != nil {
 		return fmt.Errorf("failed to set status.neighbors: %w", err)
 	}
-	
+
+	// Build status conditions reflecting real FRR OSPF state
+	conditions := []interface{}{}
+
+	// Condition: ProtocolRunning
+	protocolCondition := map[string]interface{}{
+		"type":               "ProtocolRunning",
+		"status":             "True",
+		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+		"reason":             "OSPFRunning",
+		"message":            fmt.Sprintf("OSPF is %s with %d adjacencies", status.State, len(status.Neighbors)),
+	}
+	if status.State != "running" {
+		protocolCondition["status"] = "False"
+		protocolCondition["reason"] = "OSPFNotRunning"
+		protocolCondition["message"] = fmt.Sprintf("OSPF is %s", status.State)
+	}
+	conditions = append(conditions, protocolCondition)
+
+	// Condition: AdjacenciesFormed
+	adjCondition := map[string]interface{}{
+		"type":               "AdjacenciesFormed",
+		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+	}
+	if len(status.Neighbors) == 0 {
+		adjCondition["status"] = "Unknown"
+		adjCondition["reason"] = "NoNeighborsDetected"
+		adjCondition["message"] = "No OSPF neighbors detected"
+	} else if fullAdjacencyCount == len(status.Neighbors) {
+		adjCondition["status"] = "True"
+		adjCondition["reason"] = "AllAdjacenciesFull"
+		adjCondition["message"] = fmt.Sprintf("All %d OSPF adjacencies are in Full state", fullAdjacencyCount)
+	} else {
+		adjCondition["status"] = "False"
+		adjCondition["reason"] = "AdjacenciesNotFull"
+		adjCondition["message"] = fmt.Sprintf("%d of %d OSPF adjacencies in Full state", fullAdjacencyCount, len(status.Neighbors))
+	}
+	conditions = append(conditions, adjCondition)
+
+	if err := unstructured.SetNestedSlice(newObj.Object, conditions, "status", "conditions"); err != nil {
+		return fmt.Errorf("failed to set status.conditions: %w", err)
+	}
+
 	// Update the object
 	gvr := schema.GroupVersionResource{
 		Group:    "networking.fos1.io",
 		Version:  "v1alpha1",
 		Resource: "ospfconfigs",
 	}
-	
+
 	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update OSPFConfig status: %w", err)
 	}
-	
+
 	return nil
 }

@@ -2,6 +2,7 @@ package protocols
 
 import (
 	"testing"
+	"time"
 
 	"github.com/GizmoTickler/fos1/pkg/network/routing"
 	"github.com/GizmoTickler/fos1/pkg/network/routing/frr"
@@ -866,5 +867,231 @@ func TestOSPFConversionWithTimersAndNetwork(t *testing.T) {
 	}
 	if intf.Authentication.KeyID != 1 {
 		t.Errorf("Authentication.KeyID = %v, want 1", intf.Authentication.KeyID)
+	}
+}
+
+// TestOSPFHandler_ParseOSPFNeighborJSON_MapFormat tests parsing FRR JSON neighbor output (map format)
+func TestOSPFHandler_ParseOSPFNeighborJSON_MapFormat(t *testing.T) {
+	handler := &OSPFHandler{
+		status: &routing.ProtocolStatus{
+			Name:      "ospf",
+			State:     "running",
+			StartTime: time.Now().Add(-10 * time.Minute),
+			Neighbors: []routing.NeighborStatus{},
+		},
+	}
+
+	// FRR "show ip ospf neighbor json" output with neighbors map keyed by router-id
+	data := map[string]interface{}{
+		"neighbors": map[string]interface{}{
+			"10.0.0.1": []interface{}{
+				map[string]interface{}{
+					"nbrState":     "Full/DR",
+					"ifaceAddress": "192.168.1.2",
+					"deadTimeMsec": float64(38000),
+				},
+			},
+			"10.0.0.2": []interface{}{
+				map[string]interface{}{
+					"nbrState":     "Full/BDR",
+					"ifaceAddress": "192.168.1.3",
+					"deadTimeMsec": float64(37000),
+				},
+			},
+			"10.0.0.3": []interface{}{
+				map[string]interface{}{
+					"nbrState":     "Init",
+					"ifaceAddress": "192.168.1.4",
+					"deadTimeMsec": float64(40000),
+				},
+			},
+		},
+	}
+
+	err := handler.parseOSPFNeighborJSON(data)
+	if err != nil {
+		t.Fatalf("parseOSPFNeighborJSON failed: %v", err)
+	}
+
+	if len(handler.status.Neighbors) != 3 {
+		t.Fatalf("expected 3 neighbors, got %d", len(handler.status.Neighbors))
+	}
+
+	// Verify neighbors
+	found := map[string]bool{}
+	for _, n := range handler.status.Neighbors {
+		found[n.Address] = true
+		switch n.Address {
+		case "192.168.1.2":
+			if n.State != "Full/DR" {
+				t.Errorf("expected state Full/DR for 192.168.1.2, got %s", n.State)
+			}
+		case "192.168.1.3":
+			if n.State != "Full/BDR" {
+				t.Errorf("expected state Full/BDR for 192.168.1.3, got %s", n.State)
+			}
+		case "192.168.1.4":
+			if n.State != "Init" {
+				t.Errorf("expected state Init for 192.168.1.4, got %s", n.State)
+			}
+		}
+	}
+}
+
+// TestOSPFHandler_ParseOSPFNeighborJSON_ArrayFormat tests parsing array-style neighbor output
+func TestOSPFHandler_ParseOSPFNeighborJSON_ArrayFormat(t *testing.T) {
+	handler := &OSPFHandler{
+		status: &routing.ProtocolStatus{
+			Name:      "ospf",
+			State:     "running",
+			StartTime: time.Now(),
+			Neighbors: []routing.NeighborStatus{},
+		},
+	}
+
+	// Some FRR versions return neighbors as an array
+	data := map[string]interface{}{
+		"neighbors": []interface{}{
+			map[string]interface{}{
+				"routerId":     "10.0.0.1",
+				"state":        "Full/DR",
+				"address":      "192.168.1.2",
+			},
+		},
+	}
+
+	err := handler.parseOSPFNeighborJSON(data)
+	if err != nil {
+		t.Fatalf("parseOSPFNeighborJSON failed: %v", err)
+	}
+
+	if len(handler.status.Neighbors) != 1 {
+		t.Fatalf("expected 1 neighbor, got %d", len(handler.status.Neighbors))
+	}
+
+	n := handler.status.Neighbors[0]
+	if n.State != "Full/DR" {
+		t.Errorf("expected state Full/DR, got %s", n.State)
+	}
+	if n.Address != "192.168.1.2" {
+		t.Errorf("expected address 192.168.1.2, got %s", n.Address)
+	}
+}
+
+// TestOSPFHandler_ParseOSPFNeighborJSON_DefaultVRF tests parsing with VRF wrapper
+func TestOSPFHandler_ParseOSPFNeighborJSON_DefaultVRF(t *testing.T) {
+	handler := &OSPFHandler{
+		status: &routing.ProtocolStatus{
+			Name:      "ospf",
+			State:     "running",
+			StartTime: time.Now(),
+			Neighbors: []routing.NeighborStatus{},
+		},
+	}
+
+	// FRR sometimes wraps under "default" VRF
+	data := map[string]interface{}{
+		"default": map[string]interface{}{
+			"neighbors": map[string]interface{}{
+				"10.0.0.5": []interface{}{
+					map[string]interface{}{
+						"nbrState":     "Full/DROther",
+						"ifaceAddress": "172.16.0.5",
+					},
+				},
+			},
+		},
+	}
+
+	err := handler.parseOSPFNeighborJSON(data)
+	if err != nil {
+		t.Fatalf("parseOSPFNeighborJSON failed: %v", err)
+	}
+
+	if len(handler.status.Neighbors) != 1 {
+		t.Fatalf("expected 1 neighbor, got %d", len(handler.status.Neighbors))
+	}
+
+	n := handler.status.Neighbors[0]
+	if n.State != "Full/DROther" {
+		t.Errorf("expected state Full/DROther, got %s", n.State)
+	}
+}
+
+// TestOSPFHandler_ParseOSPFNeighborJSON_Empty tests parsing with no neighbors
+func TestOSPFHandler_ParseOSPFNeighborJSON_Empty(t *testing.T) {
+	handler := &OSPFHandler{
+		status: &routing.ProtocolStatus{
+			Name:      "ospf",
+			State:     "running",
+			StartTime: time.Now(),
+			Neighbors: []routing.NeighborStatus{},
+		},
+	}
+
+	data := map[string]interface{}{
+		"neighbors": map[string]interface{}{},
+	}
+
+	err := handler.parseOSPFNeighborJSON(data)
+	if err != nil {
+		t.Fatalf("parseOSPFNeighborJSON failed: %v", err)
+	}
+
+	if len(handler.status.Neighbors) != 0 {
+		t.Fatalf("expected 0 neighbors, got %d", len(handler.status.Neighbors))
+	}
+}
+
+// TestOSPFHandler_ParseNeighborEntry tests the individual entry parser
+func TestOSPFHandler_ParseNeighborEntry(t *testing.T) {
+	handler := &OSPFHandler{}
+
+	tests := []struct {
+		name      string
+		entry     map[string]interface{}
+		routerID  string
+		wantAddr  string
+		wantState string
+	}{
+		{
+			name: "nbrState and ifaceAddress",
+			entry: map[string]interface{}{
+				"nbrState":     "Full/DR",
+				"ifaceAddress": "10.0.0.1",
+			},
+			routerID:  "1.1.1.1",
+			wantAddr:  "10.0.0.1",
+			wantState: "Full/DR",
+		},
+		{
+			name: "state and address fields",
+			entry: map[string]interface{}{
+				"state":   "Init",
+				"address": "10.0.0.2",
+			},
+			routerID:  "2.2.2.2",
+			wantAddr:  "10.0.0.2",
+			wantState: "Init",
+		},
+		{
+			name:      "falls back to routerID when no address",
+			entry:     map[string]interface{}{},
+			routerID:  "3.3.3.3",
+			wantAddr:  "3.3.3.3",
+			wantState: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := handler.parseOSPFNeighborEntry(tt.entry, tt.routerID)
+			if result.Address != tt.wantAddr {
+				t.Errorf("Address = %v, want %v", result.Address, tt.wantAddr)
+			}
+			if result.State != tt.wantState {
+				t.Errorf("State = %v, want %v", result.State, tt.wantState)
+			}
+		})
 	}
 }
