@@ -153,6 +153,15 @@ type DHCPv4ServiceStatus struct {
 
 	// LastUpdated is the timestamp of the last update
 	LastUpdated metav1.Time `json:"lastUpdated,omitempty"`
+
+	// Phase represents the current lifecycle phase: Ready, Degraded, or Error
+	Phase string `json:"phase,omitempty"`
+
+	// Message is a human-readable description of the current status
+	Message string `json:"message,omitempty"`
+
+	// Conditions represents the latest available observations of the service state
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // DeepCopyObject implements runtime.Object
@@ -208,6 +217,15 @@ type DHCPv6ServiceStatus struct {
 
 	// LastUpdated is the timestamp of the last update
 	LastUpdated metav1.Time `json:"lastUpdated,omitempty"`
+
+	// Phase represents the current lifecycle phase: Ready, Degraded, or Error
+	Phase string `json:"phase,omitempty"`
+
+	// Message is a human-readable description of the current status
+	Message string `json:"message,omitempty"`
+
+	// Conditions represents the latest available observations of the service state
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // DeepCopyObject implements runtime.Object

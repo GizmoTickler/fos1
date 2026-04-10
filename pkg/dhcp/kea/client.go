@@ -200,6 +200,63 @@ func (c *Client) StatisticsGetAll(ctx context.Context) (map[string]any, error) {
 	return stats, nil
 }
 
+// ConfigSet pushes a full configuration to the running Kea daemon.
+// The config argument should be the top-level Kea configuration object
+// (e.g., {"Dhcp4": {...}} or {"Dhcp6": {...}}).
+// Kea validates the configuration and applies it atomically.
+func (c *Client) ConfigSet(ctx context.Context, config any) error {
+	responses, err := c.Execute(ctx, "config-set", config)
+	if err != nil {
+		return err
+	}
+
+	resp := responses[0]
+	if resp.Result != 0 {
+		return fmt.Errorf("config-set: result=%d: %s", resp.Result, resp.Text)
+	}
+
+	klog.V(2).Infof("kea: config-set succeeded for service %s", c.service)
+	return nil
+}
+
+// ConfigReload tells Kea to reload its configuration from the file on disk.
+// This is useful after a config-write or external file update.
+func (c *Client) ConfigReload(ctx context.Context) error {
+	responses, err := c.Execute(ctx, "config-reload", nil)
+	if err != nil {
+		return err
+	}
+
+	resp := responses[0]
+	if resp.Result != 0 {
+		return fmt.Errorf("config-reload: result=%d: %s", resp.Result, resp.Text)
+	}
+
+	klog.V(2).Infof("kea: config-reload succeeded for service %s", c.service)
+	return nil
+}
+
+// ConfigWrite writes the current running configuration to the Kea config file.
+func (c *Client) ConfigWrite(ctx context.Context, filename string) error {
+	var args any
+	if filename != "" {
+		args = map[string]string{"filename": filename}
+	}
+
+	responses, err := c.Execute(ctx, "config-write", args)
+	if err != nil {
+		return err
+	}
+
+	resp := responses[0]
+	if resp.Result != 0 {
+		return fmt.Errorf("config-write: result=%d: %s", resp.Result, resp.Text)
+	}
+
+	klog.V(2).Infof("kea: config-write succeeded for service %s", c.service)
+	return nil
+}
+
 // IsRunning checks whether the Kea daemon is reachable on its control socket.
 func (c *Client) IsRunning() bool {
 	return c.socket.IsAvailable()

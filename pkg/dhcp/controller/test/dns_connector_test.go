@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/GizmoTickler/fos1/pkg/dhcp/controller"
 	"github.com/GizmoTickler/fos1/pkg/dhcp/types"
@@ -42,193 +43,167 @@ func (m *MockDNSManager) RemoveReverseRecord(ip string) error {
 
 // TestUpdateLease tests that UpdateLease correctly adds DNS records
 func TestUpdateLease(t *testing.T) {
-	// Create a mock DNS manager
 	mockDNSManager := new(MockDNSManager)
-	
-	// Setup the mock expectations
+
 	mockDNSManager.On("AddRecord", "test-host.example.com", "A", "192.168.1.100", uint32(3600)).Return(nil)
 	mockDNSManager.On("AddReverseRecord", "192.168.1.100", "test-host.example.com", uint32(3600)).Return(nil)
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease
+
 	lease := &types.Lease{
 		IP:       "192.168.1.100",
 		Hostname: "test-host",
 		Domain:   "example.com",
 		TTL:      3600,
 	}
-	
-	// Call UpdateLease
+
 	err := dnsConnector.UpdateLease(lease)
-	
-	// Verify results
 	assert.NoError(t, err)
 	mockDNSManager.AssertExpectations(t)
 }
 
 // TestUpdateLeaseNoHostname tests that UpdateLease skips DNS records when no hostname is provided
 func TestUpdateLeaseNoHostname(t *testing.T) {
-	// Create a mock DNS manager
 	mockDNSManager := new(MockDNSManager)
-	
-	// No expectations, as no methods should be called
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease with no hostname
+
 	lease := &types.Lease{
 		IP:       "192.168.1.100",
 		Hostname: "",
 		Domain:   "example.com",
 		TTL:      3600,
 	}
-	
-	// Call UpdateLease
+
 	err := dnsConnector.UpdateLease(lease)
-	
-	// Verify results
 	assert.NoError(t, err)
 	mockDNSManager.AssertExpectations(t)
 }
 
-// TestUpdateLeaseDefaultDomain tests that UpdateLease uses a default domain when none is provided
-func TestUpdateLeaseDefaultDomain(t *testing.T) {
-	// Create a mock DNS manager
+// TestUpdateLeaseVLANRefDomain tests that UpdateLease derives domain from VLAN ref
+// when no explicit domain is set.
+func TestUpdateLeaseVLANRefDomain(t *testing.T) {
 	mockDNSManager := new(MockDNSManager)
-	
-	// Setup the mock expectations (note the default "local" domain)
-	mockDNSManager.On("AddRecord", "test-host.local", "A", "192.168.1.100", uint32(3600)).Return(nil)
-	mockDNSManager.On("AddReverseRecord", "192.168.1.100", "test-host.local", uint32(3600)).Return(nil)
-	
-	// Create a DNS connector with the mock
+
+	// When no domain is set but VLANRef is, domain becomes "vlan100.local"
+	mockDNSManager.On("AddRecord", "test-host.vlan100.local", "A", "192.168.1.100", uint32(3600)).Return(nil)
+	mockDNSManager.On("AddReverseRecord", "192.168.1.100", "test-host.vlan100.local", uint32(3600)).Return(nil)
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease with no domain
+
 	lease := &types.Lease{
 		IP:       "192.168.1.100",
 		Hostname: "test-host",
-		Domain:   "", // No domain provided
+		Domain:   "",
+		VLANRef:  "vlan100",
 		TTL:      3600,
 	}
-	
-	// Call UpdateLease
+
 	err := dnsConnector.UpdateLease(lease)
-	
-	// Verify results
 	assert.NoError(t, err)
+	mockDNSManager.AssertExpectations(t)
+}
+
+// TestUpdateLeaseNoDomainNoVLAN tests that UpdateLease returns an error when
+// neither domain nor VLANRef is set.
+func TestUpdateLeaseNoDomainNoVLAN(t *testing.T) {
+	mockDNSManager := new(MockDNSManager)
+
+	dnsConnector := controller.NewDNSConnector(mockDNSManager)
+
+	lease := &types.Lease{
+		IP:       "192.168.1.100",
+		Hostname: "test-host",
+		Domain:   "",
+		VLANRef:  "",
+		TTL:      3600,
+	}
+
+	err := dnsConnector.UpdateLease(lease)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no domain suffix configured")
 	mockDNSManager.AssertExpectations(t)
 }
 
 // TestUpdateLeaseDefaultTTL tests that UpdateLease uses a default TTL when none is provided
 func TestUpdateLeaseDefaultTTL(t *testing.T) {
-	// Create a mock DNS manager
 	mockDNSManager := new(MockDNSManager)
-	
-	// Setup the mock expectations with default TTL of 3600
+
 	mockDNSManager.On("AddRecord", "test-host.example.com", "A", "192.168.1.100", uint32(3600)).Return(nil)
 	mockDNSManager.On("AddReverseRecord", "192.168.1.100", "test-host.example.com", uint32(3600)).Return(nil)
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease with no TTL
+
 	lease := &types.Lease{
 		IP:       "192.168.1.100",
 		Hostname: "test-host",
 		Domain:   "example.com",
-		TTL:      0, // No TTL provided
+		TTL:      0, // No TTL provided, defaults to 3600
 	}
-	
-	// Call UpdateLease
+
 	err := dnsConnector.UpdateLease(lease)
-	
-	// Verify results
 	assert.NoError(t, err)
 	mockDNSManager.AssertExpectations(t)
 }
 
 // TestRemoveLease tests that RemoveLease correctly removes DNS records
 func TestRemoveLease(t *testing.T) {
-	// Create a mock DNS manager
 	mockDNSManager := new(MockDNSManager)
-	
-	// Setup the mock expectations
+
 	mockDNSManager.On("RemoveRecord", "test-host.example.com", "A", "192.168.1.100").Return(nil)
 	mockDNSManager.On("RemoveReverseRecord", "192.168.1.100").Return(nil)
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease
+
 	lease := &types.Lease{
 		IP:       "192.168.1.100",
 		Hostname: "test-host",
 		Domain:   "example.com",
 	}
-	
-	// Call RemoveLease
+
 	err := dnsConnector.RemoveLease(lease)
-	
-	// Verify results
 	assert.NoError(t, err)
 	mockDNSManager.AssertExpectations(t)
 }
 
 // TestRemoveLeaseNoHostname tests that RemoveLease skips DNS records when no hostname is provided
 func TestRemoveLeaseNoHostname(t *testing.T) {
-	// Create a mock DNS manager
 	mockDNSManager := new(MockDNSManager)
-	
-	// No expectations, as no methods should be called
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease with no hostname
+
 	lease := &types.Lease{
 		IP:       "192.168.1.100",
 		Hostname: "",
 		Domain:   "example.com",
 	}
-	
-	// Call RemoveLease
+
 	err := dnsConnector.RemoveLease(lease)
-	
-	// Verify results
 	assert.NoError(t, err)
 	mockDNSManager.AssertExpectations(t)
 }
 
 // TestScheduleLeaseRemoval tests that ScheduleLeaseRemoval correctly schedules a lease removal
 func TestScheduleLeaseRemoval(t *testing.T) {
-	// Create a mock DNS manager
 	mockDNSManager := new(MockDNSManager)
-	
-	// Setup expectations for expired lease
+
 	mockDNSManager.On("RemoveRecord", "test-host.example.com", "A", "192.168.1.100").Return(nil)
 	mockDNSManager.On("RemoveReverseRecord", "192.168.1.100").Return(nil)
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease that has already expired
+
 	expiredLease := &types.Lease{
 		IP:        "192.168.1.100",
 		Hostname:  "test-host",
 		Domain:    "example.com",
 		ExpiresAt: time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
 	}
-	
-	// Call ScheduleLeaseRemoval
+
 	dnsConnector.ScheduleLeaseRemoval(expiredLease)
-	
+
 	// Give a moment for the goroutine to execute
 	time.Sleep(100 * time.Millisecond)
-	
-	// Verify the mock expectations
+
 	mockDNSManager.AssertExpectations(t)
 }
 
@@ -236,31 +211,48 @@ func TestScheduleLeaseRemoval(t *testing.T) {
 func TestScheduleLeaseRemovalFuture(t *testing.T) {
 	// Skip this test in CI environments or when time is a constraint
 	t.Skip("Skipping long-running test")
-	
-	// Create a mock DNS manager
+
 	mockDNSManager := new(MockDNSManager)
-	
-	// Setup expectations for future lease removal
+
 	mockDNSManager.On("RemoveRecord", "test-host.example.com", "A", "192.168.1.100").Return(nil)
 	mockDNSManager.On("RemoveReverseRecord", "192.168.1.100").Return(nil)
-	
-	// Create a DNS connector with the mock
+
 	dnsConnector := controller.NewDNSConnector(mockDNSManager)
-	
-	// Create a test lease that expires in 1 second
+
 	futureLease := &types.Lease{
 		IP:        "192.168.1.100",
 		Hostname:  "test-host",
 		Domain:    "example.com",
 		ExpiresAt: time.Now().Add(1 * time.Second), // Expires in 1 second
 	}
-	
-	// Call ScheduleLeaseRemoval
+
 	dnsConnector.ScheduleLeaseRemoval(futureLease)
-	
-	// Wait for more than the lease expiration time
+
 	time.Sleep(1500 * time.Millisecond)
-	
-	// Verify the mock expectations
+
+	mockDNSManager.AssertExpectations(t)
+}
+
+// TestUpdateLeaseExplicitDomainFromCRD tests that UpdateLease uses the domain
+// from the DHCP CRD spec (carried via Lease.Domain) for proper FQDN generation.
+func TestUpdateLeaseExplicitDomainFromCRD(t *testing.T) {
+	mockDNSManager := new(MockDNSManager)
+
+	// Domain is "home.arpa" from the CRD spec, not a placeholder.
+	mockDNSManager.On("AddRecord", "nas.home.arpa", "A", "10.0.10.50", uint32(7200)).Return(nil)
+	mockDNSManager.On("AddReverseRecord", "10.0.10.50", "nas.home.arpa", uint32(7200)).Return(nil)
+
+	dnsConnector := controller.NewDNSConnector(mockDNSManager)
+
+	lease := &types.Lease{
+		IP:       "10.0.10.50",
+		Hostname: "nas",
+		Domain:   "home.arpa", // From CRD spec
+		VLANRef:  "vlan10",
+		TTL:      7200,
+	}
+
+	err := dnsConnector.UpdateLease(lease)
+	assert.NoError(t, err)
 	mockDNSManager.AssertExpectations(t)
 }
