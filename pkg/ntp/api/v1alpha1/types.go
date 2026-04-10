@@ -257,6 +257,30 @@ type NTSConfig struct {
 	// +optional
 	// +kubebuilder:default=false
 	Enabled bool `json:"enabled,omitempty"`
+
+	// ServerCertFile is the path to the NTS server certificate
+	// +optional
+	// +kubebuilder:default="/etc/chrony/nts/cert.pem"
+	ServerCertFile string `json:"serverCertFile,omitempty"`
+
+	// ServerKeyFile is the path to the NTS server private key
+	// +optional
+	// +kubebuilder:default="/etc/chrony/nts/key.pem"
+	ServerKeyFile string `json:"serverKeyFile,omitempty"`
+
+	// TrustedCerts is the path to trusted certificates for NTS validation
+	// +optional
+	TrustedCerts string `json:"trustedCerts,omitempty"`
+
+	// NTSDumpDir is the directory for NTS cookie dump files
+	// +optional
+	// +kubebuilder:default="/var/lib/chrony"
+	NTSDumpDir string `json:"ntsDumpDir,omitempty"`
+
+	// NTSPort is the port for NTS-KE (Key Establishment) protocol
+	// +optional
+	// +kubebuilder:default=4460
+	NTSPort int `json:"ntsPort,omitempty"`
 }
 
 // AuthConfig defines authentication settings
@@ -339,6 +363,19 @@ type VLANConfig struct {
 	// +optional
 	// +kubebuilder:default=false
 	ClientsOnly bool `json:"clientsOnly,omitempty"`
+
+	// IPv4Address is the IPv4 address of the NTP server on this VLAN
+	// +optional
+	IPv4Address string `json:"ipv4Address,omitempty"`
+
+	// IPv6Address is the IPv6 address of the NTP server on this VLAN
+	// +optional
+	IPv6Address string `json:"ipv6Address,omitempty"`
+
+	// Domain is the DNS domain suffix for this VLAN
+	// +optional
+	// +kubebuilder:default="local"
+	Domain string `json:"domain,omitempty"`
 }
 
 // MonitoringConfig defines monitoring settings

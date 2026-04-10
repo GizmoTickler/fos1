@@ -123,14 +123,17 @@ func (d *DHCPIntegration) UpdateDHCPOptions() error {
 func (d *DHCPIntegration) getNTPServerAddresses(ntpConfig *ntp.NTPService) ([]string, error) {
 	var servers []string
 
-	// Add the local NTP server if it's enabled and synchronized
+	// Add the local NTP server addresses from each VLAN that has NTP enabled
 	if ntpConfig.Enabled && ntpConfig.Server.Local.Enabled {
-		// Get the IP addresses for each VLAN where NTP is enabled
 		for _, vlanConfig := range ntpConfig.VLANConfig {
-			if vlanConfig.Enabled {
-				// In a real implementation, this would get the IP address of the NTP server on this VLAN
-				// For now, we'll use a placeholder IP address
-				servers = append(servers, fmt.Sprintf("192.168.%d.1", len(servers)+1))
+			if !vlanConfig.Enabled {
+				continue
+			}
+			if vlanConfig.IPv4Address != "" {
+				servers = append(servers, vlanConfig.IPv4Address)
+			}
+			if vlanConfig.IPv6Address != "" {
+				servers = append(servers, vlanConfig.IPv6Address)
 			}
 		}
 	}

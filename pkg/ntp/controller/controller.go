@@ -14,6 +14,8 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/GizmoTickler/fos1/pkg/ntp"
+	ntpapi "github.com/GizmoTickler/fos1/pkg/ntp/api"
+	"github.com/GizmoTickler/fos1/pkg/ntp/api/v1alpha1"
 	"github.com/GizmoTickler/fos1/pkg/ntp/chrony"
 	ntpclient "github.com/GizmoTickler/fos1/pkg/ntp/client"
 	"github.com/GizmoTickler/fos1/pkg/ntp/manager"
@@ -247,91 +249,43 @@ func (c *Controller) syncNTPService(ctx context.Context, key string) error {
 	return nil
 }
 
-// updateNTPServiceStatus updates the status of the NTP service resource
+// updateNTPServiceStatus updates the status of the NTP service resource by reading
+// the actual Chrony state and persisting it to the CRD status subresource.
 func (c *Controller) updateNTPServiceStatus(ctx context.Context, ntpService runtime.Object) error {
-	// This would update the status in a real implementation
-	// For simplicity, we're not implementing it in this placeholder
+	svc, ok := ntpService.(*v1alpha1.NTPService)
+	if !ok {
+		return fmt.Errorf("expected *v1alpha1.NTPService, got %T", ntpService)
+	}
+
+	// Read real status from Chrony
+	chronyStatus, err := c.chronyManager.CheckStatus()
+	if err != nil {
+		// Record the error in status but do not fail the reconciliation
+		klog.Warningf("Failed to read Chrony status for %s/%s: %v", svc.Namespace, svc.Name, err)
+		svc.Status = v1alpha1.NTPServiceStatus{
+			SyncStatus: "Unknown",
+		}
+	} else {
+		svc.Status = ntpapi.ConvertToStatus(&chronyStatus)
+	}
+
+	// Persist the status subresource update via the NTP client
+	ns := svc.Namespace
+	if _, err := c.ntpClient.NTPServices(ns).UpdateStatus(svc); err != nil {
+		return fmt.Errorf("failed to update status for %s/%s: %w", ns, svc.Name, err)
+	}
+
+	klog.Infof("Updated status for NTP service %s/%s: %s", ns, svc.Name, svc.Status.SyncStatus)
 	return nil
 }
 
-// convertToInternalNTPService converts a CRD to our internal representation
-func convertToInternalNTPService(crds runtime.Object) *ntp.NTPService {
-	// In a real implementation, this would convert from the CRD types to internal types
-	// For simplicity, we're just returning a placeholder here
-	return &ntp.NTPService{
-		Name:    "main-ntp",
-		Enabled: true,
-		Sources: ntp.Sources{
-			Pools: []ntp.PoolSource{
-				{
-					Name:    "pool.ntp.org",
-					Servers: 4,
-					IBurst:  true,
-					Prefer:  false,
-				},
-				{
-					Name:    "time.cloudflare.com",
-					Servers: 2,
-					IBurst:  true,
-					Prefer:  true,
-				},
-			},
-			Servers: []ntp.ServerSource{
-				{
-					Address: "time.google.com",
-					IBurst:  true,
-					Prefer:  false,
-					MinPoll: 6,
-					MaxPoll: 10,
-				},
-			},
-		},
-		Server: ntp.ServerConfig{
-			Stratum:   2,
-			DriftFile: "/var/lib/chrony/drift",
-			MakeStep: ntp.StepConfig{
-				Threshold: 1.0,
-				Limit:     3,
-			},
-			Local: ntp.LocalClockConfig{
-				Enabled: true,
-				Stratum: 10,
-			},
-		},
-		Security: ntp.SecurityConfig{
-			RateLimit: ntp.RateLimitConfig{
-				Enabled:  true,
-				Interval: 3,
-				Burst:    8,
-			},
-			Access: []ntp.AccessRule{
-				{
-					Network:    "192.168.0.0/16",
-					Permission: "allow",
-				},
-				{
-					Network:    "10.0.0.0/8",
-					Permission: "allow",
-				},
-				{
-					Network:    "0.0.0.0/0",
-					Permission: "deny",
-				},
-			},
-		},
-		VLANConfig: []ntp.VLANConfig{
-			{
-				VLANRef:     "vlan-10",
-				Enabled:     true,
-				Broadcast:   true,
-				ClientsOnly: false,
-			},
-			{
-				VLANRef:     "vlan-20",
-				Enabled:     true,
-				Broadcast:   false,
-				ClientsOnly: true,
-			},
-		},
+// convertToInternalNTPService converts a CRD runtime.Object to the internal NTPService
+// representation using the typed API conversion layer.
+func convertToInternalNTPService(obj runtime.Object) *ntp.NTPService {
+	svc, ok := obj.(*v1alpha1.NTPService)
+	if !ok {
+		klog.Errorf("convertToInternalNTPService: expected *v1alpha1.NTPService, got %T", obj)
+		return nil
 	}
+	return ntpapi.ConvertToInternal(svc)
 }

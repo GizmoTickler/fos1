@@ -33,6 +33,9 @@ type Manager struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	mutex           sync.RWMutex
+
+	// currentConfig holds the last-applied NTP service configuration
+	currentConfig   *ntp.NTPService
 }
 
 // Config holds NTP Manager configuration
@@ -246,6 +249,9 @@ func (m *Manager) UpdateNTPService(service *ntp.NTPService) error {
 		return fmt.Errorf("failed to restart Chrony service: %w", err)
 	}
 
+	// Cache the successfully applied configuration
+	m.currentConfig = service
+
 	klog.Infof("NTP service configuration updated successfully")
 	return nil
 }
@@ -276,69 +282,16 @@ func (m *Manager) UpdateFirewallRules(service *ntp.NTPService) error {
 	return nil
 }
 
-// GetConfig returns the current NTP service configuration
+// GetConfig returns the last-applied NTP service configuration. If no
+// configuration has been applied yet, it returns an error so callers know
+// the service has not been reconciled.
 func (m *Manager) GetConfig() (*ntp.NTPService, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	// In a real implementation, this would retrieve the current configuration
-	// from the Kubernetes API or from a local cache.
-	// For now, we'll return a placeholder configuration.
-
-	// Create a placeholder configuration
-	config := &ntp.NTPService{
-		Name:    "default",
-		Enabled: true,
-		Sources: ntp.Sources{
-			Pools: []ntp.PoolSource{
-				{
-					Name:    "pool.ntp.org",
-					Servers: 4,
-					IBurst:  true,
-				},
-			},
-			Servers: []ntp.ServerSource{
-				{
-					Address: "time.cloudflare.com",
-					IBurst:  true,
-					Prefer:  true,
-				},
-			},
-		},
-		Server: ntp.ServerConfig{
-			Stratum: 10,
-			Local: ntp.LocalClockConfig{
-				Enabled: true,
-				Stratum: 10,
-			},
-		},
-		VLANConfig: []ntp.VLANConfig{
-			{
-				VLANRef: "management",
-				Enabled: true,
-			},
-			{
-				VLANRef: "trusted",
-				Enabled: true,
-			},
-			{
-				VLANRef: "guest",
-				Enabled: true,
-				ClientsOnly: true,
-			},
-		},
-		Security: ntp.SecurityConfig{
-			Authentication: ntp.AuthenticationConfig{
-				Enabled: false,
-			},
-			RateLimit: ntp.RateLimitConfig{
-				Enabled: true,
-			},
-		},
-		Monitoring: ntp.MonitoringConfig{
-			Enabled: true,
-		},
+	if m.currentConfig == nil {
+		return nil, fmt.Errorf("no NTP service configuration has been applied yet")
 	}
 
-	return config, nil
+	return m.currentConfig, nil
 }

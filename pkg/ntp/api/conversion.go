@@ -113,7 +113,12 @@ func convertSecurity(src *v1alpha1.SecurityConfig) ntp.SecurityConfig {
 
 	return ntp.SecurityConfig{
 		NTS: ntp.NTSConfig{
-			Enabled: src.NTS.Enabled,
+			Enabled:        src.NTS.Enabled,
+			ServerCertFile: src.NTS.ServerCertFile,
+			ServerKeyFile:  src.NTS.ServerKeyFile,
+			TrustedCerts:   src.NTS.TrustedCerts,
+			NTSDumpDir:     src.NTS.NTSDumpDir,
+			NTSPort:        src.NTS.NTSPort,
 		},
 		Authentication: ntp.AuthenticationConfig{
 			Enabled: src.Authentication.Enabled,
@@ -141,6 +146,9 @@ func convertVLANConfig(src []v1alpha1.VLANConfig) []ntp.VLANConfig {
 			Enabled:     vlan.Enabled,
 			Broadcast:   vlan.Broadcast,
 			ClientsOnly: vlan.ClientsOnly,
+			IPv4Address: vlan.IPv4Address,
+			IPv6Address: vlan.IPv6Address,
+			Domain:      vlan.Domain,
 		})
 	}
 
