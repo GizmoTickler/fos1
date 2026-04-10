@@ -25,6 +25,10 @@ type coreDNSController interface {
 	RemoveRecord(zoneName, name, recordType, value string) error
 	AddPTRRecord(zoneName string, record *coredns.DNSRecord) error
 	RemovePTRRecord(zoneName, name string) error
+	UpdateZone(zone *coredns.Zone) error
+	UpdatePTRZone(ptrZone *coredns.PTRZone) error
+	GetZone(name string) *coredns.Zone
+	ListZones() []string
 }
 
 type adGuardController interface {
@@ -32,6 +36,10 @@ type adGuardController interface {
 	Stop() error
 	Sync() error
 	Status() (*adguard.AdGuardStatus, error)
+	UpdateFilterList(name, url string, enabled bool) error
+	RemoveFilterList(name string) error
+	UpdateClientRule(clientID, clientName string, addresses []string, enabled bool, blockLists, allowLists []string) error
+	RemoveClientRule(clientID string) error
 }
 
 type mdnsController interface {
@@ -39,6 +47,9 @@ type mdnsController interface {
 	Stop() error
 	Sync() error
 	Status() (*mdns.MDNSStatus, error)
+	UpdateReflectionRule(name string, sourceVLANs, destinationVLANs []int, serviceTypes []string, enabled bool) error
+	RemoveReflectionRule(name string) error
+	EnableReflection(enabled bool) error
 }
 
 // Manager coordinates all DNS services
@@ -47,6 +58,9 @@ type Manager struct {
 	coreDNSController coreDNSController
 	adGuardController adGuardController
 	mDNSController    mdnsController
+
+	// Zone cache for record lookup
+	zones map[string]*DNSZone
 
 	// Integration
 	dhcpIntegration  *DHCPIntegration
@@ -100,6 +114,7 @@ func NewManager(
 		coreDNSController: coreController,
 		adGuardController: adGuardController,
 		mDNSController:    mDNSController,
+		zones:             make(map[string]*DNSZone),
 		k8sClient:         client,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -265,58 +280,193 @@ func (m *Manager) setupInformers() error {
 	return nil
 }
 
-// UpdateDNSZone handles DNS zone updates
+// UpdateDNSZone handles DNS zone updates by converting the manager zone
+// representation to a CoreDNS zone and delegating to the CoreDNS controller,
+// which writes the zone file to disk and triggers a reload.
 func (m *Manager) UpdateDNSZone(zone *DNSZone) error {
 	if m.coreDNSController == nil {
 		return fmt.Errorf("CoreDNS controller not initialized")
 	}
+	if zone == nil {
+		return fmt.Errorf("zone is nil")
+	}
 
 	log.Printf("Updating DNS zone: %s", zone.Name)
-	// Placeholder: UpdateZone not yet implemented on CoreDNS controller
+
+	// Convert manager zone to CoreDNS zone
+	coreZone := &coredns.Zone{
+		Name:    zone.Name,
+		Domain:  zone.Domain,
+		Records: make([]*coredns.DNSRecord, 0, len(zone.Records)),
+	}
+
+	if zone.SOA != nil {
+		coreZone.SOA = &coredns.SOARecord{
+			MName:   zone.SOA.MName,
+			RName:   zone.SOA.RName,
+			Serial:  zone.SOA.Serial,
+			Refresh: zone.SOA.Refresh,
+			Retry:   zone.SOA.Retry,
+			Expire:  zone.SOA.Expire,
+			Minimum: zone.SOA.Minimum,
+		}
+	}
+
+	for _, rec := range zone.Records {
+		coreZone.Records = append(coreZone.Records, &coredns.DNSRecord{
+			Name:    rec.Name,
+			Type:    rec.Type,
+			Value:   rec.Value,
+			TTL:     rec.TTL,
+			Dynamic: rec.Dynamic,
+		})
+	}
+
+	if err := m.coreDNSController.UpdateZone(coreZone); err != nil {
+		return fmt.Errorf("failed to update zone %s via CoreDNS controller: %w", zone.Domain, err)
+	}
+
+	// Cache the zone locally for lookup
+	m.mutex.Lock()
+	m.zones[zone.Domain] = zone
+	m.mutex.Unlock()
+
 	return nil
 }
 
-// UpdatePTRZone handles PTR zone updates
+// UpdatePTRZone handles PTR zone updates by converting the manager PTR zone
+// representation to a CoreDNS PTR zone and delegating to the CoreDNS controller,
+// which writes the reverse zone file to disk and triggers a reload.
 func (m *Manager) UpdatePTRZone(zone *PTRZone) error {
 	if m.coreDNSController == nil {
 		return fmt.Errorf("CoreDNS controller not initialized")
 	}
+	if zone == nil {
+		return fmt.Errorf("PTR zone is nil")
+	}
 
 	log.Printf("Updating PTR zone: %s", zone.Name)
-	// Placeholder: UpdatePTRZone not yet implemented on CoreDNS controller
+
+	// Convert manager PTR zone to CoreDNS PTR zone
+	corePTRZone := &coredns.PTRZone{
+		Name:    zone.Name,
+		Network: zone.Network,
+		Records: make([]*coredns.DNSRecord, 0, len(zone.Records)),
+	}
+
+	if zone.SOA != nil {
+		corePTRZone.SOA = &coredns.SOARecord{
+			MName:   zone.SOA.MName,
+			RName:   zone.SOA.RName,
+			Serial:  zone.SOA.Serial,
+			Refresh: zone.SOA.Refresh,
+			Retry:   zone.SOA.Retry,
+			Expire:  zone.SOA.Expire,
+			Minimum: zone.SOA.Minimum,
+		}
+	}
+
+	for _, rec := range zone.Records {
+		corePTRZone.Records = append(corePTRZone.Records, &coredns.DNSRecord{
+			Name:    rec.Name,
+			Type:    rec.Type,
+			Value:   rec.Value,
+			TTL:     rec.TTL,
+			Dynamic: rec.Dynamic,
+		})
+	}
+
+	if err := m.coreDNSController.UpdatePTRZone(corePTRZone); err != nil {
+		return fmt.Errorf("failed to update PTR zone %s via CoreDNS controller: %w", zone.Name, err)
+	}
+
 	return nil
 }
 
-// UpdateDNSFilters updates DNS filtering rules
+// UpdateDNSFilters updates DNS filtering rules by syncing each custom filter
+// list to the AdGuard controller, which persists the configuration and applies it.
 func (m *Manager) UpdateDNSFilters(filters *DNSFilterList) error {
 	if m.adGuardController == nil {
 		return fmt.Errorf("AdGuard controller not initialized")
 	}
+	if filters == nil {
+		return fmt.Errorf("filters is nil")
+	}
 
 	log.Printf("Updating DNS filters: %s", filters.Name)
-	// Placeholder: UpdateFilters not yet implemented on AdGuard controller
+
+	// Sync each custom filter list to AdGuard
+	for _, customList := range filters.CustomLists {
+		if err := m.adGuardController.UpdateFilterList(customList.Name, customList.URL, customList.Enabled); err != nil {
+			return fmt.Errorf("failed to update filter list %s via AdGuard controller: %w", customList.Name, err)
+		}
+	}
+
 	return nil
 }
 
-// UpdateDNSClient updates DNS client configuration
+// UpdateDNSClient updates DNS client configuration by converting the manager
+// client representation to AdGuard controller parameters and delegating the update.
 func (m *Manager) UpdateDNSClient(client *DNSClient) error {
 	if m.adGuardController == nil {
 		return fmt.Errorf("AdGuard controller not initialized")
 	}
+	if client == nil {
+		return fmt.Errorf("client is nil")
+	}
 
 	log.Printf("Updating DNS client: %s", client.Name)
-	// Placeholder: UpdateClient not yet implemented on AdGuard controller
+
+	// Extract client addresses from identifiers
+	addresses := make([]string, 0, len(client.Identifiers))
+	for _, id := range client.Identifiers {
+		addresses = append(addresses, id.Value)
+	}
+
+	if err := m.adGuardController.UpdateClientRule(
+		client.Name,
+		client.Description,
+		addresses,
+		client.Filtering.Enabled,
+		client.Filtering.BlockLists,
+		client.Filtering.Exceptions,
+	); err != nil {
+		return fmt.Errorf("failed to update client %s via AdGuard controller: %w", client.Name, err)
+	}
+
 	return nil
 }
 
-// UpdateMDNSReflection updates mDNS reflection rules
+// UpdateMDNSReflection updates mDNS reflection rules by syncing each rule
+// to the mDNS controller and updating the global reflection enabled state.
 func (m *Manager) UpdateMDNSReflection(reflection *MDNSReflection) error {
 	if m.mDNSController == nil {
 		return fmt.Errorf("mDNS controller not initialized")
 	}
+	if reflection == nil {
+		return fmt.Errorf("reflection is nil")
+	}
 
 	log.Printf("Updating mDNS reflection: %s", reflection.Name)
-	// Placeholder: UpdateReflection not yet implemented on mDNS controller
+
+	// Update global reflection state
+	if err := m.mDNSController.EnableReflection(reflection.Enabled); err != nil {
+		return fmt.Errorf("failed to set reflection enabled state: %w", err)
+	}
+
+	// Sync each reflection rule
+	for _, rule := range reflection.ReflectionRules {
+		if err := m.mDNSController.UpdateReflectionRule(
+			rule.Name,
+			rule.SourceVLANs,
+			rule.DestinationVLANs,
+			rule.ServiceTypes,
+			reflection.Enabled,
+		); err != nil {
+			return fmt.Errorf("failed to update reflection rule %s via mDNS controller: %w", rule.Name, err)
+		}
+	}
+
 	return nil
 }
 
@@ -549,18 +699,75 @@ func (m *Manager) RemoveReverseRecord(ip string) error {
 	return nil
 }
 
-// findZoneForRecord finds the DNS zone for a given record name
+// findZoneForRecord finds the DNS zone for a given record name by checking the
+// local zone cache and the CoreDNS controller's zone list for the longest
+// matching domain suffix.
+// The caller must already hold m.mutex (read or write).
 func (m *Manager) findZoneForRecord(name string) (*DNSZone, error) {
-	// Implementation depends on how zones are stored
-	// For now, we'll use a placeholder implementation that just returns a default zone
-	defaultZone := &DNSZone{
-		Name:    "default",
+	// Collect all known zone names from cache and CoreDNS controller
+	zoneNames := make(map[string]bool)
+	for domain := range m.zones {
+		zoneNames[domain] = true
+	}
+
+	if m.coreDNSController != nil {
+		for _, zn := range m.coreDNSController.ListZones() {
+			zoneNames[zn] = true
+		}
+	}
+
+	// Find the longest matching zone suffix for the record name
+	var bestMatch string
+	normalizedName := strings.TrimSuffix(name, ".")
+
+	for domain := range zoneNames {
+		normalizedDomain := strings.TrimSuffix(domain, ".")
+		if normalizedName == normalizedDomain || strings.HasSuffix(normalizedName, "."+normalizedDomain) {
+			if len(normalizedDomain) > len(bestMatch) {
+				bestMatch = normalizedDomain
+			}
+		}
+	}
+
+	if bestMatch != "" {
+		// Check local cache first
+		if zone, ok := m.zones[bestMatch]; ok {
+			return zone, nil
+		}
+
+		// Fall back to CoreDNS controller state
+		if m.coreDNSController != nil {
+			coreZone := m.coreDNSController.GetZone(bestMatch)
+			if coreZone != nil {
+				// Convert to manager zone
+				zone := &DNSZone{
+					Name:    coreZone.Name,
+					Domain:  coreZone.Domain,
+					Records: make([]*DNSRecord, 0, len(coreZone.Records)),
+				}
+				for _, rec := range coreZone.Records {
+					zone.Records = append(zone.Records, &DNSRecord{
+						Name:    rec.Name,
+						Type:    rec.Type,
+						Value:   rec.Value,
+						TTL:     rec.TTL,
+						Dynamic: rec.Dynamic,
+					})
+				}
+				return zone, nil
+			}
+		}
+	}
+
+	// No matching zone found; return a default zone so individual record
+	// operations can still proceed (the CoreDNS controller auto-creates
+	// zones on first record addition).
+	return &DNSZone{
+		Name:    "local",
 		Domain:  "local",
 		TTL:     3600,
 		Records: []*DNSRecord{},
-	}
-
-	return defaultZone, nil
+	}, nil
 }
 
 // convertToReverseLookup converts an IP address to reverse lookup format
