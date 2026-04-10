@@ -76,6 +76,12 @@ func (c *DirectCiliumClient) ConfigureVLANRouting(ctx context.Context, config *C
 	return nil
 }
 
+// DeleteNetworkPolicy removes a Cilium network policy by name
+func (c *DirectCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	log.Printf("Deleting network policy: %s", policyName)
+	return nil
+}
+
 // ApplyNetworkPolicy applies a network policy to Cilium
 func (c *DirectCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error {
 	log.Printf("Applying network policy: %s", policy.Name)

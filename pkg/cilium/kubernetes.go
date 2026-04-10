@@ -133,3 +133,19 @@ func (c *KubernetesCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy 
 	log.Printf("Created Cilium policy %s", policy.Name)
 	return nil
 }
+
+// DeleteNetworkPolicy removes a Cilium network policy by name
+func (c *KubernetesCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	err := c.cilium.CiliumV2().CiliumNetworkPolicies(c.namespace).Delete(
+		ctx, policyName, metav1.DeleteOptions{},
+	)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			log.Printf("Cilium policy %s not found, nothing to delete", policyName)
+			return nil
+		}
+		return fmt.Errorf("failed to delete Cilium policy %s: %w", policyName, err)
+	}
+	log.Printf("Deleted Cilium policy %s", policyName)
+	return nil
+}

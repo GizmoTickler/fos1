@@ -65,6 +65,12 @@ func (s *SimpleCiliumClient) ConfigureVLANRouting(ctx context.Context, config *c
 	return nil
 }
 
+// DeleteNetworkPolicy is a simple implementation
+func (s *SimpleCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	log.Printf("Deleting network policy: %s", policyName)
+	return nil
+}
+
 func main() {
 	// Parse command-line flags
 	zeekLogsPath := flag.String("zeek-logs", "/usr/local/zeek/logs/current", "Path to Zeek logs directory")

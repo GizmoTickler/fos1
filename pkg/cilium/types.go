@@ -340,6 +340,9 @@ type CiliumClient interface {
 	// ApplyNetworkPolicy applies a Cilium network policy
 	ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error
 
+	// DeleteNetworkPolicy removes a Cilium network policy by name
+	DeleteNetworkPolicy(ctx context.Context, policyName string) error
+
 	// CreateNAT creates NAT rules using Cilium's capabilities
 	CreateNAT(ctx context.Context, config *CiliumNATConfig) error
 

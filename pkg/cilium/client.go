@@ -34,6 +34,16 @@ func (c *DefaultCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *Ci
 	return c.applyYAML(policyYAML)
 }
 
+// DeleteNetworkPolicy removes a Cilium network policy by name
+func (c *DefaultCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	cmd := exec.Command("kubectl", "delete", "cnp", policyName, "--ignore-not-found")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to delete policy %s: %w\nOutput: %s", policyName, err, string(output))
+	}
+	return nil
+}
+
 // CreateNAT creates NAT rules using Cilium's capabilities.
 // For SNAT/masquerade, this creates an egress policy with source CIDR matching
 // and masquerade annotation on the destination interface.

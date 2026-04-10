@@ -451,11 +451,20 @@ func (c *SuricataConnector) Status() (SuricataStatus, error) {
 		IPLists:      make(map[string]int),
 	}
 
-	// In a real implementation, would query Suricata for rule statistics
-	// For now, just add some placeholder data
-	status.RuleStats["total"] = 10000
-	status.RuleStats["enabled"] = 5000
-	status.RuleStats["dropped"] = 100
+	// Derive rule statistics from actual tracked state.
+	// alertRules tracks policies created from alerts seen so far.
+	status.RuleStats["alert_policies_active"] = len(c.alertRules)
+
+	// Count blocking rules (IPS mode) vs logged alerts (IDS mode)
+	blockedCount := 0
+	for _, policy := range c.alertRules {
+		for _, rule := range policy.Rules {
+			if rule.Denied {
+				blockedCount++
+			}
+		}
+	}
+	status.BlockedCount = blockedCount
 
 	// Add IP list sizes
 	for name, ips := range c.ipLists {
