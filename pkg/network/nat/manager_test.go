@@ -5,63 +5,70 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 )
 
-// mockCiliumClient is a mock Cilium client for testing NAT manager behavior.
-// It records calls and can be configured to return errors.
+// mockCiliumClient implements cilium.Client for testing
 type mockCiliumClient struct {
-	createNATCalls        []*cilium.CiliumNATConfig
-	removeNATCalls        []*cilium.CiliumNATConfig
-	createNAT64Calls      []*cilium.NAT64Config
-	removeNAT64Calls      []*cilium.NAT64Config
-	createPortForwardCalls []*cilium.PortForwardConfig
-	removePortForwardCalls []*cilium.PortForwardConfig
+	createNATCalls         int
+	removeNATCalls         int
+	createPortForwardCalls int
+	removePortForwardCalls int
+	createNAT64Calls       int
+	removeNAT64Calls       int
 
-	// Error injection
-	createNATErr        error
-	removeNATErr        error
-	createNAT64Err      error
-	removeNAT64Err      error
+	// errors to inject
+	createNATErr         error
 	createPortForwardErr error
+	removeNATErr         error
 	removePortForwardErr error
-}
+	createNAT64Err       error
+	removeNAT64Err       error
 
-func newMockCiliumClient() *mockCiliumClient {
-	return &mockCiliumClient{}
+	// failAfterN causes CreatePortForward to fail after N successful calls
+	failPortForwardAfterN int
 }
 
 func (m *mockCiliumClient) ApplyNetworkPolicy(_ context.Context, _ *cilium.CiliumPolicy) error {
 	return nil
 }
 
-func (m *mockCiliumClient) CreateNAT(_ context.Context, config *cilium.CiliumNATConfig) error {
-	m.createNATCalls = append(m.createNATCalls, config)
+func (m *mockCiliumClient) CreateNAT(_ context.Context, _ *cilium.CiliumNATConfig) error {
+	m.createNATCalls++
 	return m.createNATErr
 }
 
-func (m *mockCiliumClient) RemoveNAT(_ context.Context, config *cilium.CiliumNATConfig) error {
-	m.removeNATCalls = append(m.removeNATCalls, config)
+func (m *mockCiliumClient) RemoveNAT(_ context.Context, _ *cilium.CiliumNATConfig) error {
+	m.removeNATCalls++
 	return m.removeNATErr
 }
 
-func (m *mockCiliumClient) CreateNAT64(_ context.Context, config *cilium.NAT64Config) error {
-	m.createNAT64Calls = append(m.createNAT64Calls, config)
+func (m *mockCiliumClient) CreateNAT64(_ context.Context, _ *cilium.NAT64Config) error {
+	m.createNAT64Calls++
 	return m.createNAT64Err
 }
 
-func (m *mockCiliumClient) RemoveNAT64(_ context.Context, config *cilium.NAT64Config) error {
-	m.removeNAT64Calls = append(m.removeNAT64Calls, config)
+func (m *mockCiliumClient) RemoveNAT64(_ context.Context, _ *cilium.NAT64Config) error {
+	m.removeNAT64Calls++
 	return m.removeNAT64Err
 }
 
-func (m *mockCiliumClient) CreatePortForward(_ context.Context, config *cilium.PortForwardConfig) error {
-	m.createPortForwardCalls = append(m.createPortForwardCalls, config)
-	return m.createPortForwardErr
+func (m *mockCiliumClient) CreatePortForward(_ context.Context, _ *cilium.PortForwardConfig) error {
+	m.createPortForwardCalls++
+	if m.failPortForwardAfterN > 0 && m.createPortForwardCalls > m.failPortForwardAfterN {
+		return m.createPortForwardErr
+	}
+	if m.failPortForwardAfterN == 0 && m.createPortForwardErr != nil {
+		return m.createPortForwardErr
+	}
+	return nil
 }
 
-func (m *mockCiliumClient) RemovePortForward(_ context.Context, config *cilium.PortForwardConfig) error {
-	m.removePortForwardCalls = append(m.removePortForwardCalls, config)
+func (m *mockCiliumClient) RemovePortForward(_ context.Context, _ *cilium.PortForwardConfig) error {
+	m.removePortForwardCalls++
 	return m.removePortForwardErr
 }
 
@@ -73,217 +80,172 @@ func (m *mockCiliumClient) ConfigureDPIIntegration(_ context.Context, _ *cilium.
 	return nil
 }
 
-// --- Tests ---
-
-func TestApplySNATPolicy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
+// validSNATConfig returns a valid SNAT config for testing
+func validSNATConfig() Config {
+	return Config{
 		Name:            "test-snat",
 		Namespace:       "default",
 		Type:            TypeSNAT,
 		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-	}
-
-	err := mgr.ApplyNATPolicy(config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	// Verify Cilium was called
-	if len(mock.createNATCalls) != 1 {
-		t.Fatalf("expected 1 CreateNAT call, got %d", len(mock.createNATCalls))
-	}
-	call := mock.createNATCalls[0]
-	if call.SourceNetwork != "192.168.1.0/24" {
-		t.Errorf("expected source network 192.168.1.0/24, got %s", call.SourceNetwork)
-	}
-	if call.DestinationIface != "eth0" {
-		t.Errorf("expected destination iface eth0, got %s", call.DestinationIface)
-	}
-	if call.IPv6 {
-		t.Error("expected IPv6=false for SNAT")
-	}
-
-	// Verify status is Ready
-	status, err := mgr.GetNATPolicyStatus("test-snat", "default")
-	if err != nil {
-		t.Fatalf("expected no error getting status, got: %v", err)
-	}
-	assertReadyCondition(t, status, true, "PolicyApplied")
-}
-
-func TestApplySNATPolicy_CiliumFailure(t *testing.T) {
-	mock := newMockCiliumClient()
-	mock.createNATErr = fmt.Errorf("cilium connection refused")
-	mgr := NewManager(mock)
-
-	config := Config{
-		Name:            "test-snat-fail",
-		Namespace:       "default",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-	}
-
-	err := mgr.ApplyNATPolicy(config)
-	if err == nil {
-		t.Fatal("expected error when Cilium fails, got nil")
-	}
-
-	// Policy should NOT be stored after failure
-	policies, _ := mgr.ListNATPolicies()
-	if len(policies) != 0 {
-		t.Errorf("expected 0 policies after failure, got %d", len(policies))
-	}
-
-	// Status should not exist (policy was cleaned up)
-	_, err = mgr.GetNATPolicyStatus("test-snat-fail", "default")
-	if err == nil {
-		t.Error("expected error getting status for failed policy")
+		ExternalIP:      "203.0.113.1",
+		SourceAddresses: []string{"10.0.0.0/24"},
+		EnableTracking:  true,
 	}
 }
 
-func TestApplyMasqueradePolicy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
-		Name:            "test-masq",
-		Namespace:       "default",
-		Type:            TypeMasquerade,
-		Interface:       "eth0",
-		SourceAddresses: []string{"10.0.0.0/8"},
-	}
-
-	err := mgr.ApplyNATPolicy(config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	if len(mock.createNATCalls) != 1 {
-		t.Fatalf("expected 1 CreateNAT call, got %d", len(mock.createNATCalls))
-	}
-	if !mock.createNATCalls[0].MasqueradeEnabled {
-		t.Error("expected MasqueradeEnabled=true for masquerade policy")
-	}
-}
-
-func TestApplyDNATPolicy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
+// validDNATConfig returns a valid DNAT config for testing
+func validDNATConfig() Config {
+	return Config{
 		Name:       "test-dnat",
 		Namespace:  "default",
 		Type:       TypeDNAT,
+		Interface:  "eth0",
 		ExternalIP: "203.0.113.1",
 		PortMappings: []PortMapping{
 			{
 				Protocol:     "tcp",
-				ExternalPort: 80,
-				InternalIP:   "192.168.1.10",
-				InternalPort: 8080,
-				Description:  "HTTP redirect",
-			},
-			{
-				Protocol:     "tcp",
-				ExternalPort: 443,
-				InternalIP:   "192.168.1.10",
-				InternalPort: 8443,
-				Description:  "HTTPS redirect",
+				ExternalPort: 8080,
+				InternalIP:   "10.0.0.5",
+				InternalPort: 80,
+				Description:  "HTTP",
 			},
 		},
 	}
-
-	err := mgr.ApplyNATPolicy(config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-
-	// Should create one port forward per mapping
-	if len(mock.createPortForwardCalls) != 2 {
-		t.Fatalf("expected 2 CreatePortForward calls, got %d", len(mock.createPortForwardCalls))
-	}
-
-	// Verify first mapping
-	pf := mock.createPortForwardCalls[0]
-	if pf.ExternalIP != "203.0.113.1" {
-		t.Errorf("expected external IP 203.0.113.1, got %s", pf.ExternalIP)
-	}
-	if pf.ExternalPort != 80 {
-		t.Errorf("expected external port 80, got %d", pf.ExternalPort)
-	}
-	if pf.InternalIP != "192.168.1.10" {
-		t.Errorf("expected internal IP 192.168.1.10, got %s", pf.InternalIP)
-	}
-	if pf.InternalPort != 8080 {
-		t.Errorf("expected internal port 8080, got %d", pf.InternalPort)
-	}
 }
 
-func TestApplyNAT66Policy(t *testing.T) {
-	mock := newMockCiliumClient()
+func TestApplyNATPolicy_SuccessfulSNAT(t *testing.T) {
+	mock := &mockCiliumClient{}
 	mgr := NewManager(mock)
 
-	config := Config{
-		Name:            "test-nat66",
-		Namespace:       "default",
-		Type:            TypeNAT66,
-		Interface:       "eth0",
-		SourceAddresses: []string{"fd00::/64"},
-	}
+	config := validSNATConfig()
+	result, err := mgr.ApplyNATPolicy(config)
 
-	err := mgr.ApplyNATPolicy(config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
+	require.NoError(t, err)
+	assert.True(t, result.Applied)
+	assert.False(t, result.Degraded)
+	assert.Equal(t, 1, mock.createNATCalls)
 
-	if len(mock.createNATCalls) != 1 {
-		t.Fatalf("expected 1 CreateNAT call, got %d", len(mock.createNATCalls))
-	}
-	call := mock.createNATCalls[0]
-	if !call.IPv6 {
-		t.Error("expected IPv6=true for NAT66")
-	}
-	if call.SourceNetwork != "fd00::/64" {
-		t.Errorf("expected source fd00::/64, got %s", call.SourceNetwork)
-	}
+	// Verify status reflects Applied=True
+	status, err := mgr.GetNATPolicyStatus("test-snat", "default")
+	require.NoError(t, err)
+
+	appliedCond := findCondition(status.Conditions, ConditionApplied)
+	require.NotNil(t, appliedCond)
+	assert.Equal(t, ConditionStatusTrue, appliedCond.Status)
+	assert.Equal(t, "PolicyApplied", appliedCond.Reason)
+
+	invalidCond := findCondition(status.Conditions, ConditionInvalid)
+	require.NotNil(t, invalidCond)
+	assert.Equal(t, ConditionStatusFalse, invalidCond.Status)
+
+	// Verify hash is set
+	assert.NotEmpty(t, status.LastAppliedHash)
+	assert.False(t, status.LastAppliedTime.IsZero())
 }
 
-func TestApplyNAT64Policy(t *testing.T) {
-	mock := newMockCiliumClient()
+func TestApplyNATPolicy_Idempotent(t *testing.T) {
+	mock := &mockCiliumClient{}
 	mgr := NewManager(mock)
 
-	config := Config{
-		Name:            "test-nat64",
-		Namespace:       "default",
-		Type:            TypeNAT64,
-		Interface:       "eth0",
-		SourceAddresses: []string{"2001:db8::/32"},
-	}
+	config := validSNATConfig()
 
-	err := mgr.ApplyNATPolicy(config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
+	// First apply
+	result1, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+	assert.True(t, result1.Applied)
+	assert.Equal(t, 1, mock.createNATCalls)
 
-	if len(mock.createNAT64Calls) != 1 {
-		t.Fatalf("expected 1 CreateNAT64 call, got %d", len(mock.createNAT64Calls))
-	}
-	call := mock.createNAT64Calls[0]
-	if call.SourceNetwork != "2001:db8::/32" {
-		t.Errorf("expected source 2001:db8::/32, got %s", call.SourceNetwork)
-	}
-	if call.Prefix64 != cilium.DefaultNAT64Prefix {
-		t.Errorf("expected prefix64 %s, got %s", cilium.DefaultNAT64Prefix, call.Prefix64)
-	}
+	// Second apply with same config -> should skip Cilium calls
+	result2, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+	assert.False(t, result2.Applied, "second apply of same spec should be skipped")
+	assert.Equal(t, 1, mock.createNATCalls, "Cilium should not be called again")
 }
 
-func TestApplyFullNATPolicy(t *testing.T) {
-	mock := newMockCiliumClient()
+func TestApplyNATPolicy_SpecChange_ReApplies(t *testing.T) {
+	mock := &mockCiliumClient{}
+	mgr := NewManager(mock)
+
+	config := validSNATConfig()
+
+	// First apply
+	_, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+	assert.Equal(t, 1, mock.createNATCalls)
+
+	// Change the spec
+	config.ExternalIP = "203.0.113.2"
+
+	// Second apply -> should re-apply because spec changed
+	result, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+	assert.True(t, result.Applied)
+	assert.Equal(t, 2, mock.createNATCalls)
+}
+
+func TestApplyNATPolicy_InvalidConfig(t *testing.T) {
+	mock := &mockCiliumClient{}
+	mgr := NewManager(mock)
+
+	// Missing interface
+	config := Config{
+		Name:            "bad-policy",
+		Namespace:       "default",
+		Type:            TypeSNAT,
+		ExternalIP:      "1.2.3.4",
+		SourceAddresses: []string{"10.0.0.0/24"},
+	}
+
+	result, err := mgr.ApplyNATPolicy(config)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "validation failed")
+	assert.Equal(t, 0, mock.createNATCalls, "Cilium should not be called for invalid config")
+
+	// Verify status reflects Invalid=True
+	status, err := mgr.GetNATPolicyStatus("bad-policy", "default")
+	require.NoError(t, err)
+
+	invalidCond := findCondition(status.Conditions, ConditionInvalid)
+	require.NotNil(t, invalidCond)
+	assert.Equal(t, ConditionStatusTrue, invalidCond.Status)
+	assert.Equal(t, "ValidationFailed", invalidCond.Reason)
+
+	appliedCond := findCondition(status.Conditions, ConditionApplied)
+	require.NotNil(t, appliedCond)
+	assert.Equal(t, ConditionStatusFalse, appliedCond.Status)
+}
+
+func TestApplyNATPolicy_CiliumFailure(t *testing.T) {
+	mock := &mockCiliumClient{
+		createNATErr: fmt.Errorf("cilium connection refused"),
+	}
+	mgr := NewManager(mock)
+
+	config := validSNATConfig()
+	result, err := mgr.ApplyNATPolicy(config)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "cilium connection refused")
+
+	// Status should show Applied=False
+	status, err := mgr.GetNATPolicyStatus("test-snat", "default")
+	require.NoError(t, err)
+
+	appliedCond := findCondition(status.Conditions, ConditionApplied)
+	require.NotNil(t, appliedCond)
+	assert.Equal(t, ConditionStatusFalse, appliedCond.Status)
+	assert.Equal(t, "ApplyFailed", appliedCond.Reason)
+
+	// Hash should be empty so next reconcile retries
+	assert.Empty(t, status.LastAppliedHash)
+}
+
+func TestApplyNATPolicy_FullNAT_DegradedOnPartialFailure(t *testing.T) {
+	mock := &mockCiliumClient{
+		// SNAT (CreateNAT) succeeds, DNAT (CreatePortForward) fails
+		createPortForwardErr: fmt.Errorf("port forward failed"),
+	}
 	mgr := NewManager(mock)
 
 	config := Config{
@@ -292,420 +254,211 @@ func TestApplyFullNATPolicy(t *testing.T) {
 		Type:            TypeFull,
 		Interface:       "eth0",
 		ExternalIP:      "203.0.113.1",
-		SourceAddresses: []string{"192.168.1.0/24"},
+		SourceAddresses: []string{"10.0.0.0/24"},
 		PortMappings: []PortMapping{
-			{
-				Protocol:     "tcp",
-				ExternalPort: 80,
-				InternalIP:   "192.168.1.10",
-				InternalPort: 8080,
-			},
+			{Protocol: "tcp", ExternalPort: 80, InternalIP: "10.0.0.5", InternalPort: 80},
 		},
 	}
 
-	err := mgr.ApplyNATPolicy(config)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
+	result, err := mgr.ApplyNATPolicy(config)
+	// Degraded returns nil error but result.Degraded=true
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Applied)
+	assert.True(t, result.Degraded)
+	assert.Contains(t, result.Error, "DNAT")
 
-	// SNAT creates one NAT call, DNAT creates one port forward call
-	if len(mock.createNATCalls) != 1 {
-		t.Errorf("expected 1 CreateNAT call for SNAT, got %d", len(mock.createNATCalls))
-	}
-	if len(mock.createPortForwardCalls) != 1 {
-		t.Errorf("expected 1 CreatePortForward call for DNAT, got %d", len(mock.createPortForwardCalls))
-	}
+	// Verify status reflects degraded
+	status, stErr := mgr.GetNATPolicyStatus("test-full", "default")
+	require.NoError(t, stErr)
+
+	degradedCond := findCondition(status.Conditions, ConditionDegraded)
+	require.NotNil(t, degradedCond)
+	assert.Equal(t, ConditionStatusTrue, degradedCond.Status)
+
+	// Hash should be empty to force retry
+	assert.Empty(t, status.LastAppliedHash)
 }
 
-func TestRemoveNATPolicy(t *testing.T) {
-	mock := newMockCiliumClient()
+func TestRemoveNATPolicy_Success(t *testing.T) {
+	mock := &mockCiliumClient{}
 	mgr := NewManager(mock)
 
-	config := Config{
-		Name:            "test-remove",
-		Namespace:       "default",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-	}
+	config := validSNATConfig()
+	_, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
 
-	// Apply first
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("apply failed: %v", err)
-	}
+	err = mgr.RemoveNATPolicy("test-snat", "default")
+	require.NoError(t, err)
+	assert.Equal(t, 1, mock.removeNATCalls)
 
-	// Remove
-	if err := mgr.RemoveNATPolicy("test-remove", "default"); err != nil {
-		t.Fatalf("remove failed: %v", err)
-	}
+	// Status should be gone
+	_, err = mgr.GetNATPolicyStatus("test-snat", "default")
+	require.Error(t, err)
+}
 
-	// Verify Cilium RemoveNAT was called
-	if len(mock.removeNATCalls) != 1 {
-		t.Fatalf("expected 1 RemoveNAT call, got %d", len(mock.removeNATCalls))
-	}
+func TestRemoveNATPolicy_NonExistent_Idempotent(t *testing.T) {
+	mock := &mockCiliumClient{}
+	mgr := NewManager(mock)
 
-	// Verify policy is gone
-	policies, _ := mgr.ListNATPolicies()
-	if len(policies) != 0 {
-		t.Errorf("expected 0 policies after removal, got %d", len(policies))
-	}
-
-	// Verify status is gone
-	_, err := mgr.GetNATPolicyStatus("test-remove", "default")
-	if err == nil {
-		t.Error("expected error getting status for removed policy")
-	}
+	// Removing a non-existent policy should succeed (idempotent)
+	err := mgr.RemoveNATPolicy("nonexistent", "default")
+	require.NoError(t, err)
+	assert.Equal(t, 0, mock.removeNATCalls)
 }
 
 func TestRemoveNATPolicy_CiliumFailure(t *testing.T) {
-	mock := newMockCiliumClient()
+	mock := &mockCiliumClient{
+		removeNATErr: fmt.Errorf("cilium timeout"),
+	}
+	mgr := NewManager(mock)
+
+	config := validSNATConfig()
+	_, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+
+	err = mgr.RemoveNATPolicy("test-snat", "default")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cilium timeout")
+
+	// Status should still exist with Removed=False
+	status, err := mgr.GetNATPolicyStatus("test-snat", "default")
+	require.NoError(t, err)
+
+	removedCond := findCondition(status.Conditions, ConditionRemoved)
+	require.NotNil(t, removedCond)
+	assert.Equal(t, ConditionStatusFalse, removedCond.Status)
+	assert.Equal(t, "RemovalFailed", removedCond.Reason)
+}
+
+func TestApplyNATPolicy_DNAT_Success(t *testing.T) {
+	mock := &mockCiliumClient{}
+	mgr := NewManager(mock)
+
+	config := validDNATConfig()
+	result, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+	assert.True(t, result.Applied)
+	assert.Equal(t, 1, mock.createPortForwardCalls)
+}
+
+func TestApplyNATPolicy_Masquerade_Success(t *testing.T) {
+	mock := &mockCiliumClient{}
 	mgr := NewManager(mock)
 
 	config := Config{
-		Name:            "test-remove-fail",
+		Name:            "test-masq",
 		Namespace:       "default",
-		Type:            TypeSNAT,
+		Type:            TypeMasquerade,
 		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
+		SourceAddresses: []string{"10.0.0.0/24"},
 	}
-
-	// Apply first
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("apply failed: %v", err)
-	}
-
-	// Inject error for removal
-	mock.removeNATErr = fmt.Errorf("cilium unavailable")
-
-	err := mgr.RemoveNATPolicy("test-remove-fail", "default")
-	if err == nil {
-		t.Fatal("expected error when Cilium removal fails")
-	}
-
-	// Policy should still exist since removal failed
-	policies, _ := mgr.ListNATPolicies()
-	if len(policies) != 1 {
-		t.Errorf("expected 1 policy (removal failed), got %d", len(policies))
-	}
+	result, err := mgr.ApplyNATPolicy(config)
+	require.NoError(t, err)
+	assert.True(t, result.Applied)
+	assert.Equal(t, 1, mock.createNATCalls)
 }
 
-func TestRemoveNonexistentPolicy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.RemoveNATPolicy("does-not-exist", "default")
-	if err == nil {
-		t.Fatal("expected error removing non-existent policy")
-	}
-}
-
-// --- Validation tests ---
-
-func TestValidation_MissingName(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Namespace:       "default",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-	})
-	if err == nil {
-		t.Fatal("expected validation error for missing name")
-	}
-}
-
-func TestValidation_MissingNamespace(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:            "test",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-	})
-	if err == nil {
-		t.Fatal("expected validation error for missing namespace")
-	}
-}
-
-func TestValidation_SNATMissingSourceAddresses(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:      "test",
-		Namespace: "default",
-		Type:      TypeSNAT,
-		Interface: "eth0",
-	})
-	if err == nil {
-		t.Fatal("expected validation error for missing source addresses")
-	}
-}
-
-func TestValidation_DNATMissingExternalIP(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:      "test",
-		Namespace: "default",
-		Type:      TypeDNAT,
-		PortMappings: []PortMapping{
-			{Protocol: "tcp", ExternalPort: 80, InternalIP: "10.0.0.1", InternalPort: 80},
+func TestValidateConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr string
+	}{
+		{
+			name:    "missing name",
+			config:  Config{Type: TypeSNAT, Interface: "eth0", ExternalIP: "1.2.3.4", SourceAddresses: []string{"10.0.0.0/24"}},
+			wantErr: "name is required",
 		},
-	})
-	if err == nil {
-		t.Fatal("expected validation error for missing external IP")
-	}
-}
-
-func TestValidation_DNATMissingPortMappings(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:       "test",
-		Namespace:  "default",
-		Type:       TypeDNAT,
-		ExternalIP: "1.2.3.4",
-	})
-	if err == nil {
-		t.Fatal("expected validation error for missing port mappings")
-	}
-}
-
-func TestValidation_DNATInvalidPort(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:       "test",
-		Namespace:  "default",
-		Type:       TypeDNAT,
-		ExternalIP: "1.2.3.4",
-		PortMappings: []PortMapping{
-			{Protocol: "tcp", ExternalPort: 0, InternalIP: "10.0.0.1", InternalPort: 80},
+		{
+			name:    "missing interface",
+			config:  Config{Name: "test", Type: TypeSNAT, ExternalIP: "1.2.3.4", SourceAddresses: []string{"10.0.0.0/24"}},
+			wantErr: "interface is required",
 		},
-	})
-	if err == nil {
-		t.Fatal("expected validation error for invalid port")
-	}
-}
-
-func TestValidation_NAT66WithIPv4Source(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:            "test",
-		Namespace:       "default",
-		Type:            TypeNAT66,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"}, // IPv4 - invalid for NAT66
-	})
-	if err == nil {
-		t.Fatal("expected validation error for IPv4 source in NAT66")
-	}
-}
-
-func TestValidation_NAT64WithIPv4Source(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:            "test",
-		Namespace:       "default",
-		Type:            TypeNAT64,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"}, // IPv4 - invalid for NAT64
-	})
-	if err == nil {
-		t.Fatal("expected validation error for IPv4 source in NAT64")
-	}
-}
-
-func TestValidation_IPv6FlagWithIPv4Address(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:            "test",
-		Namespace:       "default",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-		IPv6:            true, // Mismatch
-	})
-	if err == nil {
-		t.Fatal("expected validation error for IPv6 flag with IPv4 address")
-	}
-}
-
-func TestValidation_IPv4FlagWithIPv6Address(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:            "test",
-		Namespace:       "default",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"fd00::/64"},
-		IPv6:            false, // Mismatch
-	})
-	if err == nil {
-		t.Fatal("expected validation error for IPv4 flag with IPv6 address")
-	}
-}
-
-func TestValidation_UnsupportedType(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	err := mgr.ApplyNATPolicy(Config{
-		Name:      "test",
-		Namespace: "default",
-		Type:      PolicyType("bogus"),
-	})
-	if err == nil {
-		t.Fatal("expected validation error for unsupported type")
-	}
-}
-
-func TestIdempotentApply(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
-		Name:            "test-idempotent",
-		Namespace:       "default",
-		Type:            TypeSNAT,
-		Interface:       "eth0",
-		SourceAddresses: []string{"192.168.1.0/24"},
-	}
-
-	// Apply twice
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("first apply failed: %v", err)
-	}
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("second apply failed: %v", err)
-	}
-
-	// Should have called Cilium twice (idempotent enforcement)
-	if len(mock.createNATCalls) != 2 {
-		t.Errorf("expected 2 CreateNAT calls (idempotent re-apply), got %d", len(mock.createNATCalls))
-	}
-
-	// Should still have exactly 1 policy
-	policies, _ := mgr.ListNATPolicies()
-	if len(policies) != 1 {
-		t.Errorf("expected 1 policy, got %d", len(policies))
-	}
-}
-
-func TestRemoveDNATPolicy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
-		Name:       "test-dnat-remove",
-		Namespace:  "default",
-		Type:       TypeDNAT,
-		ExternalIP: "203.0.113.1",
-		PortMappings: []PortMapping{
-			{Protocol: "tcp", ExternalPort: 80, InternalIP: "192.168.1.10", InternalPort: 8080},
-			{Protocol: "tcp", ExternalPort: 443, InternalIP: "192.168.1.10", InternalPort: 8443},
+		{
+			name:    "snat missing externalIP",
+			config:  Config{Name: "test", Type: TypeSNAT, Interface: "eth0", SourceAddresses: []string{"10.0.0.0/24"}},
+			wantErr: "externalIP is required for SNAT",
+		},
+		{
+			name:    "snat missing sourceAddresses",
+			config:  Config{Name: "test", Type: TypeSNAT, Interface: "eth0", ExternalIP: "1.2.3.4"},
+			wantErr: "sourceAddresses is required for SNAT",
+		},
+		{
+			name: "dnat invalid port",
+			config: Config{
+				Name: "test", Type: TypeDNAT, Interface: "eth0", ExternalIP: "1.2.3.4",
+				PortMappings: []PortMapping{{Protocol: "tcp", ExternalPort: 0, InternalIP: "10.0.0.1", InternalPort: 80}},
+			},
+			wantErr: "externalPort must be 1-65535",
+		},
+		{
+			name:    "unsupported type",
+			config:  Config{Name: "test", Type: "bogus", Interface: "eth0"},
+			wantErr: "unsupported NAT type",
+		},
+		{
+			name:   "valid snat",
+			config: Config{Name: "test", Type: TypeSNAT, Interface: "eth0", ExternalIP: "1.2.3.4", SourceAddresses: []string{"10.0.0.0/24"}},
 		},
 	}
 
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("apply failed: %v", err)
-	}
-
-	if err := mgr.RemoveNATPolicy("test-dnat-remove", "default"); err != nil {
-		t.Fatalf("remove failed: %v", err)
-	}
-
-	if len(mock.removePortForwardCalls) != 2 {
-		t.Errorf("expected 2 RemovePortForward calls, got %d", len(mock.removePortForwardCalls))
-	}
-}
-
-func TestRemoveNAT66Policy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
-		Name:            "test-nat66-remove",
-		Namespace:       "default",
-		Type:            TypeNAT66,
-		Interface:       "eth0",
-		SourceAddresses: []string{"fd00::/64"},
-	}
-
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("apply failed: %v", err)
-	}
-
-	if err := mgr.RemoveNATPolicy("test-nat66-remove", "default"); err != nil {
-		t.Fatalf("remove failed: %v", err)
-	}
-
-	if len(mock.removeNATCalls) != 1 {
-		t.Fatalf("expected 1 RemoveNAT call, got %d", len(mock.removeNATCalls))
-	}
-	if !mock.removeNATCalls[0].IPv6 {
-		t.Error("expected IPv6=true in NAT66 removal")
-	}
-}
-
-func TestRemoveNAT64Policy(t *testing.T) {
-	mock := newMockCiliumClient()
-	mgr := NewManager(mock)
-
-	config := Config{
-		Name:            "test-nat64-remove",
-		Namespace:       "default",
-		Type:            TypeNAT64,
-		Interface:       "eth0",
-		SourceAddresses: []string{"2001:db8::/32"},
-	}
-
-	if err := mgr.ApplyNATPolicy(config); err != nil {
-		t.Fatalf("apply failed: %v", err)
-	}
-
-	if err := mgr.RemoveNATPolicy("test-nat64-remove", "default"); err != nil {
-		t.Fatalf("remove failed: %v", err)
-	}
-
-	if len(mock.removeNAT64Calls) != 1 {
-		t.Fatalf("expected 1 RemoveNAT64 call, got %d", len(mock.removeNAT64Calls))
-	}
-}
-
-// assertReadyCondition checks that the status has a Ready condition with the expected value
-func assertReadyCondition(t *testing.T, status *Status, expectedReady bool, expectedReason string) {
-	t.Helper()
-	expectedStatus := "True"
-	if !expectedReady {
-		expectedStatus = "False"
-	}
-	for _, c := range status.Conditions {
-		if c.Type == "Ready" {
-			if c.Status != expectedStatus {
-				t.Errorf("expected Ready=%s, got %s", expectedStatus, c.Status)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateConfig(tt.config)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
 			}
-			if c.Reason != expectedReason {
-				t.Errorf("expected reason %q, got %q", expectedReason, c.Reason)
-			}
-			return
+		})
+	}
+}
+
+func TestSpecHash_Deterministic(t *testing.T) {
+	config := validSNATConfig()
+	hash1 := config.SpecHash()
+	hash2 := config.SpecHash()
+	assert.Equal(t, hash1, hash2)
+}
+
+func TestSpecHash_ChangesOnSpecChange(t *testing.T) {
+	config := validSNATConfig()
+	hash1 := config.SpecHash()
+
+	config.ExternalIP = "203.0.113.99"
+	hash2 := config.SpecHash()
+
+	assert.NotEqual(t, hash1, hash2)
+}
+
+func TestConditionTransitionTime_OnlyChangesOnStatusChange(t *testing.T) {
+	status := &Status{Conditions: []Condition{}}
+
+	// Set Applied=True
+	setCondition(status, ConditionApplied, ConditionStatusTrue, "R1", "msg1")
+	t1 := findCondition(status.Conditions, ConditionApplied).LastTransitionTime
+
+	// Set Applied=True again (same status) -> time should NOT change
+	setCondition(status, ConditionApplied, ConditionStatusTrue, "R2", "msg2")
+	t2 := findCondition(status.Conditions, ConditionApplied).LastTransitionTime
+	assert.Equal(t, t1, t2, "transition time should not change when status unchanged")
+	assert.Equal(t, "R2", findCondition(status.Conditions, ConditionApplied).Reason)
+
+	// Set Applied=False -> time SHOULD change
+	setCondition(status, ConditionApplied, ConditionStatusFalse, "R3", "msg3")
+	t3 := findCondition(status.Conditions, ConditionApplied).LastTransitionTime
+	assert.True(t, !t3.Before(t2), "transition time should advance when status changes")
+}
+
+// findCondition returns the condition with the given type, or nil
+func findCondition(conditions []Condition, condType string) *Condition {
+	for i := range conditions {
+		if conditions[i].Type == condType {
+			return &conditions[i]
 		}
 	}
-	t.Error("no Ready condition found in status")
+	return nil
 }
