@@ -316,11 +316,11 @@ func (m *Manager) ApplyConfiguration(ctx context.Context, config *Config, enable
 
 	klog.V(2).Info("Applying FRR configuration")
 
-	// Backup current configuration before any changes
-	backupPath := fmt.Sprintf("%s/frr.conf.backup.%d", m.config.ConfigPath, time.Now().Unix())
-	if err := m.generator.BackupConfig(); err != nil {
+	// Backup current configuration before any changes.
+	// BackupConfig returns the actual path it wrote to, avoiding timestamp mismatch.
+	backupPath, err := m.generator.BackupConfig()
+	if err != nil {
 		klog.Warningf("Failed to backup configuration (continuing): %v", err)
-		backupPath = "" // No backup available for rollback
 	}
 
 	// Generate daemons file

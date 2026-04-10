@@ -381,8 +381,9 @@ func (g *ConfigGenerator) GenerateInterfaceConfig(interfaceName string, commands
 	}
 }
 
-// BackupConfig backs up the current configuration
-func (g *ConfigGenerator) BackupConfig() error {
+// BackupConfig backs up the current configuration and returns the backup file path.
+// If no configuration file exists, it returns an empty path and nil error.
+func (g *ConfigGenerator) BackupConfig() (string, error) {
 	confPath := filepath.Join(g.configPath, "frr.conf")
 	backupPath := filepath.Join(g.configPath, fmt.Sprintf("frr.conf.backup.%d", time.Now().Unix()))
 
@@ -390,17 +391,17 @@ func (g *ConfigGenerator) BackupConfig() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			klog.V(2).Info("No existing configuration to backup")
-			return nil
+			return "", nil
 		}
-		return fmt.Errorf("failed to read config for backup: %w", err)
+		return "", fmt.Errorf("failed to read config for backup: %w", err)
 	}
 
 	if err := os.WriteFile(backupPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write backup: %w", err)
+		return "", fmt.Errorf("failed to write backup: %w", err)
 	}
 
 	klog.V(2).Infof("Backed up configuration to: %s", backupPath)
-	return nil
+	return backupPath, nil
 }
 
 // ValidateConfig validates the configuration syntax using vtysh --dryrun.

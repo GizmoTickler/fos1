@@ -389,119 +389,59 @@ func (c *BGPController) handleBGPConfigCreateOrUpdate(obj *unstructured.Unstruct
 	return nil
 }
 
-// updateBGPConfigStatus updates the status of a BGPConfig CRD with live neighbor state from FRR.
-// GetProtocolStatus now queries vtysh for real BGP neighbor/prefix state.
+// updateBGPConfigStatus updates the status of a BGPConfig CRD
 func (c *BGPController) updateBGPConfigStatus(obj *unstructured.Unstructured) error {
+	// Get the namespace and name
 	namespace := obj.GetNamespace()
+	_ = obj.GetName()
 
-	// GetProtocolStatus now performs a live query against FRR
+	// Get the BGP status
 	status, err := c.protocolManager.GetProtocolStatus("bgp")
 	if err != nil {
 		return fmt.Errorf("failed to get BGP status: %w", err)
 	}
-
+	
+	// Create a copy of the object
 	newObj := obj.DeepCopy()
-
-	// Set the protocol state
+	
+	// Update the status
 	if err := unstructured.SetNestedField(newObj.Object, status.State, "status", "state"); err != nil {
 		return fmt.Errorf("failed to set status.state: %w", err)
 	}
-
+	
 	if err := unstructured.SetNestedField(newObj.Object, status.Uptime.String(), "status", "uptime"); err != nil {
 		return fmt.Errorf("failed to set status.uptime: %w", err)
 	}
-
-	// Convert neighbors to unstructured format with live state
+	
+	// Convert neighbors to unstructured format
 	neighborsUntyped := make([]interface{}, 0, len(status.Neighbors))
-	establishedCount := 0
 	for _, neighbor := range status.Neighbors {
 		neighborMap := map[string]interface{}{
 			"address":          neighbor.Address,
 			"state":            neighbor.State,
 			"uptime":           neighbor.Uptime.String(),
-			"prefixesReceived": int64(neighbor.PrefixesReceived),
-			"prefixesSent":     int64(neighbor.PrefixesSent),
+			"prefixesReceived": neighbor.PrefixesReceived,
+			"prefixesSent":     neighbor.PrefixesSent,
 		}
+		
 		neighborsUntyped = append(neighborsUntyped, neighborMap)
-
-		if neighbor.State == "Established" || neighbor.State == "established" {
-			establishedCount++
-		}
 	}
-
+	
 	if err := unstructured.SetNestedSlice(newObj.Object, neighborsUntyped, "status", "neighbors"); err != nil {
 		return fmt.Errorf("failed to set status.neighbors: %w", err)
 	}
-
-	// Build status conditions reflecting real FRR state
-	conditions := []interface{}{}
-
-	// Condition: ProtocolRunning
-	protocolCondition := map[string]interface{}{
-		"type":               "ProtocolRunning",
-		"status":             "True",
-		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
-		"reason":             "BGPRunning",
-		"message":            fmt.Sprintf("BGP is %s with %d neighbors configured", status.State, len(status.Neighbors)),
-	}
-	if status.State != "running" {
-		protocolCondition["status"] = "False"
-		protocolCondition["reason"] = "BGPNotRunning"
-		protocolCondition["message"] = fmt.Sprintf("BGP is %s", status.State)
-	}
-	conditions = append(conditions, protocolCondition)
-
-	// Condition: NeighborsEstablished
-	neighborsCondition := map[string]interface{}{
-		"type":               "NeighborsEstablished",
-		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
-	}
-	if len(status.Neighbors) == 0 {
-		neighborsCondition["status"] = "Unknown"
-		neighborsCondition["reason"] = "NoNeighborsConfigured"
-		neighborsCondition["message"] = "No BGP neighbors are configured"
-	} else if establishedCount == len(status.Neighbors) {
-		neighborsCondition["status"] = "True"
-		neighborsCondition["reason"] = "AllNeighborsEstablished"
-		neighborsCondition["message"] = fmt.Sprintf("All %d BGP neighbors are established", establishedCount)
-	} else {
-		neighborsCondition["status"] = "False"
-		neighborsCondition["reason"] = "NeighborsNotEstablished"
-		neighborsCondition["message"] = fmt.Sprintf("%d of %d BGP neighbors established", establishedCount, len(status.Neighbors))
-	}
-	conditions = append(conditions, neighborsCondition)
-
-	// Condition: PrefixesReceived
-	prefixCondition := map[string]interface{}{
-		"type":               "PrefixesReceived",
-		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
-	}
-	if status.PrefixesReceived > 0 {
-		prefixCondition["status"] = "True"
-		prefixCondition["reason"] = "PrefixesReceived"
-		prefixCondition["message"] = fmt.Sprintf("Receiving %d prefixes", status.PrefixesReceived)
-	} else {
-		prefixCondition["status"] = "False"
-		prefixCondition["reason"] = "NoPrefixesReceived"
-		prefixCondition["message"] = "No prefixes received from any neighbor"
-	}
-	conditions = append(conditions, prefixCondition)
-
-	if err := unstructured.SetNestedSlice(newObj.Object, conditions, "status", "conditions"); err != nil {
-		return fmt.Errorf("failed to set status.conditions: %w", err)
-	}
-
+	
 	// Update the object
 	gvr := schema.GroupVersionResource{
 		Group:    "networking.fos1.io",
 		Version:  "v1alpha1",
 		Resource: "bgpconfigs",
 	}
-
+	
 	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update BGPConfig status: %w", err)
 	}
-
+	
 	return nil
 }

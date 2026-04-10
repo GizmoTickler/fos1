@@ -197,119 +197,12 @@ func (h *BGPHandler) Restart() error {
 	return nil
 }
 
-// GetStatus gets the status of the BGP protocol by querying FRR for live state.
-// If the protocol is running, it refreshes neighbor/adjacency state from vtysh
-// before returning. If the live query fails, the cached status is returned.
+// GetStatus gets the status of the BGP protocol
 func (h *BGPHandler) GetStatus() *routing.ProtocolStatus {
-	if h.status.State == "running" && h.config != nil {
-		if err := h.refreshStatus(); err != nil {
-			klog.V(2).Infof("Failed to refresh BGP status from FRR, returning cached: %v", err)
-		}
-	}
 	return h.status
 }
 
-// refreshStatus queries FRR via vtysh for live BGP neighbor state and updates
-// the cached status. Returns an error if the query fails (cached status unchanged).
-func (h *BGPHandler) refreshStatus() error {
-	ctx := context.Background()
-
-	// Try JSON output first: "show bgp summary json"
-	var summaryJSON map[string]interface{}
-	err := h.frrClient.ExecuteVtyshCommandJSON(ctx, "show bgp summary", &summaryJSON)
-	if err == nil {
-		return h.parseBGPSummaryJSON(summaryJSON)
-	}
-
-	klog.V(3).Infof("JSON BGP summary failed, falling back to text parsing: %v", err)
-
-	// Fallback to parsed text output
-	summary, err := h.frrClient.GetBGPSummaryParsed(ctx, uint32(h.config.ASNumber))
-	if err != nil {
-		return fmt.Errorf("failed to get BGP summary: %w", err)
-	}
-
-	neighbors := make([]routing.NeighborStatus, 0, len(summary.Neighbors))
-	for _, n := range summary.Neighbors {
-		neighbors = append(neighbors, routing.NeighborStatus{
-			Address:          n.IP,
-			State:            n.State,
-			PrefixesReceived: n.PrefixReceived,
-			PrefixesSent:     n.PrefixSent,
-		})
-	}
-	h.status.Neighbors = neighbors
-	h.status.PrefixesReceived = summary.TotalPrefixes
-	if h.status.State == "running" {
-		h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
-	}
-	return nil
-}
-
-// parseBGPSummaryJSON parses the JSON output of "show bgp summary json" and updates status.
-// FRR JSON format has peer entries keyed by IP address under various address family keys.
-func (h *BGPHandler) parseBGPSummaryJSON(data map[string]interface{}) error {
-	neighbors := []routing.NeighborStatus{}
-	totalPrefixes := 0
-
-	// FRR JSON BGP summary has address families at top level (e.g., "ipv4Unicast", "ipv6Unicast")
-	// Each contains "peers" map keyed by neighbor IP
-	for afKey, afVal := range data {
-		afMap, ok := afVal.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		peers, ok := afMap["peers"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		_ = afKey // address family name, used for logging if needed
-
-		for ip, peerVal := range peers {
-			peerMap, ok := peerVal.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			state := "unknown"
-			if s, ok := peerMap["state"].(string); ok {
-				state = s
-			}
-
-			prefixReceived := 0
-			if pr, ok := peerMap["pfxRcd"].(float64); ok {
-				prefixReceived = int(pr)
-			}
-
-			prefixSent := 0
-			if ps, ok := peerMap["pfxSnt"].(float64); ok {
-				prefixSent = int(ps)
-			}
-
-			totalPrefixes += prefixReceived
-
-			neighbors = append(neighbors, routing.NeighborStatus{
-				Address:          ip,
-				State:            state,
-				PrefixesReceived: prefixReceived,
-				PrefixesSent:     prefixSent,
-			})
-		}
-	}
-
-	h.status.Neighbors = neighbors
-	h.status.PrefixesReceived = totalPrefixes
-	if h.status.State == "running" {
-		h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
-	}
-
-	klog.V(4).Infof("BGP status refreshed from FRR: %d neighbors, %d prefixes received", len(neighbors), totalPrefixes)
-	return nil
-}
-
-// updateStatus periodically updates the BGP status from live FRR state
+// updateStatus periodically updates the BGP status
 func (h *BGPHandler) updateStatus() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -321,9 +214,39 @@ func (h *BGPHandler) updateStatus() {
 				return
 			}
 
-			if err := h.refreshStatus(); err != nil {
-				klog.Errorf("Failed to refresh BGP status: %v", err)
+			ctx := context.Background()
+
+			// Get parsed BGP summary
+			summary, err := h.frrClient.GetBGPSummaryParsed(ctx, uint32(h.config.ASNumber))
+			if err != nil {
+				klog.Errorf("Failed to get BGP summary: %v", err)
+				// Fallback to string output
+				_, err2 := h.frrClient.GetBGPSummary(ctx)
+				if err2 != nil {
+					klog.Errorf("Failed to get BGP summary (fallback): %v", err2)
+				}
+				continue
 			}
+
+			// Update neighbors status
+			neighbors := make([]routing.NeighborStatus, 0, len(summary.Neighbors))
+			for _, n := range summary.Neighbors {
+				neighbors = append(neighbors, routing.NeighborStatus{
+					Address:          n.IP,
+					State:            n.State,
+					Uptime:           0, // Parse uptime string if needed
+					PrefixesReceived: n.PrefixReceived,
+					PrefixesSent:     n.PrefixSent,
+				})
+			}
+			h.status.Neighbors = neighbors
+
+			// Update uptime
+			if h.status.State == "running" {
+				h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
+			}
+
+			klog.V(4).Infof("BGP status updated: %d neighbors, uptime: %v", len(neighbors), h.status.Uptime)
 		}
 	}
 }

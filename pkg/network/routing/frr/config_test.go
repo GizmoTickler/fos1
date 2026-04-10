@@ -113,24 +113,17 @@ func TestBackupAndRestore(t *testing.T) {
 	}
 
 	// Backup
-	if err := gen.BackupConfig(); err != nil {
+	backupPath, err := gen.BackupConfig()
+	if err != nil {
 		t.Fatalf("BackupConfig failed: %v", err)
 	}
-
-	// Find backup file
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var backupPath string
-	for _, entry := range entries {
-		if entry.Name() != "frr.conf" {
-			backupPath = filepath.Join(tmpDir, entry.Name())
-			break
-		}
-	}
 	if backupPath == "" {
-		t.Fatal("no backup file found")
+		t.Fatal("BackupConfig returned empty path")
+	}
+
+	// Verify backup file exists at the returned path
+	if _, err := os.Stat(backupPath); err != nil {
+		t.Fatalf("backup file not found at returned path %s: %v", backupPath, err)
 	}
 
 	// Overwrite original

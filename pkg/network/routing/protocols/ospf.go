@@ -148,138 +148,12 @@ func (h *OSPFHandler) Restart() error {
 	return nil
 }
 
-// GetStatus gets the status of the OSPF protocol by querying FRR for live state.
-// If the protocol is running, it refreshes neighbor/adjacency state from vtysh
-// before returning. If the live query fails, the cached status is returned.
+// GetStatus gets the status of the OSPF protocol
 func (h *OSPFHandler) GetStatus() *routing.ProtocolStatus {
-	if h.status.State == "running" {
-		if err := h.refreshStatus(); err != nil {
-			klog.V(2).Infof("Failed to refresh OSPF status from FRR, returning cached: %v", err)
-		}
-	}
 	return h.status
 }
 
-// refreshStatus queries FRR via vtysh for live OSPF neighbor/adjacency state
-// and updates the cached status.
-func (h *OSPFHandler) refreshStatus() error {
-	ctx := context.Background()
-
-	// Try JSON output first: "show ip ospf neighbor json"
-	var neighborsJSON map[string]interface{}
-	err := h.frrClient.ExecuteVtyshCommandJSON(ctx, "show ip ospf neighbor", &neighborsJSON)
-	if err == nil {
-		return h.parseOSPFNeighborJSON(neighborsJSON)
-	}
-
-	klog.V(3).Infof("JSON OSPF neighbor query failed, falling back to text parsing: %v", err)
-
-	// Fallback to text-parsed output
-	summary, err := h.frrClient.GetOSPFSummaryParsed(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get OSPF summary: %w", err)
-	}
-
-	neighbors := make([]routing.NeighborStatus, 0, len(summary.Neighbors))
-	for _, n := range summary.Neighbors {
-		neighbors = append(neighbors, routing.NeighborStatus{
-			Address: n.Address,
-			State:   n.State,
-		})
-	}
-	h.status.Neighbors = neighbors
-	if h.status.State == "running" {
-		h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
-	}
-	return nil
-}
-
-// parseOSPFNeighborJSON parses the JSON output of "show ip ospf neighbor json".
-// FRR JSON format has "neighbors" key containing a map keyed by router-id,
-// each with neighbor details.
-func (h *OSPFHandler) parseOSPFNeighborJSON(data map[string]interface{}) error {
-	neighbors := []routing.NeighborStatus{}
-
-	// FRR "show ip ospf neighbor json" returns: {"neighbors": { "<routerID>": [{ ... }] }}
-	// or in some versions a flat list under "neighbors"
-	neighborsData, ok := data["neighbors"]
-	if !ok {
-		// Some FRR versions put neighbors at root level as array
-		// Try to parse "default" VRF
-		if defaultVRF, ok := data["default"].(map[string]interface{}); ok {
-			neighborsData = defaultVRF["neighbors"]
-		}
-	}
-
-	switch nd := neighborsData.(type) {
-	case map[string]interface{}:
-		// Map keyed by router-id
-		for routerID, nVal := range nd {
-			nList, ok := nVal.([]interface{})
-			if !ok {
-				continue
-			}
-			for _, entry := range nList {
-				entryMap, ok := entry.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				n := h.parseOSPFNeighborEntry(entryMap, routerID)
-				neighbors = append(neighbors, n)
-			}
-		}
-	case []interface{}:
-		// Array of neighbor objects
-		for _, entry := range nd {
-			entryMap, ok := entry.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			routerID := ""
-			if rid, ok := entryMap["routerId"].(string); ok {
-				routerID = rid
-			}
-			n := h.parseOSPFNeighborEntry(entryMap, routerID)
-			neighbors = append(neighbors, n)
-		}
-	}
-
-	h.status.Neighbors = neighbors
-	if h.status.State == "running" {
-		h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
-	}
-
-	klog.V(4).Infof("OSPF status refreshed from FRR: %d neighbors", len(neighbors))
-	return nil
-}
-
-// parseOSPFNeighborEntry extracts a NeighborStatus from an OSPF neighbor JSON entry
-func (h *OSPFHandler) parseOSPFNeighborEntry(entryMap map[string]interface{}, routerID string) routing.NeighborStatus {
-	state := "unknown"
-	if s, ok := entryMap["nbrState"].(string); ok {
-		state = s
-	} else if s, ok := entryMap["state"].(string); ok {
-		state = s
-	}
-
-	address := ""
-	if a, ok := entryMap["ifaceAddress"].(string); ok {
-		address = a
-	} else if a, ok := entryMap["address"].(string); ok {
-		address = a
-	}
-
-	if address == "" {
-		address = routerID
-	}
-
-	return routing.NeighborStatus{
-		Address: address,
-		State:   state,
-	}
-}
-
-// updateStatus periodically updates the OSPF status from live FRR state
+// updateStatus periodically updates the OSPF status
 func (h *OSPFHandler) updateStatus() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -291,9 +165,39 @@ func (h *OSPFHandler) updateStatus() {
 				return
 			}
 
-			if err := h.refreshStatus(); err != nil {
-				klog.Errorf("Failed to refresh OSPF status: %v", err)
+			ctx := context.Background()
+
+			// Get parsed OSPF summary
+			summary, err := h.frrClient.GetOSPFSummaryParsed(ctx)
+			if err != nil {
+				klog.Errorf("Failed to get OSPF summary: %v", err)
+				// Fallback to string output
+				_, err2 := h.frrClient.GetOSPFNeighbors(ctx)
+				if err2 != nil {
+					klog.Errorf("Failed to get OSPF neighbors (fallback): %v", err2)
+				}
+				continue
 			}
+
+			// Update neighbors status
+			neighbors := make([]routing.NeighborStatus, 0, len(summary.Neighbors))
+			for _, n := range summary.Neighbors {
+				neighbors = append(neighbors, routing.NeighborStatus{
+					Address:          n.Address,
+					State:            n.State,
+					Uptime:           0, // Parse deadtime string if needed
+					PrefixesReceived: 0, // OSPF doesn't track prefix counts like BGP
+					PrefixesSent:     0,
+				})
+			}
+			h.status.Neighbors = neighbors
+
+			// Update uptime
+			if h.status.State == "running" {
+				h.status.Uptime = time.Since(h.status.StartTime).Truncate(time.Second)
+			}
+
+			klog.V(4).Infof("OSPF status updated: %d neighbors, uptime: %v", len(neighbors), h.status.Uptime)
 		}
 	}
 }
