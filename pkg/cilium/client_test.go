@@ -2,6 +2,7 @@ package cilium
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -244,5 +245,36 @@ func TestMockCiliumClient_NATMethods(t *testing.T) {
 		InternalPort: 8080,
 	}); err != nil {
 		t.Errorf("RemovePortForward failed: %v", err)
+	}
+}
+
+func TestDirectCiliumClient_CreateNAT_UsesAuthoritativeValidation(t *testing.T) {
+	client := NewDirectCiliumClient("", "")
+
+	err := client.CreateNAT(context.Background(), &CiliumNATConfig{
+		DestinationIface: "eth0",
+	})
+	if err == nil {
+		t.Fatal("expected CreateNAT to fail for invalid config")
+	}
+	if !strings.Contains(err.Error(), "source network is required") {
+		t.Fatalf("expected validation error from delegated implementation, got %v", err)
+	}
+}
+
+func TestKubernetesCiliumClient_CreatePortForward_UsesAuthoritativeValidation(t *testing.T) {
+	client := &KubernetesCiliumClient{}
+
+	err := client.CreatePortForward(context.Background(), &PortForwardConfig{
+		ExternalPort: 80,
+		Protocol:     "tcp",
+		InternalIP:   "10.0.0.1",
+		InternalPort: 8080,
+	})
+	if err == nil {
+		t.Fatal("expected CreatePortForward to fail for invalid config")
+	}
+	if !strings.Contains(err.Error(), "external IP is required") {
+		t.Fatalf("expected validation error from delegated implementation, got %v", err)
 	}
 }

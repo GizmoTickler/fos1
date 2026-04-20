@@ -2,6 +2,16 @@
 
 A modern, container-based router and firewall distribution utilizing Talos Linux as the immutable base operating system with built-in Kubernetes orchestration. This solution provides enterprise-grade networking, security, and monitoring capabilities while maintaining a declarative, infrastructure-as-code approach.
 
+## Current Status
+
+As of 2026-04-18, the repository is no longer a design-only scaffold. The main routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, and authentication paths are implemented, and the current `origin/main` snapshot verifies cleanly with:
+
+- `git rebase origin/main` -> `HEAD is up to date.`
+- `go test ./...`
+- `go build ./...`
+
+The remaining work is concentrated in legacy or secondary control paths that still contain placeholder behavior, especially security policy enforcement/controller consolidation, duplicate Cilium scaffolding cleanup, observability/event-correlation follow-through, and hardware/offload hardening.
+
 ## Project Overview
 
 This project aims to develop a network gateway solution with:
@@ -17,8 +27,10 @@ This project aims to develop a network gateway solution with:
 
 - [Project Scope](docs/project-scope.md) - Detailed overview of project goals and requirements
 - [Architecture Components](docs/architecture-components.md) - Technical architecture and design
-- [Implementation Plan](docs/implementation-plan.md) - Step-by-step development plan
-- [Project Tracker](docs/project-tracker.md) - Status tracking for all components
+- [Implementation Plan](docs/implementation-plan.md) - Verified implementation baseline and next workstreams
+- [Status Report](Status.md) - Current implementation status and prioritized follow-up areas
+- [Project Tracker](docs/project-tracker.md) - Historical phase tracker with links to current status
+- [Development Guide](docs/DEVELOPMENT.md) - Local development workflow and commands
 
 ## Project Structure
 
@@ -36,7 +48,12 @@ This project aims to develop a network gateway solution with:
 
 ## Getting Started
 
-*Documentation will be added as the project progresses*
+Start with:
+
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for local setup and workflow
+- [docs/implementation-plan.md](docs/implementation-plan.md) for the verified implementation baseline
+- [Status.md](Status.md) for the current status snapshot and next steps
+- [docs/design/test_matrix.md](docs/design/test_matrix.md) for the current controller/package coverage map
 
 ## Features
 

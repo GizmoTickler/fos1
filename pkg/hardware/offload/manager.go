@@ -5,19 +5,124 @@ package offload
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/safchain/ethtool"
 
 	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
+var ErrOffloadStatisticsNotSupported = errors.New("offload statistics not supported")
+
+type ethtoolClient interface {
+	Features(string) (map[string]bool, error)
+	Change(string, map[string]bool) error
+	Stats(string) (map[string]uint64, error)
+	Close()
+}
+
 // Manager implements the types.OffloadManager interface.
 type Manager struct {
-	ethtool        *ethtool.Ethtool
+	ethtool        ethtoolClient
 	capabilities   map[string]*types.OffloadCapabilities
 	capabilitiesMu sync.RWMutex
+}
+
+type offloadStatDescriptor struct {
+	field   string
+	aliases []string
+	assign  func(*types.OffloadStatistics, uint64)
+}
+
+var offloadStatDescriptors = []offloadStatDescriptor{
+	{
+		field:   "TxChecksumIPv4",
+		aliases: []string{"tx_checksum_ipv4", "tx_ipv4_checksum", "tx_ip4_csum", "tx_ip4_csum_offload", "tx_tcp4_csum_offload", "tx_tcp_v4_csum", "tx_csum_ip4"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.TxChecksumIPv4 = value
+		},
+	},
+	{
+		field:   "TxChecksumIPv6",
+		aliases: []string{"tx_checksum_ipv6", "tx_ipv6_checksum", "tx_ip6_csum", "tx_ip6_csum_offload", "tx_tcp6_csum_offload", "tx_tcp_v6_csum", "tx_csum_ip6"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.TxChecksumIPv6 = value
+		},
+	},
+	{
+		field:   "TxChecksumTCP",
+		aliases: []string{"tx_checksum_tcp", "tx_tcp_checksum", "tx_tcp_csum", "tx_tcp_csum_offload", "tx_csum_tcp", "tx_tcp_checksum_offload"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.TxChecksumTCP = value
+		},
+	},
+	{
+		field:   "TxChecksumUDP",
+		aliases: []string{"tx_checksum_udp", "tx_udp_checksum", "tx_udp_csum", "tx_udp_csum_offload", "tx_csum_udp", "tx_udp_checksum_offload"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.TxChecksumUDP = value
+		},
+	},
+	{
+		field:   "RxChecksumIPv4",
+		aliases: []string{"rx_checksum_ipv4", "rx_ipv4_checksum", "rx_ip4_csum", "rx_ip4_csum_offload", "rx_tcp4_csum_offload", "rx_tcp_v4_csum", "rx_csum_ip4"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.RxChecksumIPv4 = value
+		},
+	},
+	{
+		field:   "RxChecksumIPv6",
+		aliases: []string{"rx_checksum_ipv6", "rx_ipv6_checksum", "rx_ip6_csum", "rx_ip6_csum_offload", "rx_tcp6_csum_offload", "rx_tcp_v6_csum", "rx_csum_ip6"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.RxChecksumIPv6 = value
+		},
+	},
+	{
+		field:   "RxChecksumTCP",
+		aliases: []string{"rx_checksum_tcp", "rx_tcp_checksum", "rx_tcp_csum", "rx_tcp_csum_offload", "rx_csum_tcp", "rx_tcp_checksum_offload"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.RxChecksumTCP = value
+		},
+	},
+	{
+		field:   "RxChecksumUDP",
+		aliases: []string{"rx_checksum_udp", "rx_udp_checksum", "rx_udp_csum", "rx_udp_csum_offload", "rx_csum_udp", "rx_udp_checksum_offload"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.RxChecksumUDP = value
+		},
+	},
+	{
+		field:   "TxTCPSegmentation",
+		aliases: []string{"tx_tcp_segmentation", "tx_tcp_seg_good", "tx_tcp_seg_offload", "tx_tso_packets", "tso_packets", "tx_tso", "tso_offload_packets"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.TxTCPSegmentation = value
+		},
+	},
+	{
+		field:   "TxUDPFragmentation",
+		aliases: []string{"tx_udp_fragmentation", "tx_udp_segmentation", "tx_udp_fragments", "tx_udp_seg_packets", "udp_tso_packets", "tx_udp_tso_packets", "tx_udp_seg_offload"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.TxUDPFragmentation = value
+		},
+	},
+	{
+		field:   "RxGRO",
+		aliases: []string{"rx_gro", "rx_gro_packets", "gro_packets", "gro_pkts", "gro_aggregated", "rx_gro_pkts"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.RxGRO = value
+		},
+	},
+	{
+		field:   "RxLRO",
+		aliases: []string{"rx_lro", "rx_lro_packets", "lro_packets", "lro_pkts", "lro_aggregated", "rx_lro_pkts"},
+		assign: func(stats *types.OffloadStatistics, value uint64) {
+			stats.RxLRO = value
+		},
+	},
 }
 
 // NewManager creates a new Offload Manager.
@@ -155,11 +260,37 @@ func (m *Manager) SetOffloadFeature(name string, feature string, enabled bool) e
 
 // GetOffloadStatistics gets statistics for offloaded operations on an interface.
 func (m *Manager) GetOffloadStatistics(name string) (*types.OffloadStatistics, error) {
-	// This is a placeholder implementation
-	// In a real implementation, we would query ethtool statistics
-	return &types.OffloadStatistics{
+	rawStats, err := m.ethtool.Stats(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get offload statistics: %w", err)
+	}
+
+	normalizedStats := normalizeOffloadStats(rawStats)
+	stats := &types.OffloadStatistics{
 		Interface: name,
-	}, nil
+	}
+
+	matchedCounters := 0
+	unsupportedCounters := make([]string, 0, len(offloadStatDescriptors))
+
+	for _, descriptor := range offloadStatDescriptors {
+		value, ok := findOffloadStatValue(normalizedStats, descriptor.aliases)
+		if !ok {
+			unsupportedCounters = append(unsupportedCounters, descriptor.field)
+			continue
+		}
+
+		descriptor.assign(stats, value)
+		matchedCounters++
+	}
+
+	if matchedCounters == 0 {
+		return nil, fmt.Errorf("%w for interface %s", ErrOffloadStatisticsNotSupported, name)
+	}
+
+	stats.UnsupportedCounters = unsupportedCounters
+
+	return stats, nil
 }
 
 // ResetOffload resets all hardware offloading features for an interface to their default values.
@@ -237,4 +368,43 @@ func (m *Manager) GetOptimalOffloadConfiguration(ifName string) (types.OffloadFe
 	}
 
 	return features, nil
+}
+
+func normalizeOffloadStats(rawStats map[string]uint64) map[string]uint64 {
+	normalized := make(map[string]uint64, len(rawStats))
+	for name, value := range rawStats {
+		normalized[normalizeOffloadStatName(name)] = value
+	}
+
+	return normalized
+}
+
+func findOffloadStatValue(rawStats map[string]uint64, aliases []string) (uint64, bool) {
+	for _, alias := range aliases {
+		value, ok := rawStats[normalizeOffloadStatName(alias)]
+		if ok {
+			return value, true
+		}
+	}
+
+	return 0, false
+}
+
+func normalizeOffloadStatName(name string) string {
+	var builder strings.Builder
+	builder.Grow(len(name))
+
+	lastUnderscore := false
+	for _, r := range name {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			builder.WriteRune(unicode.ToLower(r))
+			lastUnderscore = false
+		case !lastUnderscore:
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	return strings.Trim(builder.String(), "_")
 }

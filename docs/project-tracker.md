@@ -1,7 +1,12 @@
 # Kubernetes-Based Router/Firewall Distribution
 ## Project Tracker
 
-Use this document to track progress on all project components. This project is currently an **architectural concept and design** with placeholder implementations.
+This document is the original phase-by-phase tracker and is now primarily a historical record of how the repository was bootstrapped.
+
+Current verified status:
+- The repository is no longer design-only; tickets 1-20 in [docs/implementation-plan.md](docs/implementation-plan.md) are complete on `origin/main`.
+- Fresh verification on 2026-04-18 completed with `go test ./...` and `go build ./...`.
+- For the current implementation snapshot and next workstreams, use [Status.md](../Status.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
 ## Phase 1: Environment Setup & Documentation Structure (Weeks 1-2)
 

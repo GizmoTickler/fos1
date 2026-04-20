@@ -113,4 +113,8 @@ type OffloadStatistics struct {
 
 	// RxLRO is the number of packets processed by LRO
 	RxLRO uint64
+
+	// UnsupportedCounters lists typed counters that could not be populated because
+	// the interface driver/kernel did not expose a recognized ethtool statistic.
+	UnsupportedCounters []string
 }

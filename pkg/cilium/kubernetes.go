@@ -43,54 +43,48 @@ func NewKubernetesCiliumClient(client *k8s.Client) *KubernetesCiliumClient {
 	}
 }
 
+func (c *KubernetesCiliumClient) defaultClient() *DefaultCiliumClient {
+	return NewDefaultCiliumClient("", "")
+}
+
 // ConfigureDPIIntegration configures Cilium for DPI integration
 func (c *KubernetesCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error {
-	// In Kubernetes, this would typically be done through CRDs or ConfigMaps
-	// For now, we'll just log the configuration
-	log.Printf("Configuring Cilium DPI integration: %+v", config)
-	return nil
+	return c.defaultClient().ConfigureDPIIntegration(ctx, config)
 }
 
 // CreateNAT creates NAT rules using Cilium's capabilities
 func (c *KubernetesCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
-	log.Printf("Creating NAT rules: %+v", config)
-	return nil
+	return c.defaultClient().CreateNAT(ctx, config)
 }
 
 // RemoveNAT removes NAT rules
 func (c *KubernetesCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATConfig) error {
-	log.Printf("Removing NAT rules: %+v", config)
-	return nil
+	return c.defaultClient().RemoveNAT(ctx, config)
 }
 
 // CreateNAT64 creates NAT64 rules
 func (c *KubernetesCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Config) error {
-	log.Printf("Creating NAT64 rules: %+v", config)
-	return nil
+	return c.defaultClient().CreateNAT64(ctx, config)
 }
 
 // RemoveNAT64 removes NAT64 rules
 func (c *KubernetesCiliumClient) RemoveNAT64(ctx context.Context, config *NAT64Config) error {
-	log.Printf("Removing NAT64 rules: %+v", config)
-	return nil
+	return c.defaultClient().RemoveNAT64(ctx, config)
 }
 
 // CreatePortForward creates port forwarding rules
 func (c *KubernetesCiliumClient) CreatePortForward(ctx context.Context, config *PortForwardConfig) error {
-	log.Printf("Creating port forward: %+v", config)
-	return nil
+	return c.defaultClient().CreatePortForward(ctx, config)
 }
 
 // RemovePortForward removes port forwarding rules
 func (c *KubernetesCiliumClient) RemovePortForward(ctx context.Context, config *PortForwardConfig) error {
-	log.Printf("Removing port forward: %+v", config)
-	return nil
+	return c.defaultClient().RemovePortForward(ctx, config)
 }
 
 // ConfigureVLANRouting configures routing between VLANs
 func (c *KubernetesCiliumClient) ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error {
-	log.Printf("Configuring VLAN routing: %+v", config)
-	return nil
+	return c.defaultClient().ConfigureVLANRouting(ctx, config)
 }
 
 // ApplyNetworkPolicy applies a network policy to Cilium

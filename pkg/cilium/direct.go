@@ -3,7 +3,6 @@ package cilium
 import (
 	"context"
 	"fmt"
-	"log"
 	"os/exec"
 )
 
@@ -26,72 +25,58 @@ func NewDirectCiliumClient(apiEndpoint, apiKey string) *DirectCiliumClient {
 	}
 }
 
+func (c *DirectCiliumClient) defaultClient() *DefaultCiliumClient {
+	return NewDefaultCiliumClient(c.apiEndpoint, "")
+}
+
 // ConfigureDPIIntegration configures Cilium for DPI integration
 func (c *DirectCiliumClient) ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error {
-	log.Printf("Configuring Cilium DPI integration: %+v", config)
-
-	// In a real implementation, this would make API calls to Cilium
-	// For now, just log the configuration
-	return nil
+	return c.defaultClient().ConfigureDPIIntegration(ctx, config)
 }
 
 // CreateNAT creates NAT rules using Cilium's capabilities
 func (c *DirectCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
-	log.Printf("Creating NAT rules: %+v", config)
-	return nil
+	return c.defaultClient().CreateNAT(ctx, config)
 }
 
 // RemoveNAT removes NAT rules
 func (c *DirectCiliumClient) RemoveNAT(ctx context.Context, config *CiliumNATConfig) error {
-	log.Printf("Removing NAT rules: %+v", config)
-	return nil
+	return c.defaultClient().RemoveNAT(ctx, config)
 }
 
 // CreateNAT64 creates NAT64 rules
 func (c *DirectCiliumClient) CreateNAT64(ctx context.Context, config *NAT64Config) error {
-	log.Printf("Creating NAT64 rules: %+v", config)
-	return nil
+	return c.defaultClient().CreateNAT64(ctx, config)
 }
 
 // RemoveNAT64 removes NAT64 rules
 func (c *DirectCiliumClient) RemoveNAT64(ctx context.Context, config *NAT64Config) error {
-	log.Printf("Removing NAT64 rules: %+v", config)
-	return nil
+	return c.defaultClient().RemoveNAT64(ctx, config)
 }
 
 // CreatePortForward creates port forwarding rules
 func (c *DirectCiliumClient) CreatePortForward(ctx context.Context, config *PortForwardConfig) error {
-	log.Printf("Creating port forward: %+v", config)
-	return nil
+	return c.defaultClient().CreatePortForward(ctx, config)
 }
 
 // RemovePortForward removes port forwarding rules
 func (c *DirectCiliumClient) RemovePortForward(ctx context.Context, config *PortForwardConfig) error {
-	log.Printf("Removing port forward: %+v", config)
-	return nil
+	return c.defaultClient().RemovePortForward(ctx, config)
 }
 
 // ConfigureVLANRouting configures routing between VLANs
 func (c *DirectCiliumClient) ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error {
-	log.Printf("Configuring VLAN routing: %+v", config)
-	return nil
+	return c.defaultClient().ConfigureVLANRouting(ctx, config)
 }
 
 // DeleteNetworkPolicy removes a Cilium network policy by name
 func (c *DirectCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
-	log.Printf("Deleting network policy: %s", policyName)
-	return nil
+	return c.defaultClient().DeleteNetworkPolicy(ctx, policyName)
 }
 
 // ApplyNetworkPolicy applies a network policy to Cilium
 func (c *DirectCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error {
-	log.Printf("Applying network policy: %s", policy.Name)
-
-	// In a real implementation, this would make API calls to Cilium
-	// For now, just log the policy
-	fmt.Printf("Policy: %+v\n", policy)
-
-	return nil
+	return c.defaultClient().ApplyNetworkPolicy(ctx, policy)
 }
 
 // ListRoutes returns routes from the CRD store.

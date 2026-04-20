@@ -365,6 +365,196 @@ Status:
 Status:
 - completed
 
+## Post-Ticket-20 Sprint
+
+This sprint continues from the verified `origin/main` state after tickets 1-20. The repository now builds and tests cleanly, so the focus shifts from core backend bring-up to control-plane convergence, removal of placeholder success paths in secondary packages, and operational hardening.
+
+Fresh baseline before this sprint:
+- `git rebase origin/main` reported `HEAD is up to date.`
+- `go test ./...` passed
+- `go build ./...` passed
+
+## P0
+
+### Ticket 21: Replace Log-Only DPI Policy Responses In `pkg/kubernetes/policy_controller.go`
+Status:
+- completed
+
+Scope:
+- `pkg/kubernetes/policy_controller.go` is the controller path started by `cmd/dpi-framework/main.go` when Kubernetes mode is enabled
+- `createCiliumPolicy()` currently only logs intent instead of creating or deleting real Cilium resources
+- wire this controller to an authoritative Cilium policy application path so high-severity DPI events cause concrete policy changes
+- make failure and retry behavior explicit rather than silently succeeding on log output
+
+Primary areas:
+- `pkg/kubernetes/policy_controller.go`
+- `pkg/kubernetes/client.go`
+- `pkg/cilium/client.go`
+- `pkg/cilium/kubernetes.go`
+
+Acceptance:
+- high-severity queued DPI events create a real Cilium policy through the configured client
+- policy naming is deterministic and safe for repeated events
+- transient errors are retried through the existing workqueue
+- tests cover at least one successful apply path and one failure/retry path
+
+### Ticket 22: Replace Placeholder Informers And Placeholder Policy Apply Paths In `pkg/security/policy`
+Status:
+- completed
+
+Scope:
+- `pkg/security/policy/controller.go` still creates placeholder list/watch informers and placeholder Cilium apply/remove behavior
+- make informer wiring explicit and non-fake so controller startup does not imply active reconciliation unless real watches exist
+- route translated policies through the actual Cilium client rather than placeholder monitor registration
+- ensure deletion and disablement remove concrete applied policies instead of only mutating in-memory state
+
+Primary areas:
+- `pkg/security/policy/controller.go`
+- `pkg/security/policy/translator.go`
+- `pkg/security/policy/types.go`
+- `pkg/security/policy/*_test.go`
+
+Acceptance:
+- controller startup no longer creates fake successful informers
+- translated policies are applied and deleted through a real backend interface
+- disabled or deleted policies remove applied policy state
+- tests cover add/update/delete behavior without placeholder list/watch responses
+
+### Ticket 23: Retire Or Wire Legacy Route Synchronizer Placeholder Paths
+Status:
+- completed
+
+Scope:
+- `pkg/cilium/route_sync.go` still contains placeholder kernel-route discovery, placeholder Cilium-route discovery, placeholder diffing, and fallback success behavior for add/remove operations
+- decide whether this package remains authoritative support code or should be explicitly narrowed/deprecated
+- if retained, replace placeholder route discovery/diff behavior with real source-of-truth behavior consistent with the post-ticket-3 route path
+- if not retained, make unsupported flows fail explicitly instead of pretending success
+
+Primary areas:
+- `pkg/cilium/route_sync.go`
+- `pkg/cilium/route_sync_test.go`
+- `pkg/cilium/types.go`
+
+Acceptance:
+- no active method in `pkg/cilium/route_sync.go` returns placeholder success for route mutation
+- unsupported flows return explicit errors with actionable messages
+- tests cover whichever contract is chosen: real reconciliation or explicit non-support
+
+### Ticket 24: Remove Log-Only Operations From The Direct And Kubernetes Cilium Helper Clients
+Status:
+- completed
+
+Scope:
+- `pkg/cilium/direct.go` and parts of `pkg/cilium/kubernetes.go` still log success for DPI integration, NAT, VLAN routing, and related helper operations
+- align helper clients with the authoritative behavior already present in `pkg/cilium/client.go`, or make unsupported operations return explicit errors
+- ensure these helper clients no longer appear production-capable while only logging requests
+
+Primary areas:
+- `pkg/cilium/direct.go`
+- `pkg/cilium/kubernetes.go`
+- `pkg/cilium/client_test.go`
+
+Acceptance:
+- direct/kubernetes helper methods no longer return success for log-only operations
+- supported operations delegate to real resource creation/update behavior
+- unsupported operations return explicit errors instead of silent success
+- tests cover at least one converted real path and one explicit unsupported path
+
+## P1
+
+### Ticket 25: Put Event Correlation On A Verified Runtime Contract
+Status:
+- completed
+
+Scope:
+- `pkg/security/ids/correlation/controller.go` creates Kubernetes resources for an event correlator runtime, but there is no verified end-to-end contract for config generation, deployment semantics, or status transitions
+- add focused controller tests to verify the generated ConfigMap, Deployment, Service, and status conditions
+- document what is actually implemented versus what remains a downstream image/runtime dependency
+
+Primary areas:
+- `pkg/security/ids/correlation/controller.go`
+- new tests under `pkg/security/ids/correlation/`
+- `docs/observability-architecture.md`
+
+Acceptance:
+- controller tests verify reconciliation outputs and status transitions
+- docs clearly separate implemented controller behavior from external runtime assumptions
+- no status claims imply a working event processor unless deployment readiness supports it
+
+### Ticket 26: Replace Placeholder Hardware Offload Statistics With Real Ethtool-Derived Behavior
+Status:
+- completed
+
+Scope:
+- `pkg/hardware/offload/manager.go` returns placeholder statistics while the rest of the manager already queries ethtool features
+- implement real statistics discovery where available, or explicit "not supported" reporting where the driver/kernel does not expose counters
+- avoid placeholder zero-value success that looks like a valid datapoint
+
+Primary areas:
+- `pkg/hardware/offload/manager.go`
+- `pkg/hardware/types/offload_types.go`
+- new tests under `pkg/hardware/offload/`
+
+Acceptance:
+- `GetOffloadStatistics()` no longer returns placeholder success
+- stats fields are populated from real ethtool data when available
+- unsupported counters return explicit, documented behavior
+- tests cover both supported and unsupported-statistics cases
+
+### Ticket 27: Reconcile Observability Documentation To Actual Shipped Components
+Status:
+- completed
+
+Scope:
+- `docs/observability-architecture.md` currently reads as a full-stack architecture document independent of the repository's verified runtime state
+- rewrite it to distinguish between manifests/templates, implemented exporters/controllers, and not-yet-verified operational paths
+- align the document with the post-ticket-20 status model used elsewhere
+
+Primary areas:
+- `docs/observability-architecture.md`
+- optionally `Status.md` if cross-links need to be added
+
+Acceptance:
+- observability docs distinguish implemented code, deployable manifests, and future architecture clearly
+- no section implies verified runtime ownership that the codebase does not yet provide
+- next implementation dependencies are explicitly called out
+
+### Ticket 28: Build Automation For The Verified Mainline Checks
+Status:
+- completed
+
+Scope:
+- the current repo state verifies locally with `go test ./...` and `go build ./...`, but that verification is not yet captured as a first-class automation requirement in the sprint context
+- add a lightweight automation target or documented CI entrypoint for the current verified checks
+- ensure future tickets can reference one canonical verification command sequence
+
+Primary areas:
+- `Makefile`
+- `docs/DEVELOPMENT.md`
+- CI/workflow files if present or introduced
+
+Acceptance:
+- one canonical command or target runs the current mainline verification steps
+- docs reference that target as the required pre-merge check
+- the target succeeds on the current codebase
+
+## Suggested Parallel Ownership (Post-20)
+
+Engineer A:
+- ticket 21 first (Kubernetes DPI policy path)
+
+Engineer B:
+- ticket 22 first (security policy controller path)
+
+Engineer C:
+- ticket 23 first, then ticket 24 (shared `pkg/cilium` convergence path; keep sequential to avoid overlap)
+
+Engineer D:
+- ticket 25 first (event correlation verification and docs)
+
+Engineer E:
+- ticket 26 first, then ticket 27 or 28 (hardware and ops/docs hardening)
+
 ## Suggested Parallel Ownership
 
 Engineer A:

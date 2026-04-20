@@ -3,6 +3,13 @@
 
 This document replaces the older time-boxed plan with a codebase-driven implementation plan based on the repository's actual current state.
 
+## Verification Snapshot
+
+Verified on 2026-04-18:
+- `git rebase origin/main` -> `HEAD is up to date.`
+- `go test ./...` -> pass
+- `go build ./...` -> pass
+
 ## Current Baseline
 
 The repository is not a greenfield design-only project.
@@ -16,9 +23,10 @@ What is already present:
 - tests across several packages
 
 What is not yet complete:
-- eBPF runtime ownership needs consolidation
-- integration/reconciliation test matrix not yet built
-- status docs not yet verified against actual behavior
+- observability documentation is now aligned to repository-owned contracts, but end-to-end observability runtime wiring is still not verified
+- threat-intelligence and deeper event-ingestion/runtime paths remain incomplete
+- hardware/NIC support still has broader capability gaps beyond the offload-statistics hardening completed in ticket 26
+- CI/deployment enforcement still needs to be built on top of the local `make verify-mainline` contract
 
 ## Governing Decision
 
@@ -68,6 +76,18 @@ Completed:
 - Ticket 15: cert-manager outputs integrated into NTS consumer via SecretWatcher
 - Ticket 19: eBPF runtime consolidated, placeholder Cilium discovery removed
 - Ticket 20: reconciliation test matrix built, controller tests added, status docs corrected
+- Ticket 21: Kubernetes DPI policy controller now applies real Cilium policy responses with retryable failures
+- Ticket 22: security policy controller no longer relies on fake informer/apply paths
+- Ticket 23: route synchronizer placeholder mutation paths retired in favor of explicit real/error contracts
+- Ticket 24: direct and Kubernetes helper clients no longer return log-only success for unsupported operations
+- Ticket 25: event-correlation controller status and documentation aligned to a verified runtime contract
+- Ticket 26: hardware offload statistics now use ethtool-derived behavior or explicit unsupported reporting
+- Ticket 27: observability documentation reconciled to verified repository-owned behavior versus external/runtime assumptions
+- Ticket 28: canonical `make verify-mainline` automation added for the mainline checks
+
+Interpretation:
+- Tickets 1-20 are complete for the primary implementation track that converted the main routing/NAT/service/security backends away from earlier placeholder behavior.
+- Repository-wide completion is broader than that ticket set; there are still secondary packages and legacy controller paths that need convergence before the codebase can be described as uniformly production-ready.
 
 ## Epic 1: Datapath Unification
 
@@ -162,6 +182,70 @@ Milestone 4: **complete**
 Milestone 5: **complete**
 - Tickets 19 to 20 complete
 - eBPF runtime consolidated, test matrix built, status docs corrected
+
+## Next Phase Workstreams
+
+### Workstream 1: Deepen Observability Runtime Follow-Through
+
+Why this is next:
+- ticket 27 aligned the docs to the current repository-owned contract, which makes the remaining observability/runtime gaps explicit
+- the next observability work is operational, not descriptive: exporter wiring, ingestion, and durable sinks still need proof
+
+Primary areas:
+- `pkg/security/ids/correlation/`
+- `pkg/ntp/metrics/`
+- `pkg/kubernetes/metrics_server.go`
+- monitoring/logging deployment wiring and related docs
+
+Exit criteria:
+- event correlation has a deeper end-to-end runtime than controller-only reconciliation
+- in-repo exporter endpoints have an owned deployment/scrape path
+- remaining observability non-goals and external runtime assumptions are explicit
+
+### Workstream 2: Extend Verification Into CI And Deployment Paths
+
+Why this is next:
+- the repository now has a canonical local verification target, but branch/PR/deployment enforcement still needs to build on top of it
+- the next improvement is operationalizing `make verify-mainline`, not redefining it
+
+Primary areas:
+- CI/workflow configuration
+- release/deployment docs
+- `Makefile` only if CI-specific helpers are needed
+
+Exit criteria:
+- CI or branch automation invokes the canonical verification contract
+- deployment/release docs reference the required verification path
+
+### Workstream 3: Deepen Runtime Follow-Through
+
+Why this is next:
+- the first convergence sprint fixed controller contracts, but external runtime depth is still limited
+- threat-intelligence and event-ingestion depth remain future implementation areas
+
+Primary areas:
+- `pkg/security/ids/correlation/`
+- `docs/design/threat-intelligence-system.md`
+
+Exit criteria:
+- event correlation has a deeper end-to-end runtime than controller-only reconciliation
+- remaining threat-intelligence non-goals are explicit
+
+### Workstream 4: Hardware And Operational Hardening
+
+Why this is next:
+- the repository now verifies cleanly in local Go build/test, but operational surfaces still need hardening
+- offload statistics are hardened, but NIC and platform support still have broader gaps
+
+Primary areas:
+- `pkg/hardware/offload/`
+- `pkg/hardware/nic/`
+- CI/deployment docs and automation
+
+Exit criteria:
+- hardware capability reporting is real, not placeholder
+- critical operational checks run in automation, not only locally
+- docs explain platform assumptions and unsupported hardware paths clearly
 
 ## Architect Review Questions
 

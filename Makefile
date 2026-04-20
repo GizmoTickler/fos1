@@ -73,6 +73,11 @@ test-dns-dhcp:
 integration-test:
 	$(GO) test $(TEST_FLAGS) -tags=integration ./tests/integration/...
 
+.PHONY: verify-mainline
+verify-mainline:
+	$(GO) test ./...
+	$(GO) build ./...
+
 # Lint targets
 .PHONY: lint
 lint: lint-go lint-yaml
@@ -208,6 +213,7 @@ help:
 	@echo "  test-dhcp          - Run DHCP subsystem tests"
 	@echo "  test-dns-dhcp      - Run both DNS and DHCP tests including integration"
 	@echo "  integration-test   - Run integration tests"
+	@echo "  verify-mainline    - Run the required pre-merge mainline verification checks"
 	@echo "  lint               - Run all linters"
 	@echo "  fmt                - Format Go code"
 	@echo "  manifests          - Generate all Kubernetes manifests"

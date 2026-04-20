@@ -1,8 +1,11 @@
 package policy
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/GizmoTickler/fos1/pkg/cilium"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -10,17 +13,17 @@ import (
 type FilterPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	
+
 	// Policy specification
 	Spec FilterPolicySpec `json:"spec"`
-	
+
 	// Policy status
 	Status FilterPolicyStatus `json:"status,omitempty"`
-	
+
 	// Fields below are not part of the CRD but used internally
-	Name        string `json:"-"`
-	Enabled     bool   `json:"-"`
-	Priority    int    `json:"-"`
+	Name     string `json:"-"`
+	Enabled  bool   `json:"-"`
+	Priority int    `json:"-"`
 }
 
 // FilterPolicySpec defines the specification for a filtering policy
@@ -30,33 +33,33 @@ type FilterPolicySpec struct {
 	Scope       string `json:"scope"`
 	Enabled     bool   `json:"enabled"`
 	Priority    int    `json:"priority"`
-	
+
 	// Parent policies (for inheritance)
 	Inherits []PolicyInheritance `json:"inherits,omitempty"`
-	
+
 	// Matching criteria
 	Selectors FilterSelectors `json:"selectors"`
-	
+
 	// Actions to take on matched traffic
 	Actions []PolicyAction `json:"actions"`
-	
+
 	// Additional metadata
 	Tags []string `json:"tags,omitempty"`
 }
 
 // PolicyInheritance defines inheritance from a parent policy
 type PolicyInheritance struct {
-	Name            string `json:"name"`
+	Name             string `json:"name"`
 	OverrideStrategy string `json:"overrideStrategy,omitempty"`
 }
 
 // FilterSelectors defines the selectors for matching traffic
 type FilterSelectors struct {
-	Sources      []Selector `json:"sources,omitempty"`
-	Destinations []Selector `json:"destinations,omitempty"`
-	Applications []Selector `json:"applications,omitempty"`
+	Sources      []Selector     `json:"sources,omitempty"`
+	Destinations []Selector     `json:"destinations,omitempty"`
+	Applications []Selector     `json:"applications,omitempty"`
 	Ports        []PortSelector `json:"ports,omitempty"`
-	TimeWindows  []TimeWindow `json:"timeWindows,omitempty"`
+	TimeWindows  []TimeWindow   `json:"timeWindows,omitempty"`
 }
 
 // Selector defines a generic selector for matching traffic
@@ -90,31 +93,31 @@ type PolicyAction struct {
 // FilterPolicyStatus defines the status of a filtering policy
 type FilterPolicyStatus struct {
 	// Status of policy application
-	Applied        bool      `json:"applied"`
-	LastApplied    time.Time `json:"lastApplied,omitempty"`
-	
+	Applied     bool      `json:"applied"`
+	LastApplied time.Time `json:"lastApplied,omitempty"`
+
 	// Error information if application failed
-	Error          string    `json:"error,omitempty"`
-	
+	Error string `json:"error,omitempty"`
+
 	// Corresponding Cilium policies
-	CiliumPolicies []string  `json:"ciliumPolicies,omitempty"`
-	
+	CiliumPolicies []string `json:"ciliumPolicies,omitempty"`
+
 	// Statistics
-	MatchCount     int64     `json:"matchCount"`
-	LastMatch      time.Time `json:"lastMatch,omitempty"`
+	MatchCount int64     `json:"matchCount"`
+	LastMatch  time.Time `json:"lastMatch,omitempty"`
 }
 
 // FilterPolicyGroup defines a group of related policies
 type FilterPolicyGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	
+
 	// Policy group specification
 	Spec FilterPolicyGroupSpec `json:"spec"`
-	
+
 	// Fields below are not part of the CRD but used internally
-	Name     string `json:"-"`
-	Enabled  bool   `json:"-"`
+	Name    string `json:"-"`
+	Enabled bool   `json:"-"`
 }
 
 // FilterPolicyGroupSpec defines the specification for a policy group
@@ -123,13 +126,13 @@ type FilterPolicyGroupSpec struct {
 	Description string `json:"description,omitempty"`
 	Enabled     bool   `json:"enabled"`
 	Priority    int    `json:"priority,omitempty"`
-	
+
 	// Member policies
 	Policies []string `json:"policies"`
-	
+
 	// Default action for this group
 	DefaultAction string `json:"defaultAction,omitempty"`
-	
+
 	// Override settings for member policies
 	Overrides []PolicyOverride `json:"overrides,omitempty"`
 }
@@ -145,36 +148,36 @@ type PolicyOverride struct {
 type FilterZone struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	
+
 	// Zone specification
 	Spec FilterZoneSpec `json:"spec"`
-	
+
 	// Fields below are not part of the CRD but used internally
-	Name              string `json:"-"`
-	TrustLevel        string `json:"-"`
-	DefaultIngressAction string `json:"-"`
-	DefaultEgressAction  string `json:"-"`
-	Policies          []string `json:"-"`
+	Name                 string   `json:"-"`
+	TrustLevel           string   `json:"-"`
+	DefaultIngressAction string   `json:"-"`
+	DefaultEgressAction  string   `json:"-"`
+	Policies             []string `json:"-"`
 }
 
 // FilterZoneSpec defines the specification for a security zone
 type FilterZoneSpec struct {
 	// Zone metadata
 	Description string `json:"description,omitempty"`
-	
+
 	// Zone membership criteria
 	Networks []NetworkDefinition `json:"networks"`
-	
+
 	// Interface definitions
 	Interfaces []InterfaceDefinition `json:"interfaces,omitempty"`
-	
+
 	// Security settings
 	TrustLevel string `json:"trustLevel"`
-	
+
 	// Default actions
 	DefaultIngressAction string `json:"defaultIngressAction"`
 	DefaultEgressAction  string `json:"defaultEgressAction"`
-	
+
 	// Zone-specific policies
 	Policies []string `json:"policies,omitempty"`
 }
@@ -194,7 +197,7 @@ type InterfaceDefinition struct {
 type FilterPolicyTemplate struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	
+
 	// Template specification
 	Spec FilterPolicyTemplateSpec `json:"spec"`
 }
@@ -203,20 +206,20 @@ type FilterPolicyTemplate struct {
 type FilterPolicyTemplateSpec struct {
 	// Template metadata
 	Description string `json:"description,omitempty"`
-	
+
 	// Template parameters
 	Parameters []TemplateParameter `json:"parameters"`
-	
+
 	// Template policy
 	Template map[string]interface{} `json:"template"`
 }
 
 // TemplateParameter defines a parameter for a policy template
 type TemplateParameter struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Required    bool   `json:"required"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Type        string      `json:"type,omitempty"`
+	Required    bool        `json:"required"`
 	Default     interface{} `json:"default,omitempty"`
 }
 
@@ -249,12 +252,12 @@ func (l *PolicyLogger) LogConflictResolution(conflict *PolicyConflict) {
 
 // PolicyConflict represents a conflict between policies
 type PolicyConflict struct {
-	PolicyA       string
-	PolicyB       string
-	ConflictType  string
-	Resolution    string
-	Significance  int
-	Details       map[string]interface{}
+	PolicyA      string
+	PolicyB      string
+	ConflictType string
+	Resolution   string
+	Significance int
+	Details      map[string]interface{}
 }
 
 // PolicyResolver resolves policy dependencies and conflicts
@@ -278,24 +281,40 @@ func (r *PolicyResolver) ResolvePolicy(policy *FilterPolicy, policies map[string
 
 // CiliumPolicyTranslator translates policies to Cilium policies
 type CiliumPolicyTranslator struct {
-	ciliumClient interface{}
-	logger       *PolicyLogger
+	logger *PolicyLogger
 }
 
 // NewCiliumPolicyTranslator creates a new Cilium policy translator
-func NewCiliumPolicyTranslator(ciliumClient interface{}, logger *PolicyLogger) *CiliumPolicyTranslator {
+func NewCiliumPolicyTranslator(_ cilium.CiliumClient, logger *PolicyLogger) *CiliumPolicyTranslator {
 	return &CiliumPolicyTranslator{
-		ciliumClient: ciliumClient,
-		logger:       logger,
+		logger: logger,
 	}
 }
 
 // TranslatePolicy translates a policy to Cilium policies
-func (t *CiliumPolicyTranslator) TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*interface{}, error) {
-	// In a real implementation, would translate to Cilium policies
-	// For now, return a placeholder
-	var result []*interface{}
-	return result, nil
+func (t *CiliumPolicyTranslator) TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*cilium.CiliumPolicy, error) {
+	if policy == nil {
+		return nil, fmt.Errorf("policy must not be nil")
+	}
+	if !policy.Spec.Enabled {
+		return nil, nil
+	}
+
+	_ = zones
+
+	rules := translateCiliumRules(policy)
+	translated := &cilium.CiliumPolicy{
+		Name:        ciliumPolicyName(policy),
+		Description: policy.Spec.Description,
+		Namespace:   policy.ObjectMeta.Namespace,
+		Labels: map[string]string{
+			"app.kubernetes.io/managed-by": "fos1-policy-controller",
+			"fos1.io/policy-name":          policyObjectName(policy),
+		},
+		Rules: rules,
+	}
+
+	return []*cilium.CiliumPolicy{translated}, nil
 }
 
 // PolicyMonitor monitors policy application and status
@@ -323,4 +342,102 @@ func (m *PolicyMonitor) RegisterPolicy(name string, namespace string) {
 // UnregisterPolicy unregisters a policy from monitoring
 func (m *PolicyMonitor) UnregisterPolicy(name string, namespace string) {
 	// In a real implementation, would unregister from monitoring
+}
+
+func translateCiliumRules(policy *FilterPolicy) []cilium.CiliumRule {
+	spec := policy.Spec
+	action, denied := translatePolicyAction(spec.Actions)
+	srcCIDRs := extractCIDRs(spec.Selectors.Sources)
+	dstCIDRs := extractCIDRs(spec.Selectors.Destinations)
+
+	if len(spec.Selectors.Ports) == 0 {
+		return []cilium.CiliumRule{{
+			Action:   action,
+			Denied:   denied,
+			FromCIDR: srcCIDRs,
+			ToCIDR:   dstCIDRs,
+		}}
+	}
+
+	rules := make([]cilium.CiliumRule, 0, len(spec.Selectors.Ports))
+	for _, selector := range spec.Selectors.Ports {
+		portRule := cilium.PortRule{
+			Ports: make([]cilium.Port, 0, len(selector.Ports)),
+		}
+		for _, port := range selector.Ports {
+			portRule.Ports = append(portRule.Ports, cilium.Port{
+				Port:     uint16(port),
+				Protocol: translateCiliumProtocol(selector.Protocol),
+			})
+		}
+		rules = append(rules, cilium.CiliumRule{
+			Protocol: selector.Protocol,
+			Action:   action,
+			Denied:   denied,
+			FromCIDR: srcCIDRs,
+			ToCIDR:   dstCIDRs,
+			ToPorts:  []cilium.PortRule{portRule},
+		})
+	}
+
+	return rules
+}
+
+func translatePolicyAction(actions []PolicyAction) (string, bool) {
+	action := "deny"
+	denied := true
+
+	for _, policyAction := range actions {
+		switch strings.ToLower(policyAction.Type) {
+		case "allow", "accept":
+			action = "allow"
+			denied = false
+		case "deny", "drop":
+			action = "deny"
+			denied = true
+		case "reject":
+			action = "reject"
+			denied = true
+		}
+	}
+
+	return action, denied
+}
+
+func translateCiliumProtocol(protocol string) string {
+	switch strings.ToLower(protocol) {
+	case "tcp":
+		return "tcp"
+	case "udp":
+		return "udp"
+	case "icmp":
+		return "icmp"
+	default:
+		return ""
+	}
+}
+
+func ciliumPolicyName(policy *FilterPolicy) string {
+	name := policyObjectName(policy)
+	if namespace := policy.ObjectMeta.Namespace; namespace != "" {
+		name = namespace + "-" + name
+	}
+	name = strings.ToLower(name)
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '-' || r == '.':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+	name = strings.Trim(name, "-.")
+	if name == "" {
+		return "filter-policy"
+	}
+	return "filter-" + name
 }
