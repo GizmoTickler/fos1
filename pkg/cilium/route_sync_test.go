@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,6 +17,8 @@ type MockCiliumClientForRouting struct {
 	routesAdded    []Route
 	routesRemoved  []Route
 	vrfRoutesAdded map[int][]Route
+	listRoutes     []Route
+	listVRFRoutes  map[int][]Route
 
 	// Configure responses
 	shouldError bool
@@ -27,6 +30,8 @@ func NewMockCiliumClientForRouting(shouldError bool) *MockCiliumClientForRouting
 		routesAdded:    make([]Route, 0),
 		routesRemoved:  make([]Route, 0),
 		vrfRoutesAdded: make(map[int][]Route),
+		listRoutes:     make([]Route, 0),
+		listVRFRoutes:  make(map[int][]Route),
 		shouldError:    shouldError,
 	}
 }
@@ -37,11 +42,11 @@ func (m *MockCiliumClientForRouting) ApplyNetworkPolicy(ctx context.Context, pol
 }
 
 func (m *MockCiliumClientForRouting) ListRoutes(ctx context.Context) ([]Route, error) {
-	return []Route{}, nil
+	return m.listRoutes, nil
 }
 
 func (m *MockCiliumClientForRouting) ListVRFRoutes(ctx context.Context, vrfID int) ([]Route, error) {
-	return []Route{}, nil
+	return m.listVRFRoutes[vrfID], nil
 }
 
 func (m *MockCiliumClientForRouting) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
@@ -187,9 +192,12 @@ func TestRouteSynchronizer_SyncRoute(t *testing.T) {
 		t.Errorf("SyncRoute with VRF returned error: %v", err)
 	}
 
-	// Verify a VRF route was added
-	if len(mockClient.vrfRoutesAdded) != 1 {
-		t.Errorf("Expected routes to be added to 1 VRF, got %d", len(mockClient.vrfRoutesAdded))
+	// Verify the route was added with its VRF metadata preserved
+	if len(mockClient.routesAdded) != 1 {
+		t.Fatalf("Expected 1 route to be added, got %d", len(mockClient.routesAdded))
+	}
+	if mockClient.routesAdded[0].VRF != "vrf1" {
+		t.Fatalf("Expected route VRF to be vrf1, got %q", mockClient.routesAdded[0].VRF)
 	}
 
 	// Test error case
@@ -229,8 +237,8 @@ func TestRouteSynchronizer_SyncRoute(t *testing.T) {
 	}
 }
 
-// TestRouteSynchronizer_Start_Stop tests the Start and Stop methods
-func TestRouteSynchronizer_Start_Stop(t *testing.T) {
+// TestRouteSynchronizer_Start_ExplicitlyFailsWithoutKernelDiscovery tests the unsupported background sync path.
+func TestRouteSynchronizer_Start_ExplicitlyFailsWithoutKernelDiscovery(t *testing.T) {
 	// Create a mock client
 	mockClient := NewMockCiliumClientForRouting(false)
 
@@ -239,26 +247,29 @@ func TestRouteSynchronizer_Start_Stop(t *testing.T) {
 
 	// Start the synchronizer
 	err := synchronizer.Start()
-	if err != nil {
-		t.Errorf("Start returned error: %v", err)
+	if err == nil {
+		t.Fatal("Start should fail when kernel route discovery is unsupported")
 	}
-
-	// Wait for at least one synchronization cycle
-	time.Sleep(100 * time.Millisecond)
-
-	// Stop the synchronizer
-	synchronizer.Stop()
-
-	// Verify synchronization was attempted
-	// Note: Since we're using a mock implementation that returns empty routes,
-	// we won't see any actual routes added or removed, but we can verify the
-	// synchronizer ran without errors.
+	if !strings.Contains(err.Error(), "kernel route discovery is not supported") {
+		t.Fatalf("expected unsupported kernel discovery error, got %v", err)
+	}
 }
 
 // TestRouteSynchronizer_SyncRoutesForVRF tests the SyncRoutesForVRF method
 func TestRouteSynchronizer_SyncRoutesForVRF(t *testing.T) {
 	// Create a mock client
 	mockClient := NewMockCiliumClientForRouting(false)
+	_, destination, err := net.ParseCIDR("192.168.10.0/24")
+	if err != nil {
+		t.Fatalf("failed to parse CIDR: %v", err)
+	}
+	mockClient.listVRFRoutes[10] = []Route{
+		{
+			Destination: destination,
+			Gateway:     net.ParseIP("10.0.0.1"),
+			OutputIface: "eth0",
+		},
+	}
 
 	// Create a route synchronizer with the mock client
 	synchronizer := NewRouteSynchronizer(mockClient, 30*time.Second)
@@ -267,9 +278,29 @@ func TestRouteSynchronizer_SyncRoutesForVRF(t *testing.T) {
 	ctx := context.Background()
 	vrfID := 10
 
-	err := synchronizer.SyncRoutesForVRF(ctx, vrfID)
+	err = synchronizer.SyncRoutesForVRF(ctx, vrfID)
 	if err != nil {
 		t.Errorf("SyncRoutesForVRF returned error: %v", err)
 	}
 
+	if len(mockClient.vrfRoutesAdded[vrfID]) != 1 {
+		t.Fatalf("expected 1 route to be added for VRF %d, got %d", vrfID, len(mockClient.vrfRoutesAdded[vrfID]))
+	}
+}
+
+func TestRouteSynchronizer_SyncRoute_DeleteRequiresRouteDetails(t *testing.T) {
+	mockClient := NewMockCiliumClientForRouting(false)
+	synchronizer := NewRouteSynchronizer(mockClient, 30*time.Second)
+
+	err := synchronizer.SyncRoute(context.Background(), &RouteSync{
+		Namespace: "default",
+		Name:      "missing-route-details",
+		Action:    RouteSyncActionDelete,
+	})
+	if err == nil {
+		t.Fatal("expected delete without route details to fail")
+	}
+	if !strings.Contains(err.Error(), "route deletion requires destination or full route details") {
+		t.Fatalf("expected actionable delete error, got %v", err)
+	}
 }

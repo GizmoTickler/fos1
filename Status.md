@@ -1,10 +1,19 @@
 # Implementation Status Report
-**Generated:** 2026-04-09
+**Generated:** 2026-04-18
 **Repository:** Kubernetes-Based Router/Firewall (FOS1)
 
 ## Executive Summary
 
-This repository has progressed significantly from an architectural blueprint to a **functional implementation** of a Kubernetes-based router/firewall. Phases 1-6 are now implemented with real kernel integration (netlink, nftables), daemon communication (Unix sockets, HTTP APIs), and comprehensive test coverage.
+This repository has progressed from an architectural blueprint to a **functional implementation** with verified, passing Go build and test coverage on the integrated post-ticket-28 tree as of 2026-04-18. The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, and first post-20 convergence sprint are implemented.
+
+The highest-value remaining work has narrowed further. Tickets 21-28 completed the first convergence pass over Kubernetes/security policy enforcement, Cilium helper cleanup, event-correlation runtime status, hardware offload statistics behavior, observability/status documentation, and canonical verification automation.
+
+## Verification Snapshot
+
+Verified on 2026-04-18:
+- `git rebase origin/main` -> `HEAD is up to date.`
+- `go test ./...` -> pass
+- `go build ./...` -> pass
 
 ### Key Metrics
 
@@ -13,12 +22,17 @@ This repository has progressed significantly from an architectural blueprint to 
 | Total Go Files | 230+ | Large, complex codebase |
 | Lines of Go Code | ~85,000+ | Significant implementation |
 | CRD Kinds Defined | 42+ | Comprehensive API coverage |
-| Fully Implemented | ~70-75% | Core networking, security, and services functional |
-| Partially Implemented | ~15-20% | Remaining integrations progressing |
-| Interface/Stub Only | ~5-10% | Mostly eliminated |
-| Test Coverage | 100+ tests | Major improvement |
+| Primary Ticket Track | Tickets 1-28 complete | Core path plus first convergence sprint implemented |
+| Remaining Work Shape | Runtime and ops hardening | Current sprint complete |
+| Verification Status | `go test ./...`, `go build ./...` pass | Fresh evidence on current main |
 | Documentation Files | 37 | Excellent documentation |
-| Production Ready | ❌ NO | ~50-55% ready, late alpha |
+| Production Ready | ❌ NO | Strong implementation base, but not yet fully converged or hardened |
+
+## Priority Next Steps
+
+1. Carry observability past documentation by wiring exporter/deployment paths and validating event-correlation ingestion and sinks.
+2. Extend the local `make verify-mainline` contract into CI/branch enforcement when you want PR gating.
+3. Reassess whether the next sprint should target threat-intelligence/event-ingestion depth or operational CI/deployment paths.
 
 ---
 
@@ -72,8 +86,7 @@ This repository has progressed significantly from an architectural blueprint to 
 
 | Component | Files | Lines | Status | Critical Gaps |
 |-----------|-------|-------|--------|---------------|
-
-(None remaining in this category)
+| **Event Correlation** | `pkg/security/ids/correlation/` | - | Partial | Controller-owned ConfigMap/Deployment/Service contract is tested, but runtime image behavior, event ingestion, and export sinks are not repo-verified |
 
 #### ❌ Not Implemented
 
@@ -83,7 +96,6 @@ This repository has progressed significantly from an architectural blueprint to 
 | **Policy Enforcement** | Stub | Type definitions without actual enforcement |
 | **SAML/RADIUS/Certificate Auth** | Stubs only |
 | **Threat Intelligence** | Framework defined but no data sources |
-| **Event Correlation** | Structure exists without correlation logic |
 
 ---
 
@@ -160,7 +172,7 @@ All CRD definitions are **complete and well-structured**:
 - **Overlays** - Dev and prod environment configurations
 - **Deployment Configs** - Talos Linux and Kubernetes deployment manifests
 
-**Gap:** Manifests are templates; services are not fully functional
+**Gap:** Manifests, including the monitoring/logging stack resources, are deployable templates rather than proof of verified runtime ownership or end-to-end operation
 
 ---
 
@@ -226,14 +238,14 @@ All CRD definitions are **complete and well-structured**:
 - `project-tracker.md` - Comprehensive status tracking
 - `implementation-plan.md` - Development roadmap
 - `project-scope.md` - Goals and requirements
-- `observability-architecture.md` - Monitoring design
+- `observability-architecture.md` - Verified-vs-target-state observability boundaries
 
 **Service Documentation:**
 - DNS, DHCP integration guides
 - DPI integration documentation
 - Component-specific README files
 
-**Status:** Documentation is excellent and accurately reflects the **architectural intent** rather than actual implementation status.
+**Status:** Documentation coverage is strong, but some files intentionally describe architecture/templates while status-sensitive docs must stay constrained to verified runtime ownership.
 
 ---
 
@@ -600,7 +612,7 @@ All CRD definitions are **complete and well-structured**:
 - **VPN:** WireGuard (kernel module)
 - **DPI:** nProbe (commercial, optional)
 - **Certificates:** cert-manager
-- **Monitoring:** Prometheus, Grafana
+- **Observability Templates/Dependencies:** Prometheus, Grafana, Alertmanager, Elasticsearch, Fluentd, Kibana
 
 ### Key Go Dependencies
 - `k8s.io/client-go` - Kubernetes client

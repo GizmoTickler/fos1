@@ -82,7 +82,6 @@ func (r *EventCorrelationController) Reconcile(ctx context.Context, req ctrl.Req
 		r.updateStatusCondition(ctx, instance, "DeploymentReady", "False", "DeploymentError", err.Error())
 		return ctrl.Result{}, err
 	}
-	r.updateStatusCondition(ctx, instance, "DeploymentReady", "True", "DeploymentCreated", "Deployment created successfully")
 
 	// Handle Service
 	_, err = r.reconcileService(ctx, instance)
@@ -95,9 +94,11 @@ func (r *EventCorrelationController) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Update status based on deployment
 	if deployment.Status.ReadyReplicas > 0 {
+		r.updateStatusCondition(ctx, instance, "DeploymentReady", "True", "DeploymentReady", "Deployment has ready replicas")
 		instance.Status.Phase = "Running"
 		r.updateStatusCondition(ctx, instance, "Ready", "True", "Running", "Event correlation is running")
 	} else {
+		r.updateStatusCondition(ctx, instance, "DeploymentReady", "False", "DeploymentNotReady", "Deployment is reconciled but has no ready replicas")
 		instance.Status.Phase = "Pending"
 		r.updateStatusCondition(ctx, instance, "Ready", "False", "NotRunning", "Event correlation is not running")
 	}

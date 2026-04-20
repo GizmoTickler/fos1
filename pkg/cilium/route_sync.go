@@ -18,18 +18,6 @@ type RouteSynchronizer struct {
 	cancel     context.CancelFunc
 }
 
-type routeAdder interface {
-	AddRoute(route Route) error
-}
-
-type routeRemover interface {
-	DeleteRoute(route Route) error
-}
-
-type vrfRouteAdder interface {
-	AddVRFRoute(route Route, vrfID int) error
-}
-
 type routeManifestList struct {
 	Items []routeManifest `json:"items"`
 }
@@ -230,29 +218,55 @@ func (s *RouteSynchronizer) synchronizeRoutes() error {
 
 // getKernelRoutes gets routes from kernel routing tables
 func (s *RouteSynchronizer) getKernelRoutes() ([]Route, error) {
-	// In a real implementation, this would use netlink to get routes
-	// from the kernel routing tables
-
-	// This is a placeholder implementation
-	return []Route{}, nil
+	return nil, fmt.Errorf("kernel route discovery is not supported by RouteSynchronizer; use SyncRoute with explicit route details or add a real kernel route source")
 }
 
 // getCiliumRoutes gets routes from Cilium's eBPF maps
 func (s *RouteSynchronizer) getCiliumRoutes() ([]Route, error) {
-	// In a real implementation, this would query Cilium's API or
-	// read directly from eBPF maps
-
-	// This is a placeholder implementation
-	return []Route{}, nil
+	return s.client.ListRoutes(s.ctx)
 }
 
 // calculateDiff calculates which routes need to be added or removed
 func (s *RouteSynchronizer) calculateDiff(kernelRoutes, ciliumRoutes []Route) ([]Route, []Route) {
-	// This is a simplified diff calculation
-	// In a real implementation, this would perform a proper set difference
+	kernelByKey := make(map[string]Route, len(kernelRoutes))
+	for _, route := range kernelRoutes {
+		kernelByKey[routeSyncKey(route)] = route
+	}
 
-	// Placeholder implementation
-	return []Route{}, []Route{}
+	ciliumByKey := make(map[string]Route, len(ciliumRoutes))
+	for _, route := range ciliumRoutes {
+		ciliumByKey[routeSyncKey(route)] = route
+	}
+
+	routesToAdd := make([]Route, 0)
+	for key, route := range kernelByKey {
+		if _, exists := ciliumByKey[key]; !exists {
+			routesToAdd = append(routesToAdd, route)
+		}
+	}
+
+	routesToRemove := make([]Route, 0)
+	for key, route := range ciliumByKey {
+		if _, exists := kernelByKey[key]; !exists {
+			routesToRemove = append(routesToRemove, route)
+		}
+	}
+
+	return routesToAdd, routesToRemove
+}
+
+func routeSyncKey(route Route) string {
+	return fmt.Sprintf(
+		"%s|gw=%s|out=%s|in=%s|table=%d|prio=%d|type=%s|vrf=%s",
+		routeNameForRoute(route),
+		normalizeRouteGateway(route.Gateway),
+		route.OutputIface,
+		route.InputIface,
+		route.Table,
+		route.Priority,
+		route.Type,
+		route.VRF,
+	)
 }
 
 // applyChanges applies route changes to Cilium
@@ -275,64 +289,18 @@ func (s *RouteSynchronizer) applyChanges(routesToAdd, routesToRemove []Route) er
 
 // addRouteToCilium adds a route to Cilium
 func (s *RouteSynchronizer) addRouteToCilium(route Route) error {
-	if client, ok := s.client.(routeAdder); ok {
-		return client.AddRoute(route)
-	}
-
-	// Log the route being added
-	log.Printf("Adding route: %s via %s",
-		route.Destination.String(), route.Gateway.String())
-
-	// In a real implementation, this would use Cilium's API to add a route
-	// For example, using the Cilium API client:
-	//
-	// ciliumRoute := &ciliumApi.Route{
-	//   Destination: route.Destination.String(),
-	//   Gateway:     route.Gateway.String(),
-	//   OutputIface: route.OutputIface,
-	//   Priority:    route.Priority,
-	//   Table:       route.Table,
-	// }
-	//
-	// return s.client.AddRoute(ciliumRoute)
-
-	// For now, just pretend we added it successfully
-	return nil
+	return s.client.AddRoute(route)
 }
 
 // removeRouteFromCilium removes a route from Cilium
 func (s *RouteSynchronizer) removeRouteFromCilium(route Route) error {
-	if client, ok := s.client.(routeRemover); ok {
-		return client.DeleteRoute(route)
-	}
-
-	// Log the route being removed
-	destStr := "unknown"
-	if route.Destination != nil {
-		destStr = route.Destination.String()
-	}
-	log.Printf("Removing route: %s", destStr)
-
-	// In a real implementation, this would use Cilium's API to remove a route
-	// For example, using the Cilium API client:
-	//
-	// ciliumRoute := &ciliumApi.Route{
-	//   Destination: route.Destination.String(),
-	//   Gateway:     route.Gateway.String(),
-	//   OutputIface: route.OutputIface,
-	//   Table:       route.Table,
-	// }
-	//
-	// return s.client.DeleteRoute(ciliumRoute)
-
-	// For now, just pretend we removed it successfully
-	return nil
+	return s.client.DeleteRoute(route)
 }
 
 // SyncRoutesForVRF synchronizes routes for a specific VRF
 func (s *RouteSynchronizer) SyncRoutesForVRF(ctx context.Context, vrfID int) error {
 	// Get routes for the specific VRF
-	vrfRoutes, err := s.getRoutesForVRF(vrfID)
+	vrfRoutes, err := s.getRoutesForVRF(ctx, vrfID)
 	if err != nil {
 		return fmt.Errorf("failed to get routes for VRF %d: %w", vrfID, err)
 	}
@@ -348,63 +316,13 @@ func (s *RouteSynchronizer) SyncRoutesForVRF(ctx context.Context, vrfID int) err
 }
 
 // getRoutesForVRF gets routes for a specific VRF
-func (s *RouteSynchronizer) getRoutesForVRF(vrfID int) ([]Route, error) {
-	// Log the VRF being queried
-	log.Printf("Querying routes for VRF %d", vrfID)
-
-	// In a real implementation, this would query the routing table for the specific VRF
-	// For example, using the Cilium API client:
-	//
-	// ciliumRoutes, err := s.client.GetVRFRoutes(vrfID)
-	// if err != nil {
-	//   return nil, fmt.Errorf("failed to get routes for VRF %d: %w", vrfID, err)
-	// }
-	//
-	// routes := make([]Route, 0, len(ciliumRoutes))
-	// for _, r := range ciliumRoutes {
-	//   _, destNet, _ := net.ParseCIDR(r.Destination)
-	//   routes = append(routes, Route{
-	//     Destination: destNet,
-	//     Gateway:     net.ParseIP(r.Gateway),
-	//     OutputIface: r.OutputIface,
-	//     Priority:    r.Priority,
-	//     Table:       r.Table,
-	//     Type:        "static",
-	//   })
-	// }
-	//
-	// return routes, nil
-
-	// For now, just return an empty list
-	return []Route{}, nil
+func (s *RouteSynchronizer) getRoutesForVRF(ctx context.Context, vrfID int) ([]Route, error) {
+	return s.client.ListVRFRoutes(ctx, vrfID)
 }
 
 // addVRFRouteToCilium adds a VRF route to Cilium
 func (s *RouteSynchronizer) addVRFRouteToCilium(route Route, vrfID int) error {
-	if client, ok := s.client.(vrfRouteAdder); ok {
-		return client.AddVRFRoute(route, vrfID)
-	}
-
-	// Log the VRF route being added
-	log.Printf("Adding route to VRF %d: %s via %s",
-		vrfID, route.Destination.String(), route.Gateway.String())
-
-	// In a real implementation, this would use Cilium's API to add a VRF route
-	// For example, using the Cilium API client:
-	//
-	// vrfRoute := &ciliumApi.VRFRoute{
-	//   VRF:         vrfID,
-	//   Destination: route.Destination.String(),
-	//   Gateway:     route.Gateway.String(),
-	//   OutputIface: route.OutputIface,
-	//   Priority:    route.Priority,
-	//   Table:       route.Table,
-	// }
-	//
-	// return s.client.AddVRFRoute(vrfRoute)
-
-	// For now, just pretend we added it successfully
-	return nil
+	return s.client.AddVRFRoute(route, vrfID)
 }
 
 // SyncRoute synchronizes a single route with Cilium
@@ -416,16 +334,11 @@ func (s *RouteSynchronizer) SyncRoute(ctx context.Context, routeSync *RouteSync)
 	case RouteSyncActionUpsert:
 		// If the route is provided directly, use it
 		if routeSync.Route.Destination != nil {
-			// Apply VRF-specific processing if needed
+			route := routeSync.Route
 			if routeSync.VRF != "" {
-				// Parse VRF ID from name
-				vrfID := 0 // Default to main table
-				// In a real implementation, this would look up the VRF ID from the name
-				return s.addVRFRouteToCilium(routeSync.Route, vrfID)
+				route.VRF = routeSync.VRF
 			}
-
-			// Otherwise, add to main routing table
-			return s.addRouteToCilium(routeSync.Route)
+			return s.addRouteToCilium(route)
 		}
 
 		// Otherwise, construct a route from the provided fields
@@ -442,17 +355,8 @@ func (s *RouteSynchronizer) SyncRoute(ctx context.Context, routeSync *RouteSync)
 				Priority:    routeSync.Metric,
 				Table:       routeSync.TableID,
 				Type:        "static",
+				VRF:         routeSync.VRF,
 			}
-
-			// Apply VRF-specific processing if needed
-			if routeSync.VRF != "" {
-				// Parse VRF ID from name
-				vrfID := 0 // Default to main table
-				// In a real implementation, this would look up the VRF ID from the name
-				return s.addVRFRouteToCilium(route, vrfID)
-			}
-
-			// Otherwise, add to main routing table
 			return s.addRouteToCilium(route)
 		}
 
@@ -469,7 +373,11 @@ func (s *RouteSynchronizer) SyncRoute(ctx context.Context, routeSync *RouteSync)
 
 		// If we have the destination CIDR, we can construct a partial route object
 		if routeSync.Route.Destination != nil {
-			return s.removeRouteFromCilium(routeSync.Route)
+			route := routeSync.Route
+			if routeSync.VRF != "" && route.VRF == "" {
+				route.VRF = routeSync.VRF
+			}
+			return s.removeRouteFromCilium(route)
 		} else if routeSync.Destination != "" {
 			_, destination, err := net.ParseCIDR(routeSync.Destination)
 			if err != nil {
@@ -481,16 +389,13 @@ func (s *RouteSynchronizer) SyncRoute(ctx context.Context, routeSync *RouteSync)
 				Gateway:     routeSync.Gateway,
 				OutputIface: routeSync.Interface,
 				Table:       routeSync.TableID,
+				VRF:         routeSync.VRF,
 			}
 
 			return s.removeRouteFromCilium(route)
 		}
 
-		// If we don't have route details, we need another way to identify the route
-		// This would typically be handled by a state store that maps CRD names to routes
-		// For now, just log and return success
-		log.Printf("Warning: No route details provided for deletion of %s", routeKey)
-		return nil
+		return fmt.Errorf("route deletion requires destination or full route details; namespace/name lookup for %s is not implemented", routeKey)
 
 	default:
 		return fmt.Errorf("unknown action: %s", routeSync.Action)

@@ -85,6 +85,9 @@ make build-<component>
 ### Running Tests
 
 ```bash
+# Run the required pre-merge/mainline verification checks
+make verify-mainline
+
 # Run all tests
 make test
 
@@ -107,7 +110,20 @@ make apply
 
 ### Code Quality
 
-Before submitting code, ensure it passes our quality checks:
+Before submitting code, run the required mainline verification gate:
+
+```bash
+make verify-mainline
+```
+
+This canonical target is the required pre-merge check and currently runs the verified mainline commands:
+
+```bash
+go test ./...
+go build ./...
+```
+
+After that passes, ensure it also passes the broader quality checks used during development:
 
 ```bash
 # Run linters
@@ -153,7 +169,7 @@ Documentation is written in Markdown and stored in the `docs/` directory. When m
 1. Create a new branch for your changes
 2. Make your changes following our coding standards
 3. Write or update tests to cover your changes
-4. Run the full test suite to ensure everything passes
+4. Run `make verify-mainline` as the required pre-merge verification step
 5. Submit a pull request with a clear description of the changes
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for more details on contributing to the project.

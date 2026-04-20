@@ -1,184 +1,102 @@
-# Observability Stack Architecture
+# Observability Architecture
 
-This document describes the observability stack architecture for the FOS1 project.
+This document separates verified repository behavior from broader observability goals. It is not a blanket claim that every referenced component is deployed or operational in a cluster.
 
-## Overview
+## Status Legend
 
-The observability stack consists of the following components:
+- **Implemented and verified in code**: behavior covered by controller logic and targeted tests in this repository
+- **Implemented in code, not yet verified end-to-end**: repository code exists, but this repository does not prove cluster deployment, scraping, or operator wiring
+- **Defined by manifests or architecture only**: intended deployment shape that still depends on downstream images, cluster wiring, or future implementation work
+- **External runtime dependency**: behavior owned by a container image, process, or cluster service outside the controller contract
 
-1. **Metrics Collection**: Prometheus for collecting and storing metrics
-2. **Metrics Visualization**: Grafana for visualizing metrics
-3. **Alerting**: Alertmanager for managing alerts
-4. **Logging**: Elasticsearch, Fluentd, and Kibana (EFK) for collecting, storing, and visualizing logs
+## Event Correlation Runtime Contract
 
-## Architecture Diagram
+### Implemented and verified in code
 
-```
-                                  ┌─────────────┐
-                                  │             │
-                                  │   Grafana   │
-                                  │             │
-                                  └──────┬──────┘
-                                         │
-                                         │
-                                         ▼
-┌─────────────┐                  ┌─────────────┐                  ┌─────────────┐
-│             │                  │             │                  │             │
-│ Alertmanager│◄─────────────────┤  Prometheus │◄─────────────────┤  Exporters  │
-│             │                  │             │                  │             │
-└─────────────┘                  └─────────────┘                  └─────────────┘
-                                         │
-                                         │
-                                         ▼
-                                  ┌─────────────┐
-                                  │             │
-                                  │  Alert Rules│
-                                  │             │
-                                  └─────────────┘
+The `EventCorrelation` controller in `pkg/security/ids/correlation/controller.go` owns a narrow Kubernetes runtime contract:
 
+- it reconciles a `ConfigMap` named `<name>-config`
+- it reconciles a single-replica `Deployment` named `<name>`
+- it reconciles a `Service` named `<name>` exposing the `api` port on TCP `8080`
+- it renders `spec.rules` into `rules.json` inside the managed `ConfigMap`
+- it passes `maxEventsInMemory`, `maxEventAge`, and `outputFormat` to the runtime command line
+- it sets status conditions based on owned resource reconciliation and Deployment readiness
 
-┌─────────────┐                  ┌─────────────┐                  ┌─────────────┐
-│             │                  │             │                  │             │
-│   Kibana    │◄─────────────────┤Elasticsearch│◄─────────────────┤   Fluentd   │
-│             │                  │             │                  │             │
-└─────────────┘                  └─────────────┘                  └─────────────┘
-                                                                         ▲
-                                                                         │
-                                                                         │
-                                                                  ┌─────────────┐
-                                                                  │             │
-                                                                  │  Log Sources │
-                                                                  │             │
-                                                                  └─────────────┘
-```
+The controller status contract is intentionally limited:
 
-## Components
+- `Phase=Disabled` only when `spec.enabled=false`
+- `ConfigMapReady=True` means the rules `ConfigMap` has been reconciled
+- `ServiceReady=True` means the Service has been reconciled
+- `DeploymentReady=True` only when the reconciled Deployment reports `status.readyReplicas > 0`
+- `Ready=True` and `Phase=Running` only when the Deployment reports ready replicas
+- `Phase=Pending` means the controller created or updated runtime resources, but the Deployment is not yet ready
 
-### Prometheus
+Focused tests under `pkg/security/ids/correlation/` verify the generated ConfigMap, Deployment, Service, and the Disabled -> Pending -> Running status transitions.
 
-Prometheus is responsible for collecting and storing metrics from various sources. It scrapes metrics from exporters and stores them in a time-series database.
+### External runtime dependencies
 
-- **Deployment**: Single-instance deployment
-- **Configuration**: ConfigMap with scrape configurations
-- **Storage**: EmptyDir volume (for development, PersistentVolume for production)
-- **Scrape Targets**: Kubernetes pods, nodes, services, and custom exporters
+The controller does **not** prove that event correlation is functionally processing events. That still depends on the runtime image and surrounding cluster plumbing:
 
-### Grafana
+- the image `fos1/event-correlator:latest` must exist and be pullable
+- `/usr/bin/event-correlator` must exist in that image
+- the binary must understand the generated `rules.json` format and command-line flags
+- the runtime must expose working `/health` and `/ready` HTTP endpoints on port `8080`
+- the runtime must have a real event ingestion path and output sink
 
-Grafana is used for visualizing metrics collected by Prometheus. It provides dashboards for various components of the system.
+Because those behaviors are downstream of the controller, a reconciled ConfigMap, Deployment, or Service is not treated as proof that events are being correlated. Only Deployment readiness advances controller status to `Running`.
 
-- **Deployment**: Single-instance deployment
-- **Configuration**: ConfigMap with datasource and dashboard configurations
-- **Storage**: EmptyDir volume (for development, PersistentVolume for production)
-- **Dashboards**: Network, Security, System, and Traffic dashboards
+## Other Repository-Owned Observability Surfaces
 
-### Alertmanager
+### Implemented in code, not yet verified end-to-end
 
-Alertmanager is responsible for handling alerts sent by Prometheus. It deduplicates, groups, and routes alerts to the appropriate receiver.
+The repository also contains observability-related code paths that should be treated as implemented building blocks rather than as a verified platform contract:
 
-- **Deployment**: Single-instance deployment
-- **Configuration**: ConfigMap with routing and receiver configurations
-- **Storage**: EmptyDir volume (for development, PersistentVolume for production)
-- **Receivers**: Email, Slack, and PagerDuty
+- `pkg/ntp/metrics/exporter.go` exposes an NTP Prometheus-style `/metrics` endpoint plus `/healthz`, but this document does not treat that as proof that Prometheus is scraping it in a cluster
+- `pkg/kubernetes/metrics_server.go` exposes DPI and Zeek Prometheus metrics plus simple probe endpoints, but the repository does not currently verify a default deployment path that publishes or scrapes those metrics
 
-### Elasticsearch
+These code paths matter because they are the concrete exporter/controller-side pieces the manifests are expected to consume later, but they should not be confused with an end-to-end validated observability stack.
 
-Elasticsearch is used for storing and indexing logs collected by Fluentd. It provides a scalable and searchable log storage solution.
+## Broader Observability Stack
 
-- **Deployment**: StatefulSet with a single replica (for development, multiple replicas for production)
-- **Configuration**: ConfigMap with Elasticsearch configuration
-- **Storage**: PersistentVolume for data
-- **Indices**: Daily indices with retention policies
+### Defined by manifests or architecture only
 
-### Fluentd
+The repository documents a broader observability direction around Prometheus, Grafana, Alertmanager, Elasticsearch, Fluentd, and Kibana. Those sections describe target architecture and deployment intent, not a uniformly verified runtime contract.
 
-Fluentd is responsible for collecting logs from various sources and forwarding them to Elasticsearch. It runs as a DaemonSet on each node.
+Concrete manifest/template surfaces currently in-tree include:
 
-- **Deployment**: DaemonSet
-- **Configuration**: ConfigMap with Fluentd configuration
-- **Sources**: Container logs, system logs, and application logs
-- **Filters**: Kubernetes metadata, parsing, and transformation
+- `manifests/base/monitoring/kustomization.yaml`, which assembles Prometheus, Grafana, Alertmanager, Elasticsearch, Fluentd, Kibana, and alert-rule manifests
+- `manifests/base/ntp/ntp-monitoring.yaml`, which defines a `ServiceMonitor`, `PrometheusRule`, and `GrafanaDashboard` for the NTP service
+- `manifests/dashboards/*.json`, which provides dashboard JSON intended for Grafana consumption
 
-### Kibana
+At a high level, the intended platform shape is still:
 
-Kibana is used for visualizing logs stored in Elasticsearch. It provides a web interface for searching and analyzing logs.
+- Prometheus for metrics collection
+- Grafana for dashboards
+- Alertmanager for alert routing
+- Elasticsearch plus Fluentd plus Kibana for log storage and search
 
-- **Deployment**: Single-instance deployment
-- **Configuration**: ConfigMap with Kibana configuration
-- **Storage**: None (stateless)
-- **Dashboards**: Network, Security, and System dashboards
+Those components may have manifests, examples, or design notes elsewhere in the tree, but this document should not be read as evidence that the repository currently validates their end-to-end operation.
 
-## Metrics Collection
+Typical missing runtime dependencies for these manifests include:
 
-The following metrics are collected by Prometheus:
+- the required operators or CRDs for `ServiceMonitor`, `PrometheusRule`, and `GrafanaDashboard`
+- container images and storage/runtime configuration for Prometheus, Grafana, Alertmanager, Elasticsearch, Fluentd, and Kibana
+- actual Service, scrape, and network-policy wiring between exporters and collectors
 
-1. **System Metrics**: CPU, memory, disk, and network usage
-2. **Network Metrics**: Traffic, errors, drops, and latency
-3. **Security Metrics**: Security events, firewall rule matches, and violations
-4. **Application Metrics**: HTTP requests, gRPC calls, and custom metrics
+## Operational Reading Guide
 
-## Log Collection
+When reading observability-related status in this repository:
 
-The following logs are collected by Fluentd:
+- trust controller conditions only for the resources that controller directly owns
+- treat exporter packages as code-level capabilities unless a deployment path and scrape path are separately verified
+- treat image behavior, probe semantics, and data-plane processing as external dependencies unless separately verified
+- treat architecture diagrams as target-state documentation unless a controller test or integration test proves the behavior
 
-1. **Container Logs**: Logs from all containers running in the cluster
-2. **System Logs**: Logs from the operating system
-3. **Application Logs**: Logs from applications running in the cluster
-4. **Network Logs**: Logs from network components (routing, firewall, etc.)
+## Next Implementation Dependencies
 
-## Alerting
+The following items remain outside the verified contract covered here and define the next implementation dependencies:
 
-Alerts are configured for the following conditions:
-
-1. **System Alerts**: High CPU, memory, disk usage, and load
-2. **Network Alerts**: High traffic, errors, drops, and latency
-3. **Security Alerts**: Security events, firewall rule violations, and DPI engine status
-4. **Application Alerts**: High error rates, latency, and service status
-
-## Dashboards
-
-The following dashboards are available in Grafana:
-
-1. **Network Dashboard**: Network traffic, errors, drops, and latency
-2. **Security Dashboard**: Security events, firewall rule matches, and violations
-3. **System Dashboard**: CPU, memory, disk, and network usage
-4. **Traffic Dashboard**: Traffic classes, bandwidth usage, and QoS metrics
-
-## Scaling
-
-The observability stack can be scaled in the following ways:
-
-1. **Prometheus**: Increase resources, use remote storage, or deploy Thanos
-2. **Elasticsearch**: Increase the number of replicas and shards
-3. **Fluentd**: Increase resources for the DaemonSet
-4. **Grafana**: Increase resources or deploy multiple instances behind a load balancer
-
-## Security
-
-The observability stack is secured in the following ways:
-
-1. **Authentication**: Basic authentication for Prometheus, Alertmanager, and Kibana
-2. **Authorization**: RBAC for Kubernetes resources
-3. **Network Security**: Network policies to restrict traffic
-4. **Data Security**: Encryption for data at rest and in transit
-
-## Backup and Recovery
-
-The following components require backup:
-
-1. **Prometheus**: Backup the data directory
-2. **Elasticsearch**: Backup the indices
-3. **Grafana**: Backup the database
-
-## Monitoring the Monitoring
-
-The observability stack itself is monitored using the following metrics:
-
-1. **Prometheus**: Scrape duration, sample count, and target status
-2. **Elasticsearch**: Cluster health, index stats, and node stats
-3. **Fluentd**: Buffer queue length, retry count, and error count
-4. **Grafana**: HTTP request count, response time, and error count
-
-## Conclusion
-
-The observability stack provides comprehensive monitoring, logging, and alerting for the FOS1 project. It enables operators to quickly identify and troubleshoot issues in the system.
+- end-to-end validation that the event correlator image consumes live security events
+- proof that correlated events are exported to a durable sink or observability backend
+- an owned deployment path that publishes the in-repo exporter endpoints and wires them to collectors
+- broader observability-stack verification for metrics, logging, alerting, and dashboards
