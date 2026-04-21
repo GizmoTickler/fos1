@@ -17,6 +17,32 @@ import (
 	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
+// netlinkBackend abstracts the subset of the netlink package used by Manager.
+// Tests inject a fake to avoid requiring real network interfaces or root.
+type netlinkBackend interface {
+	LinkByName(name string) (netlink.Link, error)
+	LinkSetUp(link netlink.Link) error
+	LinkSetDown(link netlink.Link) error
+	RouteList(link netlink.Link, family int) ([]netlink.Route, error)
+	RouteDel(route *netlink.Route) error
+	RouteAdd(route *netlink.Route) error
+}
+
+// defaultNetlinkBackend is the production implementation that delegates to the
+// real netlink package.
+type defaultNetlinkBackend struct{}
+
+func (defaultNetlinkBackend) LinkByName(name string) (netlink.Link, error) {
+	return netlink.LinkByName(name)
+}
+func (defaultNetlinkBackend) LinkSetUp(link netlink.Link) error    { return netlink.LinkSetUp(link) }
+func (defaultNetlinkBackend) LinkSetDown(link netlink.Link) error  { return netlink.LinkSetDown(link) }
+func (defaultNetlinkBackend) RouteList(link netlink.Link, family int) ([]netlink.Route, error) {
+	return netlink.RouteList(link, family)
+}
+func (defaultNetlinkBackend) RouteDel(route *netlink.Route) error { return netlink.RouteDel(route) }
+func (defaultNetlinkBackend) RouteAdd(route *netlink.Route) error { return netlink.RouteAdd(route) }
+
 // Manager implements the types.WANManager interface.
 type Manager struct {
 	wanInterfaces map[string]*wanInterface
@@ -24,6 +50,15 @@ type Manager struct {
 	activeWAN     string
 	monitorCtx    context.Context
 	monitorCancel context.CancelFunc
+
+	// netlink is the backend used for link/route operations. Tests replace
+	// it with a fake implementation to avoid kernel access.
+	netlink netlinkBackend
+
+	// connectivityChecker is the function used to probe WAN reachability.
+	// It defaults to the production ping-based implementation but tests can
+	// swap in a deterministic stub.
+	connectivityChecker func(ifName string, targets []string) (state string, latencyMs int, packetLoss float64, jitterMs int)
 }
 
 // wanInterface represents a WAN interface.
@@ -33,11 +68,14 @@ type wanInterface struct {
 	monitoring bool
 }
 
-// NewManager creates a new WAN Manager.
+// NewManager creates a new WAN Manager with the real netlink backend.
 func NewManager() (*Manager, error) {
-	return &Manager{
+	m := &Manager{
 		wanInterfaces: make(map[string]*wanInterface),
-	}, nil
+		netlink:       defaultNetlinkBackend{},
+	}
+	m.connectivityChecker = m.defaultCheckConnectivity
+	return m, nil
 }
 
 // Initialize initializes the WAN Manager.
@@ -59,7 +97,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 // AddWANInterface adds a new WAN interface.
 func (m *Manager) AddWANInterface(config types.WANInterfaceConfig) error {
 	// Validate interface exists
-	if _, err := netlink.LinkByName(config.Name); err != nil {
+	if _, err := m.netlink.LinkByName(config.Name); err != nil {
 		return fmt.Errorf("interface %s not found: %w", config.Name, err)
 	}
 
@@ -262,19 +300,19 @@ func (m *Manager) SetWANInterfaceState(name string, up bool) error {
 	}
 
 	// Get the link
-	link, err := netlink.LinkByName(name)
+	link, err := m.netlink.LinkByName(name)
 	if err != nil {
 		return fmt.Errorf("failed to get link %s: %w", name, err)
 	}
 
 	// Set the link state
 	if up {
-		if err := netlink.LinkSetUp(link); err != nil {
+		if err := m.netlink.LinkSetUp(link); err != nil {
 			return fmt.Errorf("failed to set link %s up: %w", name, err)
 		}
 		wan.status.State = "up"
 	} else {
-		if err := netlink.LinkSetDown(link); err != nil {
+		if err := m.netlink.LinkSetDown(link); err != nil {
 			return fmt.Errorf("failed to set link %s down: %w", name, err)
 		}
 		wan.status.State = "down"
@@ -327,7 +365,7 @@ func (m *Manager) monitorWANInterface(ctx context.Context, wan *wanInterface) {
 			return
 		case <-ticker.C:
 			// Check connectivity
-			state, latency, packetLoss, jitter := m.checkConnectivity(wan.config.Name, targets)
+			state, latency, packetLoss, jitter := m.connectivityChecker(wan.config.Name, targets)
 
 			m.wanMu.Lock()
 			// Update status
@@ -359,8 +397,9 @@ func (m *Manager) monitorWANInterface(ctx context.Context, wan *wanInterface) {
 	}
 }
 
-// checkConnectivity checks the connectivity of a WAN interface.
-func (m *Manager) checkConnectivity(ifName string, targets []string) (string, int, float64, int) {
+// defaultCheckConnectivity checks the connectivity of a WAN interface using
+// ping(8). Production uses this path; tests override connectivityChecker.
+func (m *Manager) defaultCheckConnectivity(ifName string, targets []string) (string, int, float64, int) {
 	var totalLatency int
 	var totalJitter int
 	var successCount int
@@ -464,7 +503,7 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 	}
 
 	// Get the link
-	link, err := netlink.LinkByName(name)
+	link, err := m.netlink.LinkByName(name)
 	if err != nil {
 		return fmt.Errorf("failed to get link %s: %w", name, err)
 	}
@@ -474,7 +513,7 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 
 	// If gateway is not specified, try to find it from interface routes
 	if gateway == "" {
-		routes, err := netlink.RouteList(link, unix.AF_INET)
+		routes, err := m.netlink.RouteList(link, unix.AF_INET)
 		if err != nil {
 			return fmt.Errorf("failed to list routes: %w", err)
 		}
@@ -492,14 +531,15 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 	}
 
 	// Delete existing default route
-	existingRoutes, err := netlink.RouteList(nil, unix.AF_INET)
+	existingRoutes, err := m.netlink.RouteList(nil, unix.AF_INET)
 	if err != nil {
 		return fmt.Errorf("failed to list routes: %w", err)
 	}
 
 	for _, route := range existingRoutes {
 		if route.Dst == nil || route.Dst.IP.Equal(net.IPv4zero) {
-			if err := netlink.RouteDel(&route); err != nil {
+			routeCopy := route
+			if err := m.netlink.RouteDel(&routeCopy); err != nil {
 				return fmt.Errorf("failed to delete default route: %w", err)
 			}
 		}
@@ -515,7 +555,7 @@ func (m *Manager) setupActiveWANRouting(name string) error {
 		Gw:        gatewayIP,
 	}
 
-	if err := netlink.RouteAdd(&route); err != nil {
+	if err := m.netlink.RouteAdd(&route); err != nil {
 		return fmt.Errorf("failed to add default route: %w", err)
 	}
 
@@ -533,7 +573,7 @@ func (m *Manager) GetWANStatistics(name string) (*types.WANStatistics, error) {
 	}
 
 	// Get link statistics
-	link, err := netlink.LinkByName(name)
+	link, err := m.netlink.LinkByName(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get link %s: %w", name, err)
 	}
@@ -575,7 +615,7 @@ func (m *Manager) TestWANConnectivity(name string) (*types.WANConnectivityResult
 	m.wanMu.RUnlock()
 
 	// Test connectivity
-	state, latency, packetLoss, _ := m.checkConnectivity(name, targets)
+	state, latency, packetLoss, _ := m.connectivityChecker(name, targets)
 
 	// Create result
 	result := &types.WANConnectivityResult{
