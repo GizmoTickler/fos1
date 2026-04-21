@@ -10,44 +10,53 @@ import (
 )
 
 // Manager provides a non-linux stub implementation.
+//
+// All public methods return ErrNICUnsupportedPlatform wrapped with enough
+// context for logs so the caller can tell at a glance the platform is the
+// limiting factor rather than a driver / netlink failure.
 type Manager struct{}
 
-// NewManager creates a new NIC Manager.
+// NewManager creates a new NIC Manager stub. It does not return an error so
+// that cross-platform tests can construct the manager without special-casing
+// each OS; every method that actually needs ethtool / netlink returns an
+// explicit unsupported error.
 func NewManager() (*Manager, error) {
 	return &Manager{}, nil
 }
 
-// Initialize initializes the NIC Manager.
+// Initialize is a no-op stub.
 func (m *Manager) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown shuts down the NIC Manager.
+// Shutdown is a no-op stub.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// GetNICInfo gets information about a network interface.
+// GetNICInfo returns ErrNICUnsupportedPlatform.
 func (m *Manager) GetNICInfo(name string) (*types.NICInfo, error) {
-	return nil, fmt.Errorf("NIC management is only supported on linux")
+	return nil, fmt.Errorf("get NIC info for %s: %w", name, ErrNICUnsupportedPlatform)
 }
 
-// ListNICs lists all network interfaces.
+// ListNICs returns ErrNICUnsupportedPlatform. Previous behaviour returned an
+// empty slice with nil error which silently hid the fact that no real backend
+// is available on this platform.
 func (m *Manager) ListNICs() ([]string, error) {
-	return []string{}, nil
+	return nil, fmt.Errorf("list NICs: %w", ErrNICUnsupportedPlatform)
 }
 
-// SetLinkState sets the state of a network interface.
+// SetLinkState returns ErrNICUnsupportedPlatform.
 func (m *Manager) SetLinkState(name string, up bool) error {
-	return fmt.Errorf("NIC management is only supported on linux")
+	return fmt.Errorf("set link state for %s: %w", name, ErrNICUnsupportedPlatform)
 }
 
-// SetMTU sets the MTU of a network interface.
+// SetMTU returns ErrNICUnsupportedPlatform.
 func (m *Manager) SetMTU(name string, mtu int) error {
-	return fmt.Errorf("NIC management is only supported on linux")
+	return fmt.Errorf("set MTU for %s: %w", name, ErrNICUnsupportedPlatform)
 }
 
-// GetStatistics gets statistics for a network interface.
+// GetStatistics returns ErrNICUnsupportedPlatform.
 func (m *Manager) GetStatistics(name string) (*types.NICStatistics, error) {
-	return nil, fmt.Errorf("NIC management is only supported on linux")
+	return nil, fmt.Errorf("get statistics for %s: %w", name, ErrNICUnsupportedPlatform)
 }
