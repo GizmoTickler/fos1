@@ -488,6 +488,9 @@ Current verified status:
   - Implemented token-based authentication with refresh tokens
   - Created audit logging for authentication events
   - Integrated with VPN services for secure access
+  - **Scope update (Sprint 29 Ticket 34, 2026-04-21):** SAML, RADIUS, and
+    certificate auth stubs were removed. These provider types are non-goals;
+    the auth surface is scoped to local/LDAP/OAuth.
 
 - Implemented IDS/IPS system with Suricata and Zeek
   - Created Kubernetes CRDs for Suricata, Zeek, and Event Correlation

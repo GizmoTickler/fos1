@@ -94,7 +94,7 @@ Verified on 2026-04-18:
 |-----------|--------|-------|
 | **nftables Firewall** | Stub | Interface definitions only, no rule generation |
 | **Policy Enforcement** | Stub | Type definitions without actual enforcement |
-| **SAML/RADIUS/Certificate Auth** | Stubs only |
+| **SAML/RADIUS/Certificate Auth** | Removed (non-goal) | Stubs removed 2026-04-21 per Sprint 29 Ticket 34; auth is scoped to local/LDAP/OAuth |
 | **Threat Intelligence** | Framework defined but no data sources |
 
 ---
@@ -381,19 +381,23 @@ All CRD definitions are **complete and well-structured**:
 
 **Impact:** High-performance packet processing unavailable
 
-### 4. Authentication Providers ⚠️ Partially Complete
+### 4. Authentication Providers ✅ Complete (Scoped)
 
 **Integrated:**
 - Local file-based auth with password hashing
 - LDAP provider wired to real construction and authentication
 - OAuth provider wired to real construction and authentication
 
-**Remaining:**
-- SAML provider stub only
-- RADIUS provider stub only
-- Certificate auth stub only
+**Non-goals (removed 2026-04-21 per Sprint 29 Ticket 34):**
+- SAML provider — removed; no skeleton existed
+- RADIUS provider — removed; no skeleton existed
+- Certificate auth provider — removed; no skeleton existed
 
-**Impact:** Core auth providers (local, LDAP, OAuth) are functional; enterprise SAML/RADIUS still needed
+If SAML or RADIUS is later wanted, it can be reintroduced through the
+established LDAP/OAuth 3-layer pattern (`pkg/security/auth/providers/*`
++ factory registration + CRD config type).
+
+**Impact:** Core auth providers (local, LDAP, OAuth) are functional; SAML/RADIUS/cert are out of scope for this repo.
 
 ### 5. Firewall & Policy Enforcement ❌
 
@@ -447,7 +451,6 @@ All CRD definitions are **complete and well-structured**:
 ### ⚠️ Partially Works (Needs completion)
 
 1. **NTP Controller** - Config generation works, real Chrony integration in progress
-2. **SAML/RADIUS Auth** - Stubs only
 
 ### ❌ Doesn't Work (Major implementation needed)
 
@@ -477,7 +480,7 @@ All CRD definitions are **complete and well-structured**:
 | DHCP Services | ✅ Detailed | ✅ Complete | Real Kea control socket |
 | NTP Services | ✅ Detailed | ✅ Complete | Minor - config only |
 | WireGuard VPN | ✅ Detailed | ✅ Complete | Real CRD-to-interface reconciliation |
-| Authentication | ✅ Detailed | ✅ Mostly Complete | Local, LDAP, OAuth wired; SAML/RADIUS stubs |
+| Authentication | ✅ Detailed | ✅ Complete (scoped) | Local, LDAP, OAuth wired; SAML/RADIUS/cert removed as non-goals (2026-04-21) |
 | Certificates | ✅ Detailed | ✅ Complete | None |
 | QoS/Traffic Shaping | ✅ Detailed | ❌ Stub | No TC integration |
 | Hardware Offload | ✅ Detailed | ⚠️ Partial | No driver integration |
@@ -493,7 +496,7 @@ All CRD definitions are **complete and well-structured**:
 1. **Partial Kernel Integration** - Direct interface manipulation still missing; routing/NAT work via FRR+Cilium
 2. ~~No Daemon Control~~ - **Resolved:** FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard all integrated
 3. **Moderate Test Coverage** - ~30-35% coverage, needs improvement
-4. ~~Incomplete Auth~~ - **Resolved:** Local, LDAP, OAuth providers wired (SAML/RADIUS still stubs)
+4. ~~Incomplete Auth~~ - **Resolved:** Local, LDAP, OAuth providers wired; SAML/RADIUS/cert removed as non-goals (Sprint 29 Ticket 34, 2026-04-21)
 5. **No Firewall** - Cannot enforce nftables-based security policies
 6. **No eBPF Loading** - Cannot deploy high-performance packet processing
 7. **No API Server** - Limited external management
@@ -646,9 +649,9 @@ All CRD definitions are **complete and well-structured**:
 ### Short-term (3-6 months)
 
 4. **Complete Authentication Providers**
-   - LDAP integration
-   - OAuth2/OIDC integration
-   - SAML support
+   - LDAP integration (done)
+   - OAuth2/OIDC integration (done)
+   - SAML / RADIUS / cert are non-goals (removed 2026-04-21 per Sprint 29 Ticket 34)
 
 5. **eBPF Implementation**
    - BPF program compilation

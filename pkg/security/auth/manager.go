@@ -559,14 +559,8 @@ func (m *AuthManager) AddProvider(provider *ProviderInfo) error {
 		newProvider, err = NewLDAPProvider(provider)
 	case "oauth":
 		newProvider, err = NewOAuthProvider(provider)
-	case "saml":
-		newProvider, err = NewSAMLProvider(provider)
-	case "radius":
-		newProvider, err = NewRADIUSProvider(provider)
-	case "certificate":
-		newProvider, err = NewCertificateProvider(provider)
 	default:
-		return fmt.Errorf("unsupported provider type: %s", provider.Type)
+		return fmt.Errorf("unsupported auth provider type %q: supported types are local, ldap, oauth", provider.Type)
 	}
 
 	if err != nil {
@@ -783,22 +777,4 @@ func NewOAuthProvider(info *ProviderInfo) (Provider, error) {
 	}
 	info.Type = "oauth"
 	return constructor(info)
-}
-
-// NewSAMLProvider creates a new SAML authentication provider.
-// SAML provider support is not yet available.
-func NewSAMLProvider(info *ProviderInfo) (Provider, error) {
-	return nil, fmt.Errorf("SAML provider is not yet supported: no implementation available")
-}
-
-// NewRADIUSProvider creates a new RADIUS authentication provider.
-// RADIUS provider support is not yet available.
-func NewRADIUSProvider(info *ProviderInfo) (Provider, error) {
-	return nil, fmt.Errorf("RADIUS provider is not yet supported: no implementation available")
-}
-
-// NewCertificateProvider creates a new certificate authentication provider.
-// Certificate provider support is not yet available.
-func NewCertificateProvider(info *ProviderInfo) (Provider, error) {
-	return nil, fmt.Errorf("certificate provider is not yet supported: no implementation available")
 }

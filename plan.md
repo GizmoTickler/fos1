@@ -1185,31 +1185,17 @@ This document provides a **comprehensive implementation roadmap** to transform t
 
 ---
 
-### 7.3 SAML Provider
+### 7.3 SAML / RADIUS / Certificate Provider (Non-Goals)
 
-**Implementation Tasks:**
-- [ ] Implement SAML SP
-- [ ] Add SAML assertion validation
-- [ ] Implement SSO flow
-- [ ] Add IdP metadata parsing
-- [ ] Implement SLO (Single Logout)
+**Decision:** Removed 2026-04-21 per Sprint 29 Ticket 34.
 
-**Files to Create:**
-- `pkg/security/auth/providers/saml.go` - Full implementation
+Rationale: no skeleton code shipped, no example manifests shipped, and the
+stubs only returned "not supported" errors. The repo is intentionally scoped
+to local/LDAP/OAuth. If SAML or RADIUS is later needed, it should be
+reintroduced through the established LDAP/OAuth 3-layer pattern
+(`pkg/security/auth/providers/*` + factory registration + CRD config type).
 
-**Testing:**
-- [ ] SAML SSO flow
-- [ ] Assertion validation
-- [ ] Multiple IdP tests
-- [ ] SLO tests
-
-**Success Criteria:**
-- SAML SSO working
-- Assertions validated
-
-**Estimated Effort:** 2 weeks
-
-**Total Phase 7:** 8 weeks
+**Total Phase 7:** 6 weeks (reduced from 8 after SAML non-goal)
 
 ---
 
@@ -1662,7 +1648,7 @@ Each phase must meet these criteria before proceeding:
 | 4: eBPF | 12 weeks | Compilation, XDP, TC programs |
 | 5: IDS/DPI | 12 weeks | Suricata, Zeek, DPI integration |
 | 6: Services | 12 weeks | DHCP, DNS, mDNS, NTP |
-| 7: Authentication | 8 weeks | LDAP, OAuth, SAML |
+| 7: Authentication | 6 weeks | LDAP, OAuth (SAML/RADIUS/cert are non-goals) |
 | 8: Hardware | 8 weeks | NIC integration, capture, optimization |
 | 9: API | 4 weeks | REST/gRPC APIs |
 | 10: Production | 12 weeks | HA, security, monitoring |

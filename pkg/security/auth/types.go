@@ -342,15 +342,6 @@ type ProviderConfig struct {
 
 	// OAuth is the configuration for OAuth authentication
 	OAuth *OAuthConfig
-
-	// SAML is the configuration for SAML authentication
-	SAML *SAMLConfig
-
-	// RADIUS is the configuration for RADIUS authentication
-	RADIUS *RADIUSConfig
-
-	// Certificate is the configuration for certificate authentication
-	Certificate *CertificateConfig
 }
 
 // LocalConfig defines the configuration for local authentication
@@ -459,75 +450,6 @@ type OAuthConfig struct {
 
 	// UserAttributes are the attributes to retrieve for users
 	UserAttributes map[string]string
-}
-
-// SAMLConfig defines the configuration for SAML authentication
-type SAMLConfig struct {
-	// MetadataURL is the URL of the SAML metadata
-	MetadataURL string
-
-	// EntityID is the entity ID
-	EntityID string
-
-	// AssertionConsumerServiceURL is the assertion consumer service URL
-	AssertionConsumerServiceURL string
-
-	// SignAuthnRequests indicates whether to sign authentication requests
-	SignAuthnRequests bool
-
-	// SigningCert is the signing certificate
-	SigningCert string
-
-	// SigningKey is the signing key
-	SigningKey string
-
-	// EncryptionCert is the encryption certificate
-	EncryptionCert string
-
-	// EncryptionKey is the encryption key
-	EncryptionKey string
-
-	// UserIDAttribute is the attribute for user IDs
-	UserIDAttribute string
-
-	// UserAttributes are the attributes to retrieve for users
-	UserAttributes map[string]string
-}
-
-// RADIUSConfig defines the configuration for RADIUS authentication
-type RADIUSConfig struct {
-	// Server is the RADIUS server
-	Server string
-
-	// Port is the RADIUS port
-	Port int
-
-	// Secret is the RADIUS secret
-	Secret string
-
-	// Timeout is the timeout in seconds
-	Timeout int
-
-	// Retries is the number of retries
-	Retries int
-
-	// NASIdentifier is the NAS identifier
-	NASIdentifier string
-}
-
-// CertificateConfig defines the configuration for certificate authentication
-type CertificateConfig struct {
-	// CACert is the CA certificate
-	CACert string
-
-	// UserCertAttribute is the attribute for user certificates
-	UserCertAttribute string
-
-	// UserIDAttribute is the attribute for user IDs
-	UserIDAttribute string
-
-	// VerifyClient indicates whether to verify the client
-	VerifyClient bool
 }
 
 // Provider defines the interface for authentication providers
