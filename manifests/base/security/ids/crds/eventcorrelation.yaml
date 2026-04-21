@@ -23,12 +23,50 @@ spec:
             spec:
               type: object
               required:
+                - source
+                - sink
                 - rules
               properties:
                 enabled:
                   type: boolean
                   description: "Whether event correlation is enabled"
                   default: true
+                source:
+                  type: object
+                  description: "Repository-owned event source contract"
+                  required:
+                    - type
+                  properties:
+                    type:
+                      type: string
+                      description: "Source implementation"
+                      enum: ["file"]
+                    path:
+                      type: string
+                      description: "Path to a JSON-line event file"
+                    format:
+                      type: string
+                      description: "Input event encoding"
+                      enum: ["jsonl"]
+                      default: "jsonl"
+                sink:
+                  type: object
+                  description: "Repository-owned event sink contract"
+                  required:
+                    - type
+                  properties:
+                    type:
+                      type: string
+                      description: "Sink implementation"
+                      enum: ["file", "stdout"]
+                    path:
+                      type: string
+                      description: "Path for file-based correlated event output"
+                    format:
+                      type: string
+                      description: "Output event encoding"
+                      enum: ["json"]
+                      default: "json"
                 rules:
                   type: array
                   description: "Correlation rules"
@@ -92,11 +130,6 @@ spec:
                   type: string
                   description: "Maximum age of events to keep in memory (e.g., 1h, 1d)"
                   default: "1h"
-                outputFormat:
-                  type: string
-                  description: "Format for correlated events"
-                  enum: ["json", "cef", "leef"]
-                  default: "json"
                 resources:
                   type: object
                   description: "Resource requirements"
@@ -130,7 +163,7 @@ spec:
                 phase:
                   type: string
                   description: "Current phase of the instance"
-                  enum: ["Pending", "Running", "Failed"]
+                  enum: ["Pending", "Running", "Failed", "Disabled"]
                 conditions:
                   type: array
                   description: "Current conditions of the instance"

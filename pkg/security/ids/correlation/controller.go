@@ -2,6 +2,7 @@ package correlation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -130,7 +131,7 @@ func (r *EventCorrelationController) reconcileConfigMap(ctx context.Context, ins
 			Namespace: instance.Namespace,
 		},
 		Data: map[string]string{
-			"rules.json": rulesConfig,
+			"config.json": rulesConfig,
 		},
 	}
 
@@ -178,6 +179,38 @@ func (r *EventCorrelationController) reconcileDeployment(ctx context.Context, in
 	}
 
 	// Create Deployment object
+	outputFormat := instance.Spec.Sink.Format
+	if outputFormat == "" {
+		outputFormat = "json"
+	}
+
+	runtimePlan, err := buildRuntimeFileMountPlan(instance.Spec.Source, instance.Spec.Sink)
+	if err != nil {
+		return nil, err
+	}
+
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "config",
+			MountPath: "/etc/correlator",
+		},
+	}
+	volumeMounts = append(volumeMounts, runtimePlan.mounts...)
+
+	volumes := []corev1.Volume{
+		{
+			Name: "config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: configMap.Name,
+					},
+				},
+			},
+		},
+	}
+	volumes = append(volumes, runtimePlan.volumes...)
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name,
@@ -204,22 +237,13 @@ func (r *EventCorrelationController) reconcileDeployment(ctx context.Context, in
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command: []string{
 								"/usr/bin/event-correlator",
-								"--config", "/etc/correlator/rules.json",
+								"--config", "/etc/correlator/config.json",
 								"--max-events", fmt.Sprintf("%d", instance.Spec.MaxEventsInMemory),
 								"--max-age", instance.Spec.MaxEventAge,
-								"--output-format", instance.Spec.OutputFormat,
+								"--output-format", outputFormat,
 							},
-							Resources: resources,
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "config",
-									MountPath: "/etc/correlator",
-								},
-								{
-									Name:      "logs",
-									MountPath: "/var/log/correlator",
-								},
-							},
+							Resources:    resources,
+							VolumeMounts: volumeMounts,
 							Ports: []corev1.ContainerPort{
 								{
 									Name:          "api",
@@ -249,24 +273,7 @@ func (r *EventCorrelationController) reconcileDeployment(ctx context.Context, in
 							},
 						},
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "config",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: configMap.Name,
-									},
-								},
-							},
-						},
-						{
-							Name: "logs",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-					},
+					Volumes:      volumes,
 					NodeSelector: instance.Spec.NodeSelector,
 				},
 			},
@@ -280,7 +287,7 @@ func (r *EventCorrelationController) reconcileDeployment(ctx context.Context, in
 
 	// Check if Deployment exists
 	found := &appsv1.Deployment{}
-	err := r.Get(ctx, types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}, found)
+	err = r.Get(ctx, types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
 		// Create Deployment
 		log.Info("Creating Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
@@ -296,11 +303,15 @@ func (r *EventCorrelationController) reconcileDeployment(ctx context.Context, in
 	// Update Deployment if needed
 	if !reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].Image, deployment.Spec.Template.Spec.Containers[0].Image) ||
 		!reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].Command, deployment.Spec.Template.Spec.Containers[0].Command) ||
+		!reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].VolumeMounts, deployment.Spec.Template.Spec.Containers[0].VolumeMounts) ||
 		!reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].Resources, deployment.Spec.Template.Spec.Containers[0].Resources) ||
+		!reflect.DeepEqual(found.Spec.Template.Spec.Volumes, deployment.Spec.Template.Spec.Volumes) ||
 		!reflect.DeepEqual(found.Spec.Template.Spec.NodeSelector, deployment.Spec.Template.Spec.NodeSelector) {
 		found.Spec.Template.Spec.Containers[0].Image = deployment.Spec.Template.Spec.Containers[0].Image
 		found.Spec.Template.Spec.Containers[0].Command = deployment.Spec.Template.Spec.Containers[0].Command
+		found.Spec.Template.Spec.Containers[0].VolumeMounts = deployment.Spec.Template.Spec.Containers[0].VolumeMounts
 		found.Spec.Template.Spec.Containers[0].Resources = deployment.Spec.Template.Spec.Containers[0].Resources
+		found.Spec.Template.Spec.Volumes = deployment.Spec.Template.Spec.Volumes
 		found.Spec.Template.Spec.NodeSelector = deployment.Spec.Template.Spec.NodeSelector
 		log.Info("Updating Deployment", "Deployment.Namespace", found.Namespace, "Deployment.Name", found.Name)
 		err = r.Update(ctx, found)
@@ -398,50 +409,34 @@ func (r *EventCorrelationController) updateStatusCondition(ctx context.Context, 
 
 // generateRulesConfig generates the correlation rules configuration
 func generateRulesConfig(instance *securityv1alpha1.EventCorrelation) (string, error) {
-	// This is a simplified version, in a real implementation you would generate a complete JSON configuration
-	config := `{
-  "rules": [`
-
-	// Add rules
-	for i, rule := range instance.Spec.Rules {
-		if i > 0 {
-			config += ","
-		}
-		config += fmt.Sprintf(`
-    {
-      "name": "%s",
-      "description": "%s",
-      "threshold": %d,
-      "timeWindow": "%s",
-      "severity": "%s",
-      "action": "%s",
-      "conditions": [`,
-			rule.Name, rule.Description, rule.Threshold, rule.TimeWindow, rule.Severity, rule.Action)
-
-		// Add conditions
-		for j, condition := range rule.Conditions {
-			if j > 0 {
-				config += ","
-			}
-			config += fmt.Sprintf(`
-        {
-          "field": "%s",
-          "operator": "%s",
-          "value": "%s"
-        }`,
-				condition.Field, condition.Operator, condition.Value)
-		}
-
-		config += `
-      ]
-    }`
+	config := eventCorrelatorConfig{
+		Source: instance.Spec.Source,
+		Sink:   instance.Spec.Sink,
+		Runtime: eventCorrelatorRuntimeConfig{
+			MaxEventsInMemory: instance.Spec.MaxEventsInMemory,
+			MaxEventAge:       instance.Spec.MaxEventAge,
+		},
+		Rules: instance.Spec.Rules,
 	}
 
-	config += `
-  ]
-}`
+	payload, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", err
+	}
 
-	return config, nil
+	return string(payload), nil
+}
+
+type eventCorrelatorConfig struct {
+	Source  securityv1alpha1.EventSource       `json:"source"`
+	Sink    securityv1alpha1.EventSink         `json:"sink"`
+	Runtime eventCorrelatorRuntimeConfig       `json:"runtime"`
+	Rules   []securityv1alpha1.CorrelationRule `json:"rules"`
+}
+
+type eventCorrelatorRuntimeConfig struct {
+	MaxEventsInMemory int    `json:"maxEventsInMemory,omitempty"`
+	MaxEventAge       string `json:"maxEventAge,omitempty"`
 }
 
 // SetupWithManager sets up the controller with the Manager

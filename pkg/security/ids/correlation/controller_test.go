@@ -2,6 +2,7 @@ package correlation
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -64,8 +65,15 @@ func TestReconcileCreatesRuntimeResourcesAndPendingStatusUntilDeploymentIsReady(
 		Name:      correlation.Name + "-config",
 		Namespace: correlation.Namespace,
 	}, configMap))
-	assert.Contains(t, configMap.Data["rules.json"], `"name": "ssh-brute-force"`)
-	assert.Contains(t, configMap.Data["rules.json"], `"operator": "contains"`)
+	config := decodeCorrelatorConfig(t, configMap.Data["config.json"])
+	assert.Equal(t, correlation.Spec.Source, config.Source)
+	assert.Equal(t, correlation.Spec.Sink, config.Sink)
+	assert.Equal(t, correlation.Spec.MaxEventsInMemory, config.Runtime.MaxEventsInMemory)
+	assert.Equal(t, correlation.Spec.MaxEventAge, config.Runtime.MaxEventAge)
+	require.Len(t, config.Rules, 1)
+	assert.Equal(t, "ssh-brute-force", config.Rules[0].Name)
+	require.Len(t, config.Rules[0].Conditions, 1)
+	assert.Equal(t, "contains", config.Rules[0].Conditions[0].Operator)
 
 	deployment := &appsv1.Deployment{}
 	require.NoError(t, kubeClient.Get(context.Background(), types.NamespacedName{
@@ -77,7 +85,7 @@ func TestReconcileCreatesRuntimeResourcesAndPendingStatusUntilDeploymentIsReady(
 	assert.Equal(t, "fos1/event-correlator:latest", container.Image)
 	assert.Equal(t, []string{
 		"/usr/bin/event-correlator",
-		"--config", "/etc/correlator/rules.json",
+		"--config", "/etc/correlator/config.json",
 		"--max-events", "100000",
 		"--max-age", "1h",
 		"--output-format", "json",
@@ -133,6 +141,127 @@ func TestReconcileTransitionsToRunningWhenDeploymentReportsReadyReplicas(t *test
 	assertCondition(t, stored.Status.Conditions, "Ready", "True", "Running")
 }
 
+func TestReconcileAddsSourceHostPathMountForStdoutSink(t *testing.T) {
+	t.Parallel()
+
+	correlation := newTestEventCorrelation(true)
+	controller, kubeClient := newTestController(t, correlation)
+
+	_, err := controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: correlation.Name, Namespace: correlation.Namespace},
+	})
+	require.NoError(t, err)
+
+	deployment := &appsv1.Deployment{}
+	require.NoError(t, kubeClient.Get(context.Background(), types.NamespacedName{
+		Name:      correlation.Name,
+		Namespace: correlation.Namespace,
+	}, deployment))
+
+	container := deployment.Spec.Template.Spec.Containers[0]
+	assert.Contains(t, container.VolumeMounts, corev1.VolumeMount{
+		Name:      "runtime-source-0",
+		MountPath: "/var/run/fos1/events",
+		ReadOnly:  true,
+	})
+	require.Len(t, deployment.Spec.Template.Spec.Volumes, 2)
+	assert.Equal(t, "/var/run/fos1/events", deployment.Spec.Template.Spec.Volumes[1].HostPath.Path)
+}
+
+func TestReconcileAddsWritableSinkMountForFileSink(t *testing.T) {
+	t.Parallel()
+
+	correlation := newTestEventCorrelation(true)
+	correlation.Spec.Sink = securityv1alpha1.EventSink{
+		Type:   "file",
+		Path:   "/var/log/correlator/correlated-events.json",
+		Format: "json",
+	}
+	controller, kubeClient := newTestController(t, correlation)
+
+	_, err := controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: correlation.Name, Namespace: correlation.Namespace},
+	})
+	require.NoError(t, err)
+
+	deployment := &appsv1.Deployment{}
+	require.NoError(t, kubeClient.Get(context.Background(), types.NamespacedName{
+		Name:      correlation.Name,
+		Namespace: correlation.Namespace,
+	}, deployment))
+
+	container := deployment.Spec.Template.Spec.Containers[0]
+	assert.Contains(t, container.VolumeMounts, corev1.VolumeMount{
+		Name:      "runtime-sink-1",
+		MountPath: "/var/log/correlator",
+		ReadOnly:  false,
+	})
+	require.Len(t, deployment.Spec.Template.Spec.Volumes, 3)
+	assert.Equal(t, "/var/log/correlator", deployment.Spec.Template.Spec.Volumes[2].HostPath.Path)
+}
+
+func TestReconcileRejectsPathsOutsideApprovedPrefixes(t *testing.T) {
+	t.Parallel()
+
+	correlation := newTestEventCorrelation(true)
+	correlation.Spec.Source.Path = "/tmp/security-events.jsonl"
+	controller, _ := newTestController(t, correlation)
+
+	_, err := controller.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: correlation.Name, Namespace: correlation.Namespace},
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `source.path "/tmp/security-events.jsonl"`)
+}
+
+func TestReconcileUpdatesDeploymentWhenSinkContractChanges(t *testing.T) {
+	t.Parallel()
+
+	correlation := newTestEventCorrelation(true)
+	controller, kubeClient := newTestController(t, correlation)
+	request := ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: correlation.Name, Namespace: correlation.Namespace},
+	}
+
+	_, err := controller.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+
+	stored := &securityv1alpha1.EventCorrelation{}
+	require.NoError(t, kubeClient.Get(context.Background(), client.ObjectKeyFromObject(correlation), stored))
+	stored.Spec.Sink = securityv1alpha1.EventSink{
+		Type:   "file",
+		Path:   "/var/log/correlator/correlated-events.json",
+		Format: "json",
+	}
+	require.NoError(t, kubeClient.Update(context.Background(), stored))
+
+	_, err = controller.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+
+	deployment := &appsv1.Deployment{}
+	require.NoError(t, kubeClient.Get(context.Background(), types.NamespacedName{
+		Name:      correlation.Name,
+		Namespace: correlation.Namespace,
+	}, deployment))
+
+	container := deployment.Spec.Template.Spec.Containers[0]
+	assert.Contains(t, container.VolumeMounts, corev1.VolumeMount{
+		Name:      "runtime-sink-1",
+		MountPath: "/var/log/correlator",
+		ReadOnly:  false,
+	})
+	assert.Contains(t, deployment.Spec.Template.Spec.Volumes, corev1.Volume{
+		Name: "runtime-sink-1",
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: "/var/log/correlator",
+				Type: hostPathDirectoryOrCreate(),
+			},
+		},
+	})
+}
+
 func newTestController(t *testing.T, objects ...client.Object) (*EventCorrelationController, client.Client) {
 	t.Helper()
 
@@ -165,10 +294,18 @@ func newTestEventCorrelation(enabled bool) *securityv1alpha1.EventCorrelation {
 			Namespace: "security",
 		},
 		Spec: securityv1alpha1.EventCorrelationSpec{
-			Enabled:           enabled,
+			Enabled: enabled,
+			Source: securityv1alpha1.EventSource{
+				Type:   "file",
+				Path:   "/var/run/fos1/events/security-events.jsonl",
+				Format: "jsonl",
+			},
+			Sink: securityv1alpha1.EventSink{
+				Type:   "stdout",
+				Format: "json",
+			},
 			MaxEventsInMemory: 100000,
 			MaxEventAge:       "1h",
-			OutputFormat:      "json",
 			NodeSelector: map[string]string{
 				"kubernetes.io/os": "linux",
 			},
@@ -236,4 +373,12 @@ func assertServiceAbsent(t *testing.T, kubeClient client.Client, name, namespace
 	service := &corev1.Service{}
 	err := kubeClient.Get(context.Background(), types.NamespacedName{Name: name, Namespace: namespace}, service)
 	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "expected Service %s/%s to be absent", namespace, name)
+}
+
+func decodeCorrelatorConfig(t *testing.T, raw string) eventCorrelatorConfig {
+	t.Helper()
+
+	var config eventCorrelatorConfig
+	require.NoError(t, json.Unmarshal([]byte(raw), &config))
+	return config
 }

@@ -316,6 +316,12 @@ type EventCorrelationSpec struct {
 	// Enabled indicates whether event correlation is enabled
 	Enabled bool `json:"enabled,omitempty"`
 
+	// Source is the repository-owned event input contract for the correlator
+	Source EventSource `json:"source"`
+
+	// Sink is the repository-owned event output contract for the correlator
+	Sink EventSink `json:"sink"`
+
 	// Rules are the correlation rules
 	Rules []CorrelationRule `json:"rules"`
 
@@ -325,14 +331,35 @@ type EventCorrelationSpec struct {
 	// MaxEventAge is the maximum age of events to keep in memory
 	MaxEventAge string `json:"maxEventAge,omitempty"`
 
-	// OutputFormat is the format for correlated events
-	OutputFormat string `json:"outputFormat,omitempty"`
-
 	// Resources are the resource requirements
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// NodeSelector is the node selector for deployment
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+}
+
+// EventSource defines the minimal repository-owned event source contract
+type EventSource struct {
+	// Type is the event source implementation
+	Type string `json:"type"`
+
+	// Path is the file path to read JSON-line events from
+	Path string `json:"path,omitempty"`
+
+	// Format is the input encoding
+	Format string `json:"format,omitempty"`
+}
+
+// EventSink defines the minimal repository-owned event sink contract
+type EventSink struct {
+	// Type is the event sink implementation
+	Type string `json:"type"`
+
+	// Path is the file path to write correlated events to when the sink is file-based
+	Path string `json:"path,omitempty"`
+
+	// Format is the output encoding
+	Format string `json:"format,omitempty"`
 }
 
 // CorrelationRule defines a rule for event correlation

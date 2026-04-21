@@ -5,6 +5,14 @@ metadata:
   namespace: security
 spec:
   enabled: true
+  source:
+    type: file
+    path: /var/run/fos1/events/security-events.jsonl
+    format: jsonl
+  sink:
+    type: file
+    path: /var/log/correlator/correlated-events.json
+    format: json
   rules:
     - name: ssh-brute-force
       description: "Detect SSH brute force attacks"
@@ -37,7 +45,6 @@ spec:
       action: block
   maxEventsInMemory: 100000
   maxEventAge: 1h
-  outputFormat: json
   resources:
     limits:
       cpu: 500m
