@@ -15,14 +15,25 @@ import (
 // interface defined in this package, delegating all real operations to the
 // hardware layer.
 
+// hardwareManager is the subset of *hwEbpf.Manager that this wrapper needs.
+// Introduced for test injection: tests supply a fake so unit coverage can
+// exercise the success paths without kernel eBPF support.
+type hardwareManager interface {
+	LoadProgram(program hwTypes.EBPFProgram) error
+	UnloadProgram(name string) error
+	AttachProgram(programName, hookName string) error
+	DetachProgram(programName, hookName string) error
+	ListPrograms() ([]hwTypes.EBPFProgramInfo, error)
+}
+
 // ebpfProgramManager implements the ProgramManager interface.
 // It wraps the hardware/ebpf.Manager to avoid code duplication.
 // If the hardware manager is not available (e.g. not on Linux), operations
 // return explicit errors rather than placeholder success.
 type ebpfProgramManager struct {
-	mutex    sync.RWMutex
-	programs map[string]*ProgramInfo
-	hwManager *hwEbpf.Manager
+	mutex     sync.RWMutex
+	programs  map[string]*ProgramInfo
+	hwManager hardwareManager
 }
 
 // NewProgramManager creates a new program manager.
