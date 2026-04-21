@@ -88,12 +88,13 @@ Verified on 2026-04-18:
 |-----------|-------|-------|--------|---------------|
 | **Event Correlation** | `pkg/security/ids/correlation/` | - | Partial | Controller-owned ConfigMap/Deployment/Service contract is tested, but runtime image behavior, event ingestion, and export sinks are not repo-verified |
 
-#### ❌ Not Implemented
+#### ❌ Not Implemented / Non-goal
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **nftables Firewall** | Stub | Interface definitions only, no rule generation |
-| **Policy Enforcement** | Stub | Type definitions without actual enforcement |
+| **nftables Firewall** | Non-goal per ADR-0001 | Cilium is the sole enforcement backend; sprint 29 ticket 33 removed the remaining nftables translator/zone manager, `pkg/security/firewall` package, and `pkg/cilium/controllers/firewall_controller.go`. |
+| **FirewallRule CRD** | Non-goal per ADR-0001 | Schema-only with no Go types; CRD manifest and controller removed in sprint 29 ticket 33. `FilterPolicy` is the authoritative policy surface. |
+| **Policy Enforcement (FilterPolicy)** | ✅ Complete | `pkg/security/policy/controller.go` translates FilterPolicy → CiliumNetworkPolicy with spec-hash idempotency and Applied/Degraded/Invalid/Removed conditions (sprint 29 ticket 33). |
 | **SAML/RADIUS/Certificate Auth** | Stubs only |
 | **Threat Intelligence** | Framework defined but no data sources |
 
@@ -157,7 +158,8 @@ All CRD definitions are **complete and well-structured**:
 - NTPService
 
 **Security CRDs:**
-- FilterPolicy, FilterPolicyGroup, FilterZone, FirewallRule, FirewallZone, IPSet
+- FilterPolicy, FilterPolicyGroup, FilterZone, IPSet
+- FirewallRule / FirewallZone removed in sprint 29 ticket 33 per ADR-0001; `FilterPolicy` is the authoritative policy surface.
 - DPIProfile, DPIFlow, DPIPolicy
 - SuricataInstance, ZeekInstance, EventCorrelation
 - WireGuardVPN, AuthProvider, AuthConfig
@@ -208,7 +210,7 @@ All CRD definitions are **complete and well-structured**:
 | eBPF | `pkg/controllers/ebpf_controller.go` | 522 | ⚠️ Partial | Program management without loading |
 | DHCP | `pkg/controllers/dhcp_controller.go` | 579 | ⚠️ Partial | Config sync without daemon control |
 | DNS | `pkg/controllers/dns_controller.go` | 428 | ⚠️ Partial | Record management |
-| Filter Policy | `pkg/controllers/filter_policy_controller.go` | 508 | ⚠️ Partial | Type definitions |
+| Filter Policy | `pkg/security/policy/controller.go` | 700+ | ✅ Complete | Idempotent, statusful Cilium translation with add/update/delete/disable lifecycle; spec-hash no-op, Applied/Degraded/Invalid/Removed conditions (sprint 29 ticket 33) |
 | Suricata | `pkg/security/ids/suricata/controller.go` | 527 | ⚠️ Partial | K8s integration only |
 | Zeek | `pkg/security/ids/zeek/controller.go` | 568 | ⚠️ Partial | K8s integration only |
 | WireGuard | `pkg/vpn/wireguard/controller.go` | - | ✅ Complete | Real CRD-to-interface reconciliation with status |
@@ -395,16 +397,20 @@ All CRD definitions are **complete and well-structured**:
 
 **Impact:** Core auth providers (local, LDAP, OAuth) are functional; enterprise SAML/RADIUS still needed
 
-### 5. Firewall & Policy Enforcement ❌
+### 5. Firewall & Policy Enforcement ✅ via Cilium (ADR-0001)
 
-**What's Missing:**
-- No nftables rule generation
-- No policy-to-rule translation
-- No rule application to kernel
-- No connection tracking integration
-- No stateful filtering
+**Integrated:**
+- `FilterPolicy` CRD translates into `CiliumNetworkPolicy` objects through
+  `pkg/security/policy/controller.go` and `pkg/cilium/client.go`.
+- Idempotent spec-hash reconcile with Applied/Degraded/Invalid/Removed
+  conditions, matching the NAT controller surface.
+- Disable and delete paths reconcile via `ciliumClient.DeleteNetworkPolicy`.
 
-**Impact:** Firewall functionality non-operational
+**Non-goals per ADR-0001:**
+- nftables rule generation (removed in sprint 29 ticket 33).
+- `FirewallRule` CRD and its controller (removed in sprint 29 ticket 33).
+
+**Remaining:** Runtime observability on applied Cilium policies is a Ticket 32 concern.
 
 ### 6. API Server ❌
 
@@ -452,7 +458,7 @@ All CRD definitions are **complete and well-structured**:
 ### ❌ Doesn't Work (Major implementation needed)
 
 1. **Physical Network Manipulation** - No direct kernel interaction (netlink)
-2. **Firewall Rules** - No nftables integration
+2. (removed — FilterPolicy Cilium enforcement is complete per ADR-0001)
 3. **eBPF Programs** - No compilation or loading
 4. **Packet Capture** - Interface only
 5. **Threat Intelligence** - Framework only
@@ -468,7 +474,7 @@ All CRD definitions are **complete and well-structured**:
 | Static Routing | ✅ Detailed | ✅ Complete | FRR + Cilium route sync |
 | BGP/OSPF | ✅ Detailed | ✅ Complete | Live FRR state queries |
 | Multi-WAN | ✅ Detailed | ✅ Complete | None |
-| Firewalling | ✅ Detailed | ❌ Stub | No nftables integration |
+| Firewalling | ✅ Detailed | ✅ Complete via Cilium | FilterPolicy → CiliumNetworkPolicy translator + statusful controller (ADR-0001, sprint 29 ticket 33). nftables is a non-goal. |
 | DPI Framework | ✅ Detailed | ✅ Complete | Event-to-Cilium policy pipeline |
 | IDS/IPS | ✅ Detailed | ✅ Complete | Real Suricata + Zeek integration |
 | NAT/NAT66 | ✅ Detailed | ✅ Complete | Real Cilium NAT policy generation |
@@ -494,7 +500,7 @@ All CRD definitions are **complete and well-structured**:
 2. ~~No Daemon Control~~ - **Resolved:** FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard all integrated
 3. **Moderate Test Coverage** - ~30-35% coverage, needs improvement
 4. ~~Incomplete Auth~~ - **Resolved:** Local, LDAP, OAuth providers wired (SAML/RADIUS still stubs)
-5. **No Firewall** - Cannot enforce nftables-based security policies
+5. ~~No Firewall~~ - **Resolved via Cilium (ADR-0001):** `FilterPolicy` translates into `CiliumNetworkPolicy` with idempotent, statusful reconciliation (sprint 29 ticket 33). nftables is a non-goal.
 6. **No eBPF Loading** - Cannot deploy high-performance packet processing
 7. **No API Server** - Limited external management
 8. **No HA/Clustering** - Single point of failure
@@ -504,7 +510,7 @@ All CRD definitions are **complete and well-structured**:
 **Estimated Effort to Production:**
 - **6-10 months** of full-time development
 - **2-4 experienced engineers**
-- Focus areas: eBPF loading, nftables, testing, security hardening, HA
+- Focus areas: eBPF loading, testing, security hardening, HA
 
 **Current Stage:** Late Alpha
 **Production Readiness:** ~50-55%
@@ -706,9 +712,9 @@ This repository represents an **excellent architectural foundation** for a Kuber
 - Test coverage at ~30-35%, needs improvement
 - No HA/clustering, no API server
 
-**Verdict:** This has evolved from an architectural blueprint to a **functional late-alpha system** with real daemon integrations (FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard), real Cilium policy generation, and working authentication providers. The remaining work focuses on eBPF, nftables, testing, and production hardening.
+**Verdict:** This has evolved from an architectural blueprint to a **functional late-alpha system** with real daemon integrations (FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard), real Cilium policy generation, and working authentication providers. The remaining work focuses on eBPF, testing, and production hardening.
 
-**Recommendation:** The core routing, NAT, DNS, DHCP, IDS/IPS, and DPI pipelines are now functional. Focus on eBPF loading, nftables integration, increased test coverage, and security hardening for production readiness.
+**Recommendation:** The core routing, NAT, DNS, DHCP, IDS/IPS, DPI, and filter-policy pipelines are now functional. Focus on eBPF loading, increased test coverage, and security hardening for production readiness.
 
 ---
 

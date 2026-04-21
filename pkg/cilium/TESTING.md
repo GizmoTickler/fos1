@@ -50,19 +50,25 @@ spec:
 ```
 
 ```yaml
-# firewall_rule_test.yaml
-apiVersion: "security.fos1.io/v1"
-kind: FirewallRule
+# filter_policy_test.yaml (replaces firewall_rule_test.yaml per ADR-0001)
+apiVersion: "security.fos1.io/v1alpha1"
+kind: FilterPolicy
 metadata:
   name: test-rule
+  namespace: default
 spec:
-  fromZone: "LAN"
-  toZone: "WAN"
-  protocol: "tcp"
-  sourceIP: "192.168.1.0/24"
-  destIP: "0.0.0.0/0"
-  destPort: 80
-  action: "allow"
+  scope: egress
+  enabled: true
+  priority: 100
+  selectors:
+    sources:
+      - type: cidr
+        values: ["192.168.1.0/24"]
+    ports:
+      - protocol: tcp
+        ports: [80]
+  actions:
+    - type: allow
 ```
 
 ```yaml
@@ -117,10 +123,10 @@ Verify the controllers are functioning correctly:
    kubectl get ciliumnetworkpolicies -A
    ```
 
-2. **Firewall Controller**: Verify firewall rules were translated into Cilium network policies
+2. **FilterPolicy Controller** (replaces the old Firewall Controller per ADR-0001 / sprint 29 ticket 33): Verify FilterPolicy CRs were translated into CiliumNetworkPolicy resources
    ```bash
-   # Check Cilium network policies for firewall rules
-   kubectl get ciliumnetworkpolicies -l app=firewall
+   # Check Cilium network policies for FilterPolicy-generated names
+   kubectl get ciliumnetworkpolicies -l app.kubernetes.io/managed-by=fos1-policy-controller
    ```
 
 3. **Routing Controller**: Check if routes were synchronized with Cilium
@@ -170,26 +176,32 @@ curl http://localhost:8080/metrics | grep controller_
 
 To test the performance of the controllers:
 
-1. Create a large number of resources (e.g., 1000 firewall rules)
+1. Create a large number of resources (e.g., 1000 FilterPolicy CRs)
 2. Measure the time it takes for the controllers to process them
 3. Monitor the memory and CPU usage of the controller manager
 
 ```bash
-# Create 1000 firewall rules
+# Create 1000 FilterPolicy CRs
 for i in {1..1000}; do
   cat <<EOF | kubectl apply -f -
-apiVersion: "security.fos1.io/v1"
-kind: FirewallRule
+apiVersion: "security.fos1.io/v1alpha1"
+kind: FilterPolicy
 metadata:
   name: test-rule-$i
+  namespace: default
 spec:
-  fromZone: "LAN"
-  toZone: "WAN"
-  protocol: "tcp"
-  sourceIP: "192.168.1.0/24"
-  destIP: "0.0.0.0/0"
-  destPort: $((8000 + $i))
-  action: "allow"
+  scope: egress
+  enabled: true
+  priority: 100
+  selectors:
+    sources:
+      - type: cidr
+        values: ["192.168.1.0/24"]
+    ports:
+      - protocol: tcp
+        ports: [$((8000 + $i))]
+  actions:
+    - type: allow
 EOF
 done
 ```

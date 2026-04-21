@@ -4,7 +4,9 @@ kind: Kustomization
 resources:
   - crds/routes.yaml
   - crds/network_interfaces.yaml
-  - crds/firewall_rules.yaml
+  # firewall_rules.yaml removed per ADR-0001 (sprint 29 ticket 33).
+  # FilterPolicy (pkg/security/policy) is the authoritative policy surface;
+  # FirewallRule was schema-only with no controller backing.
   - crds/dpi_policies.yaml
   - crds/vlans.yaml
   - crds/cilium_network_policies.yaml

@@ -1,258 +1,156 @@
+// Package policy translates FilterPolicy CRDs into CiliumNetworkPolicy
+// objects. Per ADR-0001 (Cilium-First Control Plane), Cilium is the sole
+// enforcement backend for routed/filtered traffic; this package does not
+// emit nftables or iptables rules.
 package policy
 
 import (
 	"fmt"
 	"strings"
-	"sync"
 
-	"github.com/GizmoTickler/fos1/pkg/security/firewall"
+	"github.com/GizmoTickler/fos1/pkg/cilium"
 )
 
-const (
-	// defaultFilterTable is the nftables table name used for filter policies.
-	defaultFilterTable = "fos1-filter"
-)
-
-// PolicyTranslator converts FilterPolicy CRDs into NFTFirewallRule structs
-// and applies them through a FirewallManager.
-type PolicyTranslator struct {
-	firewallMgr firewall.FirewallManager
-
-	// appliedRules tracks rule handles keyed by policy name for removal.
-	appliedRules map[string][]appliedRule
-	mu           sync.Mutex
+// CiliumPolicyTranslator converts FilterPolicy CRDs into one or more
+// cilium.CiliumPolicy objects that the Cilium client can apply as
+// CiliumNetworkPolicy resources. The translator is pure (no side effects);
+// the apply path is owned by the PolicyController, which consumes the
+// translator output and drives idempotent reconcile.
+type CiliumPolicyTranslator struct {
+	logger *PolicyLogger
 }
 
-// appliedRule records a rule that was applied to the firewall so it can be removed later.
-type appliedRule struct {
-	chain  firewall.ChainRef
-	handle uint64
-}
-
-// NewPolicyTranslator creates a new PolicyTranslator backed by the given FirewallManager.
-func NewPolicyTranslator(fwMgr firewall.FirewallManager) *PolicyTranslator {
-	return &PolicyTranslator{
-		firewallMgr:  fwMgr,
-		appliedRules: make(map[string][]appliedRule),
+// NewCiliumPolicyTranslator builds a translator. The cilium.CiliumClient
+// argument is retained for API compatibility with older callers; the
+// translator itself is stateless and does not perform I/O.
+func NewCiliumPolicyTranslator(_ cilium.CiliumClient, logger *PolicyLogger) *CiliumPolicyTranslator {
+	return &CiliumPolicyTranslator{
+		logger: logger,
 	}
 }
 
-// TranslatePolicy converts a FilterPolicy into a list of NFTFirewallRules.
-// It maps the policy's selectors and actions into firewall-level rule structures.
-func (t *PolicyTranslator) TranslatePolicy(policy *FilterPolicy) ([]firewall.NFTFirewallRule, error) {
+// TranslatePolicy converts the FilterPolicy into a slice of
+// *cilium.CiliumPolicy that the controller will apply. Disabled policies
+// return an empty slice without error so callers can treat the disable
+// path as a no-op apply.
+//
+// Output Cilium policy names are deterministic: `fos1-filter-<namespace>-<name>`.
+// See ciliumPolicyName() in types.go for the exact sanitization rules.
+func (t *CiliumPolicyTranslator) TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*cilium.CiliumPolicy, error) {
 	if policy == nil {
 		return nil, fmt.Errorf("policy must not be nil")
 	}
-
-	spec := policy.Spec
-	if !spec.Enabled {
+	if !policy.Spec.Enabled {
 		return nil, nil
 	}
 
-	// Determine the verdict from the policy actions.
-	verdict, logEnabled, logPrefix := translateActions(spec.Actions)
+	// Zones are not yet wired into the CiliumNetworkPolicy output; retained
+	// as an argument for forward compatibility with zone-scoped policies.
+	_ = zones
 
-	// Determine the chain based on scope.
-	chain := scopeToChain(spec.Scope)
+	rules := translateCiliumRules(policy)
+	translated := &cilium.CiliumPolicy{
+		Name:        ciliumPolicyName(policy),
+		Description: policy.Spec.Description,
+		Namespace:   policy.ObjectMeta.Namespace,
+		Labels: map[string]string{
+			"app.kubernetes.io/managed-by": "fos1-policy-controller",
+			"fos1.io/policy-name":          policyObjectName(policy),
+			"fos1.io/policy-namespace":     policy.ObjectMeta.Namespace,
+		},
+		Rules: rules,
+	}
 
-	// Collect source and destination CIDRs from selectors.
+	return []*cilium.CiliumPolicy{translated}, nil
+}
+
+// translateCiliumRules maps the FilterPolicy spec into concrete Cilium rules.
+// Each port selector becomes its own CiliumRule so operators see a 1:1
+// correspondence between FilterPolicy port blocks and Cilium rule entries.
+func translateCiliumRules(policy *FilterPolicy) []cilium.CiliumRule {
+	spec := policy.Spec
+	action, denied := translatePolicyAction(spec.Actions)
 	srcCIDRs := extractCIDRs(spec.Selectors.Sources)
 	dstCIDRs := extractCIDRs(spec.Selectors.Destinations)
 
-	// If no sources or destinations are specified, use a single empty string
-	// to represent "any".
-	if len(srcCIDRs) == 0 {
-		srcCIDRs = []string{""}
-	}
-	if len(dstCIDRs) == 0 {
-		dstCIDRs = []string{""}
+	if len(spec.Selectors.Ports) == 0 {
+		return []cilium.CiliumRule{{
+			Action:   action,
+			Denied:   denied,
+			FromCIDR: srcCIDRs,
+			ToCIDR:   dstCIDRs,
+		}}
 	}
 
-	var rules []firewall.NFTFirewallRule
-
-	// If there are port selectors, generate per-port rules.
-	if len(spec.Selectors.Ports) > 0 {
-		for _, ps := range spec.Selectors.Ports {
-			proto := translateProtocol(ps.Protocol)
-			for _, port := range ps.Ports {
-				for _, src := range srcCIDRs {
-					for _, dst := range dstCIDRs {
-						rule := firewall.NFTFirewallRule{
-							Chain:   chain,
-							Verdict: verdict,
-							Matches: []firewall.RuleMatch{
-								{
-									Protocol: proto,
-									DestPort: uint16(port),
-									SourceAddr: src,
-									DestAddr:   dst,
-								},
-							},
-							Log:       logEnabled,
-							LogPrefix: logPrefix,
-							Counter:   true,
-							Comment:   policyComment(policy),
-							Priority:  spec.Priority,
-						}
-						rules = append(rules, rule)
-					}
-				}
-			}
+	rules := make([]cilium.CiliumRule, 0, len(spec.Selectors.Ports))
+	for _, selector := range spec.Selectors.Ports {
+		portRule := cilium.PortRule{
+			Ports: make([]cilium.Port, 0, len(selector.Ports)),
 		}
-	} else {
-		// No port selectors — generate rules for each src/dst combination.
-		for _, src := range srcCIDRs {
-			for _, dst := range dstCIDRs {
-				rule := firewall.NFTFirewallRule{
-					Chain:   chain,
-					Verdict: verdict,
-					Matches: []firewall.RuleMatch{
-						{
-							SourceAddr: src,
-							DestAddr:   dst,
-						},
-					},
-					Log:       logEnabled,
-					LogPrefix: logPrefix,
-					Counter:   true,
-					Comment:   policyComment(policy),
-					Priority:  spec.Priority,
-				}
-				rules = append(rules, rule)
-			}
+		for _, port := range selector.Ports {
+			portRule.Ports = append(portRule.Ports, cilium.Port{
+				Port:     uint16(port),
+				Protocol: translateCiliumProtocol(selector.Protocol),
+			})
 		}
+		rules = append(rules, cilium.CiliumRule{
+			Protocol: selector.Protocol,
+			Action:   action,
+			Denied:   denied,
+			FromCIDR: srcCIDRs,
+			ToCIDR:   dstCIDRs,
+			ToPorts:  []cilium.PortRule{portRule},
+		})
 	}
 
-	return rules, nil
+	return rules
 }
 
-// ApplyPolicy translates a FilterPolicy and applies the resulting rules to the firewall.
-func (t *PolicyTranslator) ApplyPolicy(policy *FilterPolicy) error {
-	if policy == nil {
-		return fmt.Errorf("policy must not be nil")
-	}
+// translatePolicyAction reduces the set of FilterPolicy actions to a single
+// verdict (allow / deny / reject). Multiple actions collapse to the last
+// terminal verdict seen; non-terminal actions (e.g. "log") do not change
+// the verdict. Default is deny.
+func translatePolicyAction(actions []PolicyAction) (string, bool) {
+	action := "deny"
+	denied := true
 
-	policyName := policyKey(policy)
-
-	// Remove any previously applied rules for this policy.
-	if err := t.RemovePolicy(policyName); err != nil {
-		return fmt.Errorf("removing old rules for policy %q: %w", policyName, err)
-	}
-
-	rules, err := t.TranslatePolicy(policy)
-	if err != nil {
-		return fmt.Errorf("translating policy %q: %w", policyName, err)
-	}
-
-	if len(rules) == 0 {
-		return nil
-	}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	var applied []appliedRule
-	for _, rule := range rules {
-		handle, err := t.firewallMgr.AddRule(rule)
-		if err != nil {
-			// Best-effort rollback: remove rules we already added.
-			for _, ar := range applied {
-				_ = t.firewallMgr.DeleteRule(ar.chain, ar.handle)
-			}
-			return fmt.Errorf("adding rule for policy %q: %w", policyName, err)
-		}
-		applied = append(applied, appliedRule{chain: rule.Chain, handle: handle})
-	}
-
-	// Commit the batch to the kernel.
-	if err := t.firewallMgr.Commit(); err != nil {
-		return fmt.Errorf("committing rules for policy %q: %w", policyName, err)
-	}
-
-	t.appliedRules[policyName] = applied
-	return nil
-}
-
-// RemovePolicy removes all firewall rules associated with the named policy.
-func (t *PolicyTranslator) RemovePolicy(policyName string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	applied, ok := t.appliedRules[policyName]
-	if !ok {
-		return nil
-	}
-
-	var errs []string
-	for _, ar := range applied {
-		if err := t.firewallMgr.DeleteRule(ar.chain, ar.handle); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-
-	if len(errs) > 0 {
-		// Even on partial failure, commit what we can and clear the tracking.
-		_ = t.firewallMgr.Commit()
-		delete(t.appliedRules, policyName)
-		return fmt.Errorf("removing rules for policy %q: %s", policyName, strings.Join(errs, "; "))
-	}
-
-	if err := t.firewallMgr.Commit(); err != nil {
-		delete(t.appliedRules, policyName)
-		return fmt.Errorf("committing removal for policy %q: %w", policyName, err)
-	}
-
-	delete(t.appliedRules, policyName)
-	return nil
-}
-
-// --- helper functions ---
-
-// translateActions reads the policy actions and returns the primary verdict,
-// whether logging is enabled, and the log prefix.
-func translateActions(actions []PolicyAction) (firewall.Verdict, bool, string) {
-	verdict := firewall.VerdictDrop // default to drop if no action specified
-	logEnabled := false
-	logPrefix := ""
-
-	for _, a := range actions {
-		switch strings.ToLower(a.Type) {
+	for _, policyAction := range actions {
+		switch strings.ToLower(policyAction.Type) {
 		case "allow", "accept":
-			verdict = firewall.VerdictAccept
+			action = "allow"
+			denied = false
 		case "deny", "drop":
-			verdict = firewall.VerdictDrop
+			action = "deny"
+			denied = true
 		case "reject":
-			verdict = firewall.VerdictReject
-		case "log":
-			logEnabled = true
-			if prefix, ok := a.Parameters["prefix"].(string); ok {
-				logPrefix = prefix
-			}
+			action = "reject"
+			denied = true
 		}
 	}
-	return verdict, logEnabled, logPrefix
+
+	return action, denied
 }
 
-// scopeToChain maps a policy scope string to an nftables ChainRef.
-func scopeToChain(scope string) firewall.ChainRef {
-	chain := "forward" // default chain
-	switch strings.ToLower(scope) {
-	case "input", "ingress":
-		chain = "input"
-	case "output", "egress":
-		chain = "output"
-	case "forward", "transit":
-		chain = "forward"
-	}
-	return firewall.ChainRef{
-		Table: defaultFilterTable,
-		Chain: chain,
+// translateCiliumProtocol returns the lowercase protocol string Cilium
+// expects, or the empty string for unknown protocols (which Cilium treats
+// as "any").
+func translateCiliumProtocol(protocol string) string {
+	switch strings.ToLower(protocol) {
+	case "tcp":
+		return "tcp"
+	case "udp":
+		return "udp"
+	case "icmp":
+		return "icmp"
+	default:
+		return ""
 	}
 }
 
-// extractCIDRs pulls CIDR values from a list of Selectors.
-// It looks for selectors of type "cidr" or "network" and returns
-// the string values found.
+// extractCIDRs pulls CIDR string values from selectors of type
+// cidr/network/ip/subnet. Selectors with other types are ignored so
+// non-network selectors (e.g. application tags) do not leak into the
+// CIDR match set.
 func extractCIDRs(selectors []Selector) []string {
 	var cidrs []string
 	for _, s := range selectors {
@@ -268,34 +166,8 @@ func extractCIDRs(selectors []Selector) []string {
 	return cidrs
 }
 
-// translateProtocol maps a string protocol name to the firewall Protocol type.
-func translateProtocol(proto string) firewall.Protocol {
-	switch strings.ToLower(proto) {
-	case "tcp":
-		return firewall.ProtocolTCP
-	case "udp":
-		return firewall.ProtocolUDP
-	case "icmp":
-		return firewall.ProtocolICMP
-	default:
-		return firewall.ProtocolAny
-	}
-}
-
-// policyComment generates a human-readable comment for firewall rules derived from a policy.
-func policyComment(p *FilterPolicy) string {
-	name := p.Name
-	if name == "" {
-		name = p.ObjectMeta.Name
-	}
-	ns := p.ObjectMeta.Namespace
-	if ns != "" {
-		return fmt.Sprintf("policy:%s/%s", ns, name)
-	}
-	return fmt.Sprintf("policy:%s", name)
-}
-
-// policyKey returns a unique string key for a policy.
+// policyKey returns the informer-style "<namespace>/<name>" key used as the
+// primary cache index.
 func policyKey(p *FilterPolicy) string {
 	name := p.Name
 	if name == "" {

@@ -101,6 +101,30 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 ### Caveats
 - `providerConstructors` map has no concurrent-write guard; safe during init, but `RegisterProviderConstructor` is exported.
 
+## Ticket 33 — FilterPolicy Cilium Enforcement
+
+### Caveats
+- The controller mutates FilterPolicy.Status in the in-memory cache but does
+  not yet persist those conditions via a CRD status subresource update. This
+  matches the previous behavior of the stub controller; callers relying on
+  server-observable conditions should lift the NAT controller's
+  `writeStatusToCRD` pattern (see `pkg/controllers/nat_controller.go:558`)
+  into this controller as a follow-up.
+- Spec-hash idempotency is computed from a canonical JSON projection of the
+  spec. Fields added to `FilterPolicySpec` in the future must be included
+  in `canonicalizeSpec()` or the hash will not reflect real changes.
+- The Cilium client's `DeleteNetworkPolicy` shells out to
+  `kubectl delete cnp --ignore-not-found`, so the delete path depends on
+  `kubectl` being on PATH wherever this controller runs. This is consistent
+  with the existing NAT controller contract.
+- `FirewallRule` CRD and nftables enforcement are non-goals per ADR-0001
+  (Cilium-first control plane). `FilterPolicy` is the authoritative policy
+  surface; sprint 29 ticket 33 removed `pkg/cilium/controllers/firewall_controller.go`,
+  `pkg/security/firewall/`, the nftables-based `PolicyTranslator`/`ZoneManager`,
+  and the `manifests/base/cilium/crds/firewall_rules.yaml` CRD manifest.
+  Existing clusters that had `FirewallRule` CRs applied must migrate them
+  to `FilterPolicy` before upgrading.
+
 ## Notes for Review
 
 - Anything listed here should be treated as a deliberate tradeoff, not a hidden bug.

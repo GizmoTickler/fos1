@@ -11,7 +11,7 @@
 | QoSController | `pkg/controllers` | `qos_controller_test.go` | Yes (spec extraction, delete) | Yes (missing interface, classes, spec; real QoS manager validation) | Implemented |
 | NATController | `pkg/controllers` | `nat_controller_test.go` | Yes (SNAT/DNAT create, degraded, delete) | Yes (invalid spec, apply failure) | Pre-existing |
 | RoutingController (VRF sync) | `pkg/controllers` | `routing_controller_test.go` | Yes (VRF sync, route conversion, idempotency, stale route removal) | Yes (Cilium client error, invalid destinations, invalid table ID) | Pre-existing |
-| FirewallController | `pkg/cilium/controllers` | `controller_manager_test.go` | Yes (create with selectors/rules) | Yes (missing spec, Cilium error, missing protocol) | Implemented |
+| ~~FirewallController~~ | — | — | Removed in sprint 29 ticket 33 per ADR-0001 | FilterPolicy is the authoritative policy surface (`pkg/security/policy/controller_test.go`) | Removed |
 | DPIController | `pkg/cilium/controllers` | `controller_manager_test.go` | Yes (create enabled/disabled) | Yes (missing spec, Cilium error) | Implemented |
 | NetworkInterfaceController | `pkg/cilium/controllers` | `controller_manager_test.go` | Yes (physical, VLAN) | Yes (unsupported type, missing type) | Implemented |
 | RoutingController (Cilium) | `pkg/cilium/controllers` | `controller_manager_test.go` | N/A (requires RouteSynchronizer) | Yes (missing spec, destination, invalid CIDR) | Partial |
@@ -23,7 +23,7 @@
 |---|---|---|---|
 | `pkg/cilium` | `client_test.go`, `router_test.go`, `route_sync_test.go` | Cilium client, route sync, router logic | Implemented |
 | `pkg/controllers` | `routing_controller_test.go`, `nat_controller_test.go`, `bgp_controller_test.go`, `ospf_controller_test.go`, `policy_controller_test.go`, `multiwan_controller_test.go`, `qos_controller_test.go` | All major controllers | Implemented |
-| `pkg/cilium/controllers` | `controller_manager_test.go` | Firewall, DPI, NetworkInterface, Routing controllers | Implemented |
+| `pkg/cilium/controllers` | `controller_manager_test.go` | DPI, NetworkInterface, Routing controllers (FirewallController removed in sprint 29 ticket 33) | Implemented |
 | `pkg/network/routing/frr` | `config_test.go`, `manager_test.go` | FRR config generation, vtysh validation | Implemented |
 | `pkg/network/routing/protocols` | `bgp_test.go`, `ospf_test.go` | BGP/OSPF protocol handlers | Implemented |
 | `pkg/network/routing/policy` | (test files) | Policy-based routing | Implemented |
@@ -45,9 +45,9 @@
 | `pkg/security/ids/suricata` | (test files) | Suricata connector | Implemented |
 | `pkg/security/ids/zeek` | (test files) | Zeek connector | Implemented |
 | `pkg/security/auth` | `manager_test.go` | Auth manager, providers | Implemented |
-| `pkg/security/firewall` | (test files) | Firewall rules | Implemented |
-| `pkg/security/firewall/ipset` | (test files) | IP set management | Implemented |
-| `pkg/security/policy` | (test files) | Security policy | Implemented |
+| `pkg/security/firewall` | removed | Non-goal per ADR-0001; replaced by `pkg/security/policy` Cilium translator (sprint 29 ticket 33) |
+| `pkg/security/firewall/ipset` | removed | Removed with the rest of `pkg/security/firewall` (sprint 29 ticket 33) |
+| `pkg/security/policy` | `controller_test.go`, `translator_test.go` | Cilium-first FilterPolicy translator + statusful reconciler with Applied/Degraded/Invalid/Removed conditions and spec-hash idempotency | Implemented |
 | `pkg/vpn` | (test files) | VPN types | Implemented |
 | `pkg/vpn/controller` | (test files) | WireGuard controller | Implemented |
 | `test/integration` | (test files) | Cross-component integration | Implemented |

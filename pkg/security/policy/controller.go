@@ -14,6 +14,13 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// policyTranslator abstracts FilterPolicy → CiliumPolicy translation so the
+// controller can be unit-tested with a deliberately failing translator
+// (exercises the Invalid condition branch).
+type policyTranslator interface {
+	TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*cilium.CiliumPolicy, error)
+}
+
 // PolicyController manages the lifecycle of filtering policies.
 type PolicyController struct {
 	// Kubernetes clients
@@ -22,7 +29,7 @@ type PolicyController struct {
 
 	// Core components
 	resolver   *PolicyResolver
-	translator *CiliumPolicyTranslator
+	translator policyTranslator
 	monitor    *PolicyMonitor
 	logger     *PolicyLogger
 
@@ -343,13 +350,28 @@ func (c *PolicyController) handleZoneDelete(obj interface{}) {
 	}
 }
 
-// processPolicy processes a single policy.
+// processPolicy reconciles a single FilterPolicy. The reconcile shape
+// mirrors the NAT controller (pkg/controllers/nat_controller.go) to keep
+// status semantics consistent across Cilium-backed controllers:
+//
+//  1. Disabled policies → tear down any applied Cilium policies and record
+//     Applied=False, Removed=True with reason=Disabled.
+//  2. Enabled policies → translate, then compare spec hash vs.
+//     Status.LastAppliedHash. If unchanged, no-op and record Applied=True.
+//  3. Spec changed → apply each translator output via the Cilium client;
+//     on full success record Applied=True, on partial failure record
+//     Degraded=True with the partial CiliumPolicies set.
+//  4. Translator returns an error → record Invalid=True; no retry is
+//     attempted until the spec changes.
 func (c *PolicyController) processPolicy(policy *FilterPolicy) {
+	now := time.Now()
 	key := policyKey(policy)
+
 	if !policyEnabled(policy) {
 		log.Printf("Policy %s is disabled, removing applied state", key)
 		if err := c.removePolicy(policy); err != nil {
 			log.Printf("Error removing disabled policy %s: %v", key, err)
+			return
 		}
 		return
 	}
@@ -365,34 +387,119 @@ func (c *PolicyController) processPolicy(policy *FilterPolicy) {
 
 	resolvedPolicy, err := c.resolver.ResolvePolicy(policy, c.policies)
 	if err != nil {
-		policy.Status.Applied = false
-		policy.Status.Error = err.Error()
+		markInvalid(policy, "ResolveFailed", err.Error(), now)
 		log.Printf("Error resolving policy %s: %v", key, err)
 		return
 	}
 
 	ciliumPolicies, err := c.translator.TranslatePolicy(resolvedPolicy, c.zones)
 	if err != nil {
-		policy.Status.Applied = false
-		policy.Status.Error = err.Error()
+		markInvalid(policy, "TranslationFailed", err.Error(), now)
 		log.Printf("Error translating policy %s: %v", key, err)
 		return
 	}
 
-	if err := c.applyTranslatedPolicies(resolvedPolicy, ciliumPolicies); err != nil {
-		policy.Status.Applied = false
-		policy.Status.Error = err.Error()
-		log.Printf("Error applying Cilium policy for %s: %v", key, err)
+	// Idempotency: skip re-apply when the spec hash matches the last
+	// successfully applied hash and we already have the Cilium policies
+	// tracked in the controller cache. Matches the NAT controller's
+	// SpecHash() shortcut at pkg/controllers/nat_controller.go:82.
+	newHash := specHash(resolvedPolicy.Spec)
+	if policy.Status.LastAppliedHash == newHash && len(c.appliedPolicies[key]) > 0 {
+		policy.Status.Applied = true
+		policy.Status.Error = ""
+		policy.Status.CiliumPolicies = append([]string(nil), c.appliedPolicies[key]...)
+		policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+			Type:               ConditionApplied,
+			Status:             ConditionStatusTrue,
+			LastTransitionTime: now,
+			Reason:             "Unchanged",
+			Message:            "spec hash matches last applied state; no Cilium call issued",
+		})
+		log.Printf("Policy %s unchanged (hash=%s); skipped re-apply", key, newHash)
 		return
 	}
 
+	applyErr := c.applyTranslatedPolicies(resolvedPolicy, ciliumPolicies)
 	applied := append([]string(nil), c.appliedPolicies[key]...)
+
+	if applyErr != nil {
+		policy.Status.Applied = len(applied) > 0
+		policy.Status.Error = applyErr.Error()
+		policy.Status.CiliumPolicies = applied
+		policy.Status.LastAppliedHash = "" // force full re-apply next reconcile
+		policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+			Type:               ConditionDegraded,
+			Status:             ConditionStatusTrue,
+			LastTransitionTime: now,
+			Reason:             "CiliumApplyFailed",
+			Message:            applyErr.Error(),
+		})
+		policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+			Type:               ConditionApplied,
+			Status:             ConditionStatusFalse,
+			LastTransitionTime: now,
+			Reason:             "CiliumApplyFailed",
+			Message:            "at least one translated policy failed to apply",
+		})
+		log.Printf("Error applying Cilium policy for %s: %v", key, applyErr)
+		return
+	}
+
 	policy.Status.Applied = len(applied) > 0
-	policy.Status.LastApplied = time.Now()
+	policy.Status.LastApplied = now
+	policy.Status.LastAppliedHash = newHash
 	policy.Status.Error = ""
 	policy.Status.CiliumPolicies = applied
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionApplied,
+		Status:             ConditionStatusTrue,
+		LastTransitionTime: now,
+		Reason:             "Reconciled",
+		Message:            fmt.Sprintf("%d Cilium policy(ies) applied", len(applied)),
+	})
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionDegraded,
+		Status:             ConditionStatusFalse,
+		LastTransitionTime: now,
+		Reason:             "Reconciled",
+	})
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionInvalid,
+		Status:             ConditionStatusFalse,
+		LastTransitionTime: now,
+		Reason:             "Reconciled",
+	})
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionRemoved,
+		Status:             ConditionStatusFalse,
+		LastTransitionTime: now,
+		Reason:             "Reconciled",
+	})
 
-	log.Printf("Successfully processed policy: %s", key)
+	log.Printf("Successfully processed policy: %s (hash=%s, cilium-policies=%d)", key, newHash, len(applied))
+}
+
+// markInvalid records an Invalid=True condition with Applied=False. No apply
+// call is made; the controller waits for a spec change before retrying.
+func markInvalid(policy *FilterPolicy, reason, message string, now time.Time) {
+	policy.Status.Applied = false
+	policy.Status.Error = message
+	policy.Status.LastAppliedHash = ""
+	policy.Status.CiliumPolicies = nil
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionInvalid,
+		Status:             ConditionStatusTrue,
+		LastTransitionTime: now,
+		Reason:             reason,
+		Message:            message,
+	})
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionApplied,
+		Status:             ConditionStatusFalse,
+		LastTransitionTime: now,
+		Reason:             reason,
+		Message:            message,
+	})
 }
 
 // processPolicyGroup processes all policies in a group.
@@ -453,6 +560,12 @@ func (c *PolicyController) applyGroupOverrides(policy *FilterPolicy, group *Filt
 	return policyCopy
 }
 
+// applyTranslatedPolicies removes any previously applied Cilium policies
+// for this FilterPolicy, then attempts to apply each translated policy in
+// order. On partial failure the successfully applied policies are retained
+// in the controller cache and the caller records a Degraded condition —
+// this matches the NAT controller's partial-success contract rather than
+// all-or-nothing rollback.
 func (c *PolicyController) applyTranslatedPolicies(policy *FilterPolicy, translated []*cilium.CiliumPolicy) error {
 	key := policyKey(policy)
 	if err := c.removeAppliedPolicies(key); err != nil {
@@ -460,44 +573,77 @@ func (c *PolicyController) applyTranslatedPolicies(policy *FilterPolicy, transla
 	}
 
 	applied := make([]string, 0, len(translated))
+	var firstErr error
 	for _, translatedPolicy := range translated {
 		if translatedPolicy == nil {
 			continue
 		}
 		if err := c.ciliumClient.ApplyNetworkPolicy(c.ctx, translatedPolicy); err != nil {
-			for _, appliedName := range applied {
-				_ = c.ciliumClient.DeleteNetworkPolicy(c.ctx, appliedName)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("apply translated policy %q: %w", translatedPolicy.Name, err)
 			}
-			delete(c.appliedPolicies, key)
-			return fmt.Errorf("apply translated policy %q: %w", translatedPolicy.Name, err)
+			continue
 		}
 		applied = append(applied, translatedPolicy.Name)
 	}
 
 	if len(applied) == 0 {
 		delete(c.appliedPolicies, key)
-		return nil
+	} else {
+		c.appliedPolicies[key] = applied
 	}
 
-	c.appliedPolicies[key] = applied
-	return nil
+	return firstErr
 }
 
-// removePolicy removes applied Cilium policies for the FilterPolicy.
+// removePolicy removes applied Cilium policies for the FilterPolicy and
+// records Removed=True / Applied=False on status. Used by both delete and
+// disable paths; the reason field distinguishes the two.
 func (c *PolicyController) removePolicy(policy *FilterPolicy) error {
+	now := time.Now()
 	key := policyKey(policy)
-	log.Printf("Removing Cilium policy for: %s", key)
+	reason := "Removed"
+	if policy != nil && !policy.Spec.Enabled {
+		reason = "Disabled"
+	}
+	log.Printf("Removing Cilium policy for: %s (reason=%s)", key, reason)
 
 	if err := c.removeAppliedPolicies(key); err != nil {
 		policy.Status.Applied = false
 		policy.Status.CiliumPolicies = nil
 		policy.Status.Error = err.Error()
+		policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+			Type:               ConditionDegraded,
+			Status:             ConditionStatusTrue,
+			LastTransitionTime: now,
+			Reason:             "CiliumDeleteFailed",
+			Message:            err.Error(),
+		})
 		return err
 	}
 
 	policy.Status.Applied = false
 	policy.Status.CiliumPolicies = nil
 	policy.Status.Error = ""
+	policy.Status.LastAppliedHash = ""
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionRemoved,
+		Status:             ConditionStatusTrue,
+		LastTransitionTime: now,
+		Reason:             reason,
+	})
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionApplied,
+		Status:             ConditionStatusFalse,
+		LastTransitionTime: now,
+		Reason:             reason,
+	})
+	policy.Status.Conditions = setCondition(policy.Status.Conditions, PolicyCondition{
+		Type:               ConditionDegraded,
+		Status:             ConditionStatusFalse,
+		LastTransitionTime: now,
+		Reason:             reason,
+	})
 	return nil
 }
 

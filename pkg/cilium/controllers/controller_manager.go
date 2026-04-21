@@ -23,10 +23,7 @@ type ControllerManager struct {
 	
 	// networkInterfaceController manages network interfaces
 	networkInterfaceController *NetworkInterfaceController
-	
-	// firewallController manages firewall rules
-	firewallController *FirewallController
-	
+
 	// routingController manages routing
 	routingController *RoutingController
 	
@@ -68,13 +65,11 @@ func (m *ControllerManager) Initialize() {
 		m.dynamicClient,
 		m.networkController,
 	)
-	
-	// Create the Firewall controller
-	m.firewallController = NewFirewallController(
-		m.dynamicClient,
-		m.ciliumClient,
-	)
-	
+
+	// FirewallRule CRD and its controller have been removed per ADR-0001
+	// (Cilium-first control plane). FilterPolicy is the authoritative policy
+	// surface; see pkg/security/policy/controller.go.
+
 	// Create the Routing controller
 	m.routingController = NewRoutingController(
 		m.dynamicClient,
@@ -100,16 +95,10 @@ func (m *ControllerManager) Start(ctx context.Context) error {
 			klog.Errorf("Error starting NetworkInterface controller: %v", err)
 		}
 	}()
-	
-	// Start the Firewall controller
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		if err := m.firewallController.Start(ctx); err != nil {
-			klog.Errorf("Error starting Firewall controller: %v", err)
-		}
-	}()
-	
+
+	// FirewallController removed per ADR-0001; FilterPolicy is the
+	// authoritative policy surface.
+
 	// Start the Routing controller
 	m.wg.Add(1)
 	go func() {
@@ -143,10 +132,9 @@ func (m *ControllerManager) Stop() {
 	
 	// Stop the NetworkInterface controller
 	m.networkInterfaceController.Stop()
-	
-	// Stop the Firewall controller
-	m.firewallController.Stop()
-	
+
+	// FirewallController removed per ADR-0001.
+
 	// Stop the Routing controller
 	m.routingController.Stop()
 	
