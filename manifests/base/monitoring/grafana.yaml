@@ -40,14 +40,43 @@ spec:
         volumeMounts:
         - name: data-volume
           mountPath: /var/lib/grafana
-        - name: config-volume
+        - name: datasource-volume
           mountPath: /etc/grafana/provisioning/datasources
+        - name: dashboard-provider-volume
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: dashboard-volume
+          mountPath: /var/lib/grafana/dashboards/fos1
       volumes:
       - name: data-volume
-        emptyDir: {}
-      - name: config-volume
+        persistentVolumeClaim:
+          claimName: grafana-data
+      - name: datasource-volume
         configMap:
           name: grafana-config
+          items:
+          - key: datasource.yaml
+            path: datasource.yaml
+      - name: dashboard-provider-volume
+        configMap:
+          name: grafana-config
+          items:
+          - key: dashboards.yaml
+            path: dashboards.yaml
+      - name: dashboard-volume
+        configMap:
+          name: grafana-dashboards
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -57,13 +86,40 @@ metadata:
 data:
   datasource.yaml: |
     apiVersion: 1
-    
+
     datasources:
       - name: Prometheus
         type: prometheus
         url: http://prometheus:9090
         access: proxy
         isDefault: true
+  dashboards.yaml: |
+    apiVersion: 1
+
+    providers:
+      - name: fos1
+        orgId: 1
+        folder: FOS1
+        folderUid: fos1
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards/fos1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+data:
+  security-dashboard.json: |
+    {"annotations":{"list":[{"builtIn":1,"datasource":"-- Grafana --","enable":true,"hide":true,"iconColor":"rgba(0, 211, 255, 1)","name":"Annotations & Alerts","type":"dashboard"}]},"editable":true,"gnetId":null,"graphTooltip":0,"id":3,"links":[],"panels":[{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":0},"id":1,"panels":[],"title":"DPI Overview","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":1}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":0,"y":1},"id":2,"options":{"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"auto"},"pluginVersion":"9.4.7","targets":[{"expr":"sum(dpi_events_total)","legendFormat":"","refId":"A"}],"title":"Total DPI Events","type":"stat"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"green","value":1}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":6,"y":1},"id":3,"options":{"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"value"},"pluginVersion":"9.4.7","targets":[{"expr":"max(dpi_zeek_status{status=\"running\"})","legendFormat":"","refId":"A"}],"title":"Zeek Running","type":"stat"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":12,"y":1},"id":4,"options":{"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"auto"},"pluginVersion":"9.4.7","targets":[{"expr":"count(dpi_protocol_connections > 0)","legendFormat":"","refId":"A"}],"title":"Protocols Seen","type":"stat"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":18,"y":1},"id":5,"options":{"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"auto"},"pluginVersion":"9.4.7","targets":[{"expr":"dpi_zeek_logs_processed","legendFormat":"","refId":"A"}],"title":"Zeek Logs Processed","type":"stat"},{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":9},"id":6,"panels":[],"title":"Event Breakdown","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":10},"id":7,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"sum(increase(dpi_events_total[$__rate_interval])) by (event_type)","legendFormat":"{{event_type}}","refId":"A"}],"title":"Events By Type","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":10},"id":8,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"topk(10, sum(increase(dpi_events_total[$__rate_interval])) by (application))","legendFormat":"{{application}}","refId":"A"}],"title":"Events By Application","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"bars","fillOpacity":80,"lineWidth":1,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":19},"id":9,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"sum(increase(dpi_events_total[$__rate_interval])) by (category)","legendFormat":"{{category}}","refId":"A"}],"title":"Events By Category","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"ops"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":19},"id":10,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"rate(dpi_zeek_logs_processed[$__rate_interval])","legendFormat":"logs/sec","refId":"A"}],"title":"Zeek Log Processing Rate","type":"timeseries"}],"refresh":"30s","schemaVersion":37,"style":"dark","tags":["dpi","security","zeek"],"templating":{"list":[]},"time":{"from":"now-6h","to":"now"},"timepicker":{},"timezone":"","title":"Security Dashboard","uid":"fos1-security","version":1}
+  network-dashboard.json: |
+    {"annotations":{"list":[{"builtIn":1,"datasource":"-- Grafana --","enable":true,"hide":true,"iconColor":"rgba(0, 211, 255, 1)","name":"Annotations & Alerts","type":"dashboard"}]},"editable":true,"gnetId":null,"graphTooltip":0,"id":2,"links":[],"panels":[{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":0},"id":1,"panels":[],"title":"Protocol Activity","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":18,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":1},"id":2,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"sum(dpi_protocol_connections) by (protocol)","legendFormat":"{{protocol}}","refId":"A"}],"title":"Connections By Protocol","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":18,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"bytes"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":1},"id":3,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"sum(dpi_protocol_bytes) by (protocol)","legendFormat":"{{protocol}}","refId":"A"}],"title":"Bytes By Protocol","type":"timeseries"},{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":10},"id":4,"panels":[],"title":"DPI Event Context","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"bars","fillOpacity":85,"lineWidth":1,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":11},"id":5,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"topk(10, sum(increase(dpi_events_total[$__rate_interval])) by (application))","legendFormat":"{{application}}","refId":"A"}],"title":"Top Applications By Events","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"bars","fillOpacity":85,"lineWidth":1,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":11},"id":6,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"sum(increase(dpi_events_total[$__rate_interval])) by (category)","legendFormat":"{{category}}","refId":"A"}],"title":"Events By Category","type":"timeseries"},{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":20},"id":7,"panels":[],"title":"Zeek Health","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"stepAfter","lineWidth":2,"showPoints":"never","spanNulls":false},"max":1,"min":0,"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":21},"id":8,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"max(dpi_zeek_status) by (status)","legendFormat":"{{status}}","refId":"A"}],"title":"Zeek Status","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"ops"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":21},"id":9,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"rate(dpi_zeek_logs_processed[$__rate_interval])","legendFormat":"logs/sec","refId":"A"}],"title":"Zeek Log Processing Rate","type":"timeseries"}],"refresh":"30s","schemaVersion":37,"style":"dark","tags":["dpi","network"],"templating":{"list":[]},"time":{"from":"now-6h","to":"now"},"timepicker":{},"timezone":"","title":"Network Dashboard","uid":"fos1-network","version":1}
+  traffic-dashboard.json: |
+    {"annotations":{"list":[{"builtIn":1,"datasource":"-- Grafana --","enable":true,"hide":true,"iconColor":"rgba(0, 211, 255, 1)","name":"Annotations & Alerts","type":"dashboard"}]},"editable":true,"gnetId":null,"graphTooltip":0,"id":1,"links":[],"panels":[{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":0},"id":1,"panels":[],"title":"NTP Status","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"mappings":[{"options":{"0":{"text":"Out Of Sync"},"1":{"text":"Synchronized"}},"type":"value"}],"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"green","value":1}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":0,"y":1},"id":2,"options":{"colorMode":"value","graphMode":"none","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"value"},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_sync","legendFormat":"","refId":"A"}],"title":"NTP Sync","type":"stat"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":6,"y":1},"id":3,"options":{"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"auto"},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_source_count","legendFormat":"","refId":"A"}],"title":"Configured Sources","type":"stat"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":12,"y":1},"id":4,"options":{"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"auto"},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_sources_reachable","legendFormat":"","refId":"A"}],"title":"Reachable Sources","type":"stat"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"mappings":[],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]},"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":6,"x":18,"y":1},"id":5,"options":{"colorMode":"value","graphMode":"area","justifyMode":"auto","orientation":"auto","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"textMode":"auto"},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_stratum","legendFormat":"","refId":"A"}],"title":"Current Stratum","type":"stat"},{"collapsed":false,"datasource":null,"gridPos":{"h":1,"w":24,"x":0,"y":9},"id":6,"panels":[],"title":"Clock Quality","type":"row"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"ms"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":10},"id":7,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_offset_milliseconds","legendFormat":"offset","refId":"A"}],"title":"Clock Offset","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"ms"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":10},"id":8,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_jitter_milliseconds","legendFormat":"jitter","refId":"A"}],"title":"Clock Jitter","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"short"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":0,"y":19},"id":9,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_sources_reachable","legendFormat":"reachable","refId":"A"},{"expr":"ntp_source_count","legendFormat":"configured","refId":"B"}],"title":"Reachable Vs Configured Sources","type":"timeseries"},{"datasource":"Prometheus","fieldConfig":{"defaults":{"color":{"mode":"palette-classic"},"custom":{"drawStyle":"line","fillOpacity":16,"lineInterpolation":"smooth","lineWidth":2,"showPoints":"never","spanNulls":false},"unit":"ppm"},"overrides":[]},"gridPos":{"h":9,"w":12,"x":12,"y":19},"id":10,"options":{"legend":{"displayMode":"list","placement":"bottom"},"tooltip":{"mode":"multi","sort":"desc"}},"pluginVersion":"9.4.7","targets":[{"expr":"ntp_frequency_drift_ppm","legendFormat":"drift","refId":"A"}],"title":"Frequency Drift","type":"timeseries"}],"refresh":"30s","schemaVersion":37,"style":"dark","tags":["ntp","timing"],"templating":{"list":[]},"time":{"from":"now-24h","to":"now"},"timepicker":{},"timezone":"","title":"Timing Dashboard","uid":"fos1-timing","version":1}
 ---
 apiVersion: v1
 kind: Service

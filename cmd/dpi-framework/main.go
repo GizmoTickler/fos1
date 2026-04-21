@@ -27,13 +27,14 @@ type Config struct {
 	} `yaml:"kubernetes"`
 
 	Zeek struct {
+		Enabled    bool   `yaml:"enabled"`
 		LogsPath   string `yaml:"logsPath"`
 		PolicyPath string `yaml:"policyPath"`
 	} `yaml:"zeek"`
 
 	VLANs struct {
-		Enabled bool                     `yaml:"enabled"`
-		Configs []connectors.VLANConfig  `yaml:"configs"`
+		Enabled bool                    `yaml:"enabled"`
+		Configs []connectors.VLANConfig `yaml:"configs"`
 	} `yaml:"vlans"`
 
 	Profiles []dpi.DPIProfile `yaml:"profiles"`
@@ -104,11 +105,18 @@ func main() {
 		}
 	}
 
+	zeekLogsPathValue := ""
+	zeekPolicyPathValue := ""
+	if config.Zeek.Enabled {
+		zeekLogsPathValue = config.Zeek.LogsPath
+		zeekPolicyPathValue = config.Zeek.PolicyPath
+	}
+
 	// Create DPI manager options
 	opts := dpi.DPIManagerOptions{
 		CiliumClient:   ciliumClient,
-		ZeekLogsPath:   config.Zeek.LogsPath,
-		ZeekPolicyPath: config.Zeek.PolicyPath,
+		ZeekLogsPath:   zeekLogsPathValue,
+		ZeekPolicyPath: zeekPolicyPathValue,
 		KubernetesMode: config.Kubernetes.Enabled,
 		Namespace:      config.Kubernetes.Namespace,
 		VLANAware:      config.VLANs.Enabled,
@@ -121,9 +129,14 @@ func main() {
 		log.Fatalf("Failed to create DPI manager: %v", err)
 	}
 
+	var metricsServer *kubernetes.MetricsServer
+
 	// Register event handler
 	manager.RegisterEventHandler(func(event common.DPIEvent) {
 		log.Printf("Event: %s - %s", event.EventType, event.Description)
+		if metricsServer != nil {
+			metricsServer.HandleCommonDPIEvent(event)
+		}
 	})
 
 	// Add profiles from configuration
@@ -138,9 +151,9 @@ func main() {
 	// Add default profile if none specified
 	if len(config.Profiles) == 0 {
 		defaultProfile := &dpi.DPIProfile{
-			Name:        "default-profile",
-			Description: "Default DPI profile",
-			Enabled:     true,
+			Name:            "default-profile",
+			Description:     "Default DPI profile",
+			Enabled:         true,
 			InspectionDepth: 5,
 			Applications: []string{
 				"http",
@@ -201,8 +214,12 @@ func main() {
 		go controller.Run(context.Background())
 
 		// Start metrics server for Prometheus
-		metricsServer := kubernetes.NewMetricsServer(":8080")
-		go metricsServer.Start()
+		metricsServer = kubernetes.NewMetricsServer(":8080")
+		go func() {
+			if err := metricsServer.Start(); err != nil {
+				log.Printf("Metrics server exited with error: %v", err)
+			}
+		}()
 	} else {
 		// Simulate some events for testing in non-Kubernetes mode
 		go simulateEvents(manager)
@@ -213,6 +230,14 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("Received signal %v, shutting down", sig)
+
+	if metricsServer != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := metricsServer.Stop(stopCtx); err != nil {
+			log.Printf("Error stopping metrics server: %v", err)
+		}
+		cancel()
+	}
 
 	// Stop the DPI manager
 	if err := manager.Stop(); err != nil {
@@ -237,7 +262,7 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	// Set default values if not specified
-	if config.Zeek.LogsPath == "" {
+	if config.Zeek.Enabled && config.Zeek.LogsPath == "" {
 		if config.Kubernetes.Enabled {
 			config.Zeek.LogsPath = "/zeek-logs/current"
 		} else {
@@ -245,7 +270,7 @@ func loadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if config.Zeek.PolicyPath == "" {
+	if config.Zeek.Enabled && config.Zeek.PolicyPath == "" {
 		if config.Kubernetes.Enabled {
 			config.Zeek.PolicyPath = "/zeek-policy"
 		} else {
@@ -254,11 +279,11 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	// Ensure paths are absolute
-	if !filepath.IsAbs(config.Zeek.LogsPath) {
+	if config.Zeek.Enabled && config.Zeek.LogsPath != "" && !filepath.IsAbs(config.Zeek.LogsPath) {
 		config.Zeek.LogsPath = filepath.Join("/", config.Zeek.LogsPath)
 	}
 
-	if !filepath.IsAbs(config.Zeek.PolicyPath) {
+	if config.Zeek.Enabled && config.Zeek.PolicyPath != "" && !filepath.IsAbs(config.Zeek.PolicyPath) {
 		config.Zeek.PolicyPath = filepath.Join("/", config.Zeek.PolicyPath)
 	}
 
@@ -291,7 +316,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 			"packets": int64(10),
 		},
 	}
-	manager.EventChan() <-flowEvent
+	manager.EventChan() <- flowEvent
 	log.Println("Sent flow event")
 
 	// Wait a moment
@@ -314,7 +339,7 @@ func simulateEvents(manager *dpi.DPIManager) {
 		SessionID:   "sim-session-2",
 		RawData:     map[string]interface{}{},
 	}
-	manager.EventChan() <-alertEvent
+	manager.EventChan() <- alertEvent
 	log.Println("Sent alert event")
 
 	// Simulate periodic events
@@ -339,11 +364,11 @@ func simulateEvents(manager *dpi.DPIManager) {
 				Description: "Simulated HTTP flow",
 				SessionID:   fmt.Sprintf("sim-session-%d", time.Now().Unix()),
 				RawData: map[string]interface{}{
-					"bytes":   int64(1024 * (time.Now().Second() % 10 + 1)),
-					"packets": int64(10 * (time.Now().Second() % 10 + 1)),
+					"bytes":   int64(1024 * (time.Now().Second()%10 + 1)),
+					"packets": int64(10 * (time.Now().Second()%10 + 1)),
 				},
 			}
-			manager.EventChan() <-event
+			manager.EventChan() <- event
 			log.Println("Sent periodic flow event")
 		}
 	}

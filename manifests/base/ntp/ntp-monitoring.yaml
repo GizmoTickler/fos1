@@ -1,3 +1,6 @@
+# Optional additive resources for Prometheus Operator / Grafana Operator deployments.
+# The repository-owned baseline scrape path is pod annotation discovery via
+# manifests/base/monitoring/prometheus.yaml.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -5,10 +8,13 @@ metadata:
   namespace: monitoring
   labels:
     app: ntp-monitoring
+  annotations:
+    observability.fos1.io/baseline: "optional-operator"
 spec:
   selector:
     matchLabels:
-      app: ntp-chrony
+      app: ntp-controller
+      component: ntp
   namespaceSelector:
     matchNames:
       - network
@@ -25,6 +31,8 @@ metadata:
   namespace: monitoring
   labels:
     app: ntp-monitoring
+  annotations:
+    observability.fos1.io/baseline: "optional-operator"
 spec:
   groups:
   - name: ntp.rules
@@ -81,6 +89,8 @@ metadata:
   namespace: monitoring
   labels:
     app: ntp-monitoring
+  annotations:
+    observability.fos1.io/baseline: "optional-operator"
 spec:
   json: |
     {

@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
@@ -71,6 +72,12 @@ func main() {
 		klog.Fatalf("Error creating dynamic client: %v", err)
 	}
 
+	// Create Kubernetes typed client
+	kubeClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Error creating Kubernetes client: %v", err)
+	}
+
 	// Create informer factory
 	ntpResource := schema.GroupVersionResource{
 		Group:    "ntp.fos1.io",
@@ -100,7 +107,7 @@ func main() {
 	}
 
 	// Create and run controller
-	ctrl, err := controller.NewController(nil, ntpClient, informer, controllerConfig)
+	ctrl, err := controller.NewController(kubeClient, ntpClient, informer, controllerConfig)
 	if err != nil {
 		klog.Fatalf("Error creating controller: %v", err)
 	}

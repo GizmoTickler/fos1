@@ -1,19 +1,30 @@
 # Implementation Status Report
-**Generated:** 2026-04-18
+**Generated:** 2026-04-20
 **Repository:** Kubernetes-Based Router/Firewall (FOS1)
 
 ## Executive Summary
 
-This repository has progressed from an architectural blueprint to a **functional implementation** with verified, passing Go build and test coverage on the integrated post-ticket-28 tree as of 2026-04-18. The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, and first post-20 convergence sprint are implemented.
+This repository has progressed from an architectural blueprint to a **functional implementation** with verified, passing Go build and test coverage on the integrated post-ticket-28 tree as of 2026-04-19. The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, and first post-20 convergence sprint are implemented.
 
-The highest-value remaining work has narrowed further. Tickets 21-28 completed the first convergence pass over Kubernetes/security policy enforcement, Cilium helper cleanup, event-correlation runtime status, hardware offload statistics behavior, observability/status documentation, and canonical verification automation.
+The highest-value remaining work has narrowed further. The follow-on ops sprint completed the canonical CI enforcement path, aligned the owned exporter deployment/scrape baseline for DPI and NTP with the repository manifests, and made the single-node monitoring durability story explicit in manifests. The bootstrap harness now runtime-proves the repository-owned Suricata log path into Elasticsearch, the Elasticsearch ILM/template bootstrap, and the Prometheus pod-annotation scrape path for node-local `dpi-manager` plus `ntp-controller`. What remains is the broader runtime depth beyond those focused proofs: natural traffic ingestion, event-correlation ingestion/sinks, operator-style observability add-ons, HA/storage hardening, and wider platform hardening.
 
 ## Verification Snapshot
 
-Verified on 2026-04-18:
-- `git rebase origin/main` -> `HEAD is up to date.`
-- `go test ./...` -> pass
-- `go build ./...` -> pass
+Verified contract as of 2026-04-19:
+- `make verify-mainline` is the canonical Go verification target and runs:
+  - `go test ./...`
+  - `go build ./...`
+- `.github/workflows/ci.yml` enforces `make verify-mainline` on pushes to `main` and pull requests targeting `main`
+- `.github/workflows/validate-manifests.yml` runs on manifest-affecting pull requests and fails on real `kubeconform` validation errors
+
+Owned observability contract as of 2026-04-20:
+- `dpi-manager` runs as a node-local `DaemonSet` and its annotated `:8080/metrics` endpoint is runtime-proven through the Kind Prometheus pod-scrape path
+- `ntp-controller` exposes an annotated `:9559/metrics` endpoint and that pod-scrape path is runtime-proven through the same Kind harness
+- the Kind harness narrows NTP proof deployment to the repository-owned controller slice rather than pretending optional operator add-ons or the chrony daemonset are part of the verified baseline
+- Prometheus, Grafana, and Alertmanager now persist state on PVC-backed storage in the base monitoring manifests
+- Elasticsearch now uses a single `30Gi` PVC and a repository-owned `14d` ILM bootstrap for `fos1-security-*` and `fos1-logs-*`
+- the bootstrap harness also proves one deterministic Suricata canary path into `fos1-security-*` plus ILM/template attachment through Elasticsearch APIs
+- Remaining gaps are broader than the owned baseline: no proof yet for PVC failover behavior, aged-index deletion execution, optional operator resources, dashboards, or natural sensor traffic without the injected canary
 
 ### Key Metrics
 
@@ -22,17 +33,17 @@ Verified on 2026-04-18:
 | Total Go Files | 230+ | Large, complex codebase |
 | Lines of Go Code | ~85,000+ | Significant implementation |
 | CRD Kinds Defined | 42+ | Comprehensive API coverage |
-| Primary Ticket Track | Tickets 1-28 complete | Core path plus first convergence sprint implemented |
-| Remaining Work Shape | Runtime and ops hardening | Current sprint complete |
-| Verification Status | `go test ./...`, `go build ./...` pass | Fresh evidence on current main |
+| Primary Ticket Track | Tickets 1-28 plus ops sprint follow-through | Core path plus CI/observability contract updates implemented |
+| Remaining Work Shape | Runtime and ops hardening | The owned Kind proof now covers Prometheus pod scraping plus the Suricata/Elasticsearch baseline, but broader runtime depth is still incomplete |
+| Verification Status | `make verify-mainline` is canonical; CI and manifest validation enforce the current contract | Docs, manifests, and the bootstrap harness now agree on the node-local DPI topology and the current observability proof boundary |
 | Documentation Files | 37 | Excellent documentation |
 | Production Ready | ❌ NO | Strong implementation base, but not yet fully converged or hardened |
 
 ## Priority Next Steps
 
-1. Carry observability past documentation by wiring exporter/deployment paths and validating event-correlation ingestion and sinks.
-2. Extend the local `make verify-mainline` contract into CI/branch enforcement when you want PR gating.
-3. Reassess whether the next sprint should target threat-intelligence/event-ingestion depth or operational CI/deployment paths.
+1. Extend observability proof beyond the current baseline by validating natural sensor traffic, downstream dashboards/alerts, and any non-canary ingestion paths rather than only the narrow owned proof slice.
+2. Exercise the Elasticsearch retention/storage baseline beyond bootstrap presence and decide whether the single-node `30Gi` / `14d` envelope needs snapshotting, rollover, or HA work.
+3. Carry event correlation beyond controller/runtime resource reconciliation into verified ingestion and durable output paths.
 
 ---
 
@@ -134,9 +145,9 @@ Verified on 2026-04-18:
 
 | Component | Files | Lines | Status | Critical Gaps |
 |-----------|-------|-------|--------|---------------|
-| **NIC Manager** | `pkg/hardware/nic/` | - | Partial | Intel NIC abstractions without driver integration |
-| **Packet Capture** | `pkg/hardware/capture/` | - | Partial | Interface definitions without actual capture |
-| **Hardware Offload** | `pkg/hardware/offload/` | - | Partial | Capability interfaces without hardware interaction |
+| **NIC Manager** | `pkg/hardware/nic/` | - | Real on Linux, stubbed off-Linux | Real ethtool / netlink queries on Linux via a mockable `ethtoolClient` seam; `ErrNICStatisticsNotSupported` / `ErrNICFeatureNotSupported` sentinels surface when drivers expose no counters. Non-Linux builds return `ErrNICUnsupportedPlatform` for every method. Intel X540/X550/I225 driver-specific quirks are still a follow-up. |
+| **Packet Capture** | `pkg/hardware/capture/` | - | Real tcpdump shim on Linux, stubbed off-Linux | Split into `manager_linux.go` + `manager_stub.go`; `NewManager` verifies `tcpdump` is on PATH and returns `ErrTCPDumpNotAvailable` when missing. A mockable `captureExec` seam powers unit tests. eBPF-based capture remains a non-goal. |
+| **Hardware Offload** | `pkg/hardware/offload/` | - | Real on Linux, stubbed off-Linux | Real ethtool feature / statistics reporting on Linux with `ErrOffloadStatisticsNotSupported` for drivers that expose no counters (ticket 26). |
 
 ---
 
@@ -172,7 +183,7 @@ All CRD definitions are **complete and well-structured**:
 - **Overlays** - Dev and prod environment configurations
 - **Deployment Configs** - Talos Linux and Kubernetes deployment manifests
 
-**Gap:** Manifests, including the monitoring/logging stack resources, are deployable templates rather than proof of verified runtime ownership or end-to-end operation
+**Gap:** Manifests, including the monitoring/logging stack resources, now encode a concrete single-node durability baseline, but they are still deployable templates rather than proof of verified runtime ownership or end-to-end operation
 
 ---
 
@@ -613,6 +624,7 @@ All CRD definitions are **complete and well-structured**:
 - **DPI:** nProbe (commercial, optional)
 - **Certificates:** cert-manager
 - **Observability Templates/Dependencies:** Prometheus, Grafana, Alertmanager, Elasticsearch, Fluentd, Kibana
+  Single-node baseline only: PVC-backed monitoring state plus Elasticsearch `14d` retention on a `30Gi` volume; no HA or snapshot automation yet
 
 ### Key Go Dependencies
 - `k8s.io/client-go` - Kubernetes client

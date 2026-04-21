@@ -1,9 +1,16 @@
 package kubernetes
 
 import (
+	"context"
+	"errors"
+	"io"
 	"log"
+	"net"
 	"net/http"
+	"strings"
+	"sync"
 
+	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -63,13 +70,33 @@ func init() {
 
 // MetricsServer provides Prometheus metrics for the DPI system
 type MetricsServer struct {
-	addr string
+	addr     string
+	mux      *http.ServeMux
+	server   *http.Server
+	listener net.Listener
+	mu       sync.Mutex
 }
 
 // NewMetricsServer creates a new metrics server
 func NewMetricsServer(addr string) *MetricsServer {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ready")
+	})
+
 	return &MetricsServer{
 		addr: addr,
+		mux:  mux,
+		server: &http.Server{
+			Addr:    addr,
+			Handler: mux,
+		},
 	}
 }
 
@@ -78,27 +105,93 @@ func (s *MetricsServer) HandleDPIEvent(event DPIEvent) {
 	dpiEvents.WithLabelValues(event.EventType, event.Application, event.Category).Inc()
 }
 
-// Start starts the metrics server
-func (s *MetricsServer) Start() {
-	// Add health check endpoint for Kubernetes probes
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+// HandleCommonDPIEvent handles a real DPI manager event and updates derived metrics.
+func (s *MetricsServer) HandleCommonDPIEvent(event common.DPIEvent) {
+	s.HandleDPIEvent(DPIEvent{
+		Timestamp:   event.Timestamp,
+		SourceIP:    event.SourceIP,
+		DestIP:      event.DestIP,
+		SourcePort:  event.SourcePort,
+		DestPort:    event.DestPort,
+		Protocol:    event.Protocol,
+		Application: event.Application,
+		Category:    event.Category,
+		EventType:   event.EventType,
+		Severity:    event.Severity,
+		Description: event.Description,
+		Signature:   event.Signature,
+		SessionID:   event.SessionID,
+		RawData:     event.RawData,
 	})
 
-	// Add readiness check endpoint for Kubernetes probes
-	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		// Simple readiness check
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ready"))
-	})
-
-	// Set up HTTP server
-	http.Handle("/metrics", promhttp.Handler())
-	log.Printf("Starting metrics server on %s", s.addr)
-	if err := http.ListenAndServe(s.addr, nil); err != nil {
-		log.Printf("Error starting metrics server: %v", err)
+	if protocol := protocolMetricLabel(event); protocol != "" {
+		protocolConnections.WithLabelValues(protocol).Add(1)
+		if bytes, ok := rawInt64(event.RawData, "bytes"); ok {
+			protocolBytes.WithLabelValues(protocol).Add(float64(bytes))
+		}
 	}
+
+	if isZeekEvent(event) {
+		logsProcessed := int64(1)
+		if value, ok := rawInt64(event.RawData, "logs_processed"); ok && value > 0 {
+			logsProcessed = value
+		}
+		s.UpdateZeekStatus(true, logsProcessed)
+	}
+}
+
+// Start starts the metrics server.
+func (s *MetricsServer) Start() error {
+	s.mu.Lock()
+	if s.listener != nil {
+		s.mu.Unlock()
+		return errors.New("metrics server already started")
+	}
+	listener, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.listener = listener
+	s.mu.Unlock()
+
+	log.Printf("Starting metrics server on %s", listener.Addr().String())
+	err = s.server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+// Stop shuts down the metrics server cleanly.
+func (s *MetricsServer) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	server := s.server
+	listener := s.listener
+	s.mu.Unlock()
+
+	if server == nil || listener == nil {
+		return nil
+	}
+
+	err := server.Shutdown(ctx)
+
+	s.mu.Lock()
+	s.listener = nil
+	s.mu.Unlock()
+
+	return err
+}
+
+// Addr returns the active listener address when running.
+func (s *MetricsServer) Addr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.listener != nil {
+		return s.listener.Addr().String()
+	}
+	return ""
 }
 
 // UpdateZeekStatus updates Zeek status metrics
@@ -118,4 +211,45 @@ func (s *MetricsServer) UpdateZeekStatus(running bool, logsProcessed int64) {
 func (s *MetricsServer) UpdateProtocolMetrics(protocol string, connections int, bytes int64) {
 	protocolConnections.WithLabelValues(protocol).Set(float64(connections))
 	protocolBytes.WithLabelValues(protocol).Set(float64(bytes))
+}
+
+func protocolMetricLabel(event common.DPIEvent) string {
+	if event.Application != "" {
+		return strings.ToLower(event.Application)
+	}
+	if service, ok := event.RawData["service"].(string); ok && service != "" {
+		return strings.ToLower(service)
+	}
+	return strings.ToLower(event.Protocol)
+}
+
+func isZeekEvent(event common.DPIEvent) bool {
+	source, ok := event.RawData["source"].(string)
+	return ok && strings.EqualFold(source, "zeek")
+}
+
+func rawInt64(raw map[string]interface{}, key string) (int64, bool) {
+	if raw == nil {
+		return 0, false
+	}
+
+	value, ok := raw[key]
+	if !ok {
+		return 0, false
+	}
+
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case float32:
+		return int64(typed), true
+	case float64:
+		return int64(typed), true
+	default:
+		return 0, false
+	}
 }

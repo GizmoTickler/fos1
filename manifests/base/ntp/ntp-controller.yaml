@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: ntp-controller
   namespace: network
+  labels:
+    app: ntp-controller
+    component: ntp
 spec:
   replicas: 1
   selector:
@@ -12,6 +15,11 @@ spec:
     metadata:
       labels:
         app: ntp-controller
+        component: ntp
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9559"
+        prometheus.io/path: /metrics
     spec:
       serviceAccountName: ntp-controller
       containers:
@@ -36,6 +44,11 @@ spec:
           requests:
             cpu: 50m
             memory: 64Mi
+        ports:
+        - name: metrics
+          containerPort: 9559
+        - name: api
+          containerPort: 8080
         volumeMounts:
         - name: controller-config
           mountPath: /etc/ntp-controller

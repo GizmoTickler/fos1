@@ -44,6 +44,8 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/api/v1/ntp/status", a.handleStatus)
 	mux.HandleFunc("/api/v1/ntp/sources", a.handleSources)
 	mux.HandleFunc("/api/v1/ntp/health", a.handleHealth)
+	mux.HandleFunc("/healthz", a.handleLiveness)
+	mux.HandleFunc("/readyz", a.handleReadiness)
 
 	a.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", a.port),
@@ -137,4 +139,31 @@ func (a *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte("NTP service is not synchronized"))
 	}
+}
+
+// handleLiveness reports whether the API process itself is serving requests.
+func (a *APIServer) handleLiveness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+// handleReadiness reports whether the controller API is ready to serve requests.
+func (a *APIServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if a.ntpManager == nil {
+		http.Error(w, "NTP manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready"))
 }

@@ -16,12 +16,21 @@ Please delete options that are not relevant.
 ## How Has This Been Tested?
 Please describe the tests you ran to verify your changes. Provide instructions so we can reproduce.
 
+Required baseline:
+- `make verify-mainline`
+
+If this PR changes manifests or manifest-validation workflow behavior, also include the smallest relevant manifest verification you ran locally, such as:
+- `kustomize build manifests/base`
+- `make validate-manifests` (when `kubeconform` is available locally)
+
 ## Checklist
 - [ ] My code follows the style guidelines of this project
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code, particularly in hard-to-understand areas
 - [ ] I have made corresponding changes to the documentation
 - [ ] My changes generate no new warnings
+- [ ] I ran `make verify-mainline` locally
+- [ ] If I changed manifests or manifest-validation behavior, I ran the relevant local manifest checks
 - [ ] I have added tests that prove my fix is effective or that my feature works
 - [ ] New and existing unit tests pass locally with my changes
 - [ ] Any dependent changes have been merged and published in downstream modules

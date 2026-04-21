@@ -203,8 +203,11 @@ func (c *FirewallController) handleFirewallRuleDelete(key string) error {
 	policyName := fmt.Sprintf("fw-%s", name)
 	
 	// Delete the corresponding Cilium network policy
-	// In a real implementation, we would use the Cilium API to delete the policy
-	
+	ctx := context.Background()
+	if err := c.ciliumClient.DeleteNetworkPolicy(ctx, policyName); err != nil {
+		return fmt.Errorf("failed to delete Cilium network policy %s: %w", policyName, err)
+	}
+
 	klog.Infof("Deleted Cilium network policy %s for FirewallRule %s in namespace %s", policyName, name, namespace)
 	return nil
 }

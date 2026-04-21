@@ -8,21 +8,25 @@ data:
     global:
       scrape_interval: 15s
       evaluation_interval: 15s
-      # Alertmanager configuration
-      alerting:
-        alertmanagers:
-        - static_configs:
-          - targets:
-            - alertmanager:9093
+
+    # Alertmanager configuration
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager:9093
 
     # Load rules once and periodically evaluate them
     rule_files:
-      - /etc/prometheus/rules/network-alerts.yml
-      - /etc/prometheus/rules/security-alerts.yml
-      - /etc/prometheus/rules/system-alerts.yml
-      - /etc/prometheus/rules/application-alerts.yml
+      - /etc/prometheus/rules/dpi-alerts.yml
+      - /etc/prometheus/rules/ntp-alerts.yml
 
     scrape_configs:
+      # Repository-owned exporter baseline:
+      # annotate pods and let kubernetes-pods discover them.
+      # Current in-repo exporters using this path:
+      # - dpi-manager on :8080/metrics
+      # - ntp-controller on :9559/metrics
       - job_name: 'kubernetes-pods'
         kubernetes_sd_configs:
         - role: pod
@@ -100,6 +104,8 @@ metadata:
     component: metrics
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: prometheus
@@ -109,12 +115,14 @@ spec:
         app: prometheus
         component: metrics
     spec:
+      serviceAccountName: prometheus
       containers:
       - name: prometheus
         image: prom/prometheus:v2.42.0
         args:
         - "--config.file=/etc/prometheus/prometheus.yml"
         - "--storage.tsdb.path=/prometheus"
+        - "--storage.tsdb.retention.time=7d"
         - "--web.console.libraries=/usr/share/prometheus/console_libraries"
         - "--web.console.templates=/usr/share/prometheus/consoles"
         ports:
@@ -142,7 +150,48 @@ spec:
         configMap:
           name: prometheus-alert-rules
       - name: data-volume
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: prometheus-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods", "namespaces"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: monitoring
 ---
 apiVersion: v1
 kind: Service

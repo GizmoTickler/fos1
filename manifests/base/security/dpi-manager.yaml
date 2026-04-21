@@ -17,7 +17,7 @@ data:
     
     zeek:
       enabled: true
-      logsPath: /var/log/zeek
+      logsPath: /var/log/zeek/current
       scripts:
         - protocol-detection.zeek
         - file-extraction.zeek
@@ -82,15 +82,15 @@ data:
         profile: high-security
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: dpi-manager
   namespace: security
   labels:
     app: dpi-manager
     component: security
+    topology.fos1.io/scope: node-local
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: dpi-manager
@@ -99,6 +99,11 @@ spec:
       labels:
         app: dpi-manager
         component: security
+        topology.fos1.io/scope: node-local
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
     spec:
       serviceAccountName: security-manager
       containers:
@@ -107,17 +112,16 @@ spec:
         imagePullPolicy: Always
         args:
           - "--config=/etc/dpi-manager/config.yaml"
-          - "--logtostderr=true"
-          - "--v=2"
+          - "--kubernetes"
         env:
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        - name: SURICATA_SERVICE
-          value: "suricata.security.svc.cluster.local"
-        - name: ZEEK_SERVICE
-          value: "zeek.security.svc.cluster.local"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         - name: CILIUM_API_SERVICE
           value: "cilium.network.svc.cluster.local:9234"
         resources:
@@ -132,15 +136,15 @@ spec:
           mountPath: /etc/dpi-manager
         - name: suricata-logs
           mountPath: /var/log/suricata
+          readOnly: true
         - name: zeek-logs
           mountPath: /var/log/zeek
+          readOnly: true
         - name: rules-volume
           mountPath: /etc/rules
         ports:
         - containerPort: 8080
           name: http
-        - containerPort: 9090
-          name: metrics
         livenessProbe:
           httpGet:
             path: /healthz
@@ -158,9 +162,13 @@ spec:
         configMap:
           name: dpi-manager-config
       - name: suricata-logs
-        emptyDir: {}
+        hostPath:
+          path: /var/log/fos1/suricata
+          type: DirectoryOrCreate
       - name: zeek-logs
-        emptyDir: {}
+        hostPath:
+          path: /var/log/fos1/zeek
+          type: DirectoryOrCreate
       - name: rules-volume
         emptyDir: {}
 ---
@@ -179,9 +187,6 @@ spec:
   - port: 8080
     targetPort: 8080
     name: http
-  - port: 9090
-    targetPort: 9090
-    name: metrics
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

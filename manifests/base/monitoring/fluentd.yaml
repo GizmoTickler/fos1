@@ -14,8 +14,49 @@ data:
       tag kubernetes.*
       read_from_head true
       <parse>
+        @type multi_format
+        <pattern>
+          format json
+          time_key time
+          time_format %Y-%m-%dT%H:%M:%S.%NZ
+          keep_time_key true
+        </pattern>
+        <pattern>
+          format regexp
+          expression /^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$/
+          time_format %Y-%m-%dT%H:%M:%S.%NZ
+          keep_time_key true
+        </pattern>
+      </parse>
+    </source>
+
+    <source>
+      @type tail
+      @id in_tail_suricata_eve
+      path /var/log/fos1/suricata/eve.json
+      pos_file /var/log/fluentd-suricata-eve.pos
+      tag security.suricata.eve
+      read_from_head true
+      <parse>
         @type json
-        time_format %Y-%m-%dT%H:%M:%S.%NZ
+        time_key timestamp
+        time_format %Y-%m-%dT%H:%M:%S.%L%z
+        keep_time_key true
+      </parse>
+    </source>
+
+    <source>
+      @type tail
+      @id in_tail_zeek_logs
+      path /var/log/fos1/zeek/current/*.log
+      exclude_path ["/var/log/fos1/zeek/current/stdout.log"]
+      pos_file /var/log/fluentd-zeek-current.pos
+      tag security.zeek
+      read_from_head true
+      path_key log_path
+      <parse>
+        @type none
+        message_key log
       </parse>
     </source>
 
@@ -38,11 +79,58 @@ data:
       @type grep
       <regexp>
         key $.kubernetes.labels.component
-        pattern /^(network|routing|security|vpn|firewall|nat|dhcp|dns)$/
+        pattern /^(network|routing|security|vpn|firewall|nat|dhcp|dns|ids|nids)$/
       </regexp>
     </filter>
 
+    <filter security.suricata.**>
+      @type record_transformer
+      <record>
+        security_sensor suricata
+        log_contract /var/log/fos1/suricata/eve.json
+      </record>
+    </filter>
+
+    <filter security.zeek.**>
+      @type record_transformer
+      <record>
+        security_sensor zeek
+      </record>
+    </filter>
+
+    <filter security.zeek.**>
+      @type grep
+      <exclude>
+        key log
+        pattern /^#/
+      </exclude>
+    </filter>
+
     # Elasticsearch output
+    <match security.**>
+      @type elasticsearch
+      @id out_es_security
+      hosts elasticsearch:9200
+      logstash_format true
+      logstash_prefix fos1-security
+      include_tag_key true
+      tag_key @log_name
+      flush_interval 5s
+      <buffer>
+        @type file
+        path /var/log/fluentd-buffers/security.buffer
+        flush_mode interval
+        retry_type exponential_backoff
+        flush_thread_count 2
+        flush_interval 5s
+        retry_forever true
+        retry_max_interval 30
+        chunk_limit_size 2M
+        queue_limit_length 8
+        overflow_action block
+      </buffer>
+    </match>
+
     <match kubernetes.**>
       @type elasticsearch
       @id out_es

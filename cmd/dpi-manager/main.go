@@ -6,25 +6,31 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 )
 
+const (
+	defaultSuricataEvePath = "/var/log/suricata/eve.json"
+	defaultZeekLogsPath    = "/var/log/zeek/current"
+)
+
 func main() {
 	// Parse command line flags
-	ciliumAPI := flag.String("cilium-api", "http://localhost:9234", "Cilium API endpoint")
+	ciliumAPI := flag.String("cilium-api", defaultCiliumAPIEndpoint(), "Cilium API endpoint")
 
 	// Suricata options
-	suricataEvePath := flag.String("suricata-eve", "/var/log/suricata/eve.json", "Path to Suricata eve.json")
+	suricataEvePath := flag.String("suricata-eve", defaultSuricataEvePath, "Path to Suricata eve.json")
 	suricataRulesPath := flag.String("suricata-rules", "/etc/suricata/rules", "Path to Suricata rules directory")
 	suricataListPath := flag.String("suricata-lists", "/etc/suricata/lists", "Path to Suricata IP lists directory")
 	suricataMode := flag.String("suricata-mode", "ids", "Suricata mode: 'ids' or 'ips'")
 	enableIPS := flag.Bool("enable-ips", false, "Enable IPS mode (Suricata)")
 
 	// Zeek options
-	zeekLogsPath := flag.String("zeek-logs", "/usr/local/zeek/logs/current", "Path to Zeek logs directory")
+	zeekLogsPath := flag.String("zeek-logs", defaultZeekLogsPath, "Path to Zeek logs directory")
 	zeekPolicyPath := flag.String("zeek-policy", "/usr/local/zeek/share/zeek/policy", "Path to Zeek policy directory")
 	flag.Parse()
 
@@ -33,26 +39,31 @@ func main() {
 		log.Fatalf("Invalid Suricata mode: %s (must be 'ids' or 'ips')", *suricataMode)
 	}
 
+	kubernetesMode := runningInKubernetes()
+	nodeName := os.Getenv("NODE_NAME")
+
 	// Create Cilium client
 	ciliumClient := cilium.NewDefaultCiliumClient(*ciliumAPI, "")
 
 	// Create DPI manager
 	dpiOpts := dpi.DPIManagerOptions{
-		CiliumClient:     ciliumClient,
+		CiliumClient: ciliumClient,
 
 		// Suricata options
-		SuricataEvePath:  *suricataEvePath,
+		SuricataEvePath:   *suricataEvePath,
 		SuricataRulesPath: *suricataRulesPath,
-		SuricataListPath: *suricataListPath,
-		SuricataMode:     *suricataMode,
+		SuricataListPath:  *suricataListPath,
+		SuricataMode:      *suricataMode,
 
 		// Zeek options
-		ZeekLogsPath:     *zeekLogsPath,
-		ZeekPolicyPath:   *zeekPolicyPath,
+		ZeekLogsPath:   *zeekLogsPath,
+		ZeekPolicyPath: *zeekPolicyPath,
 
 		// General options
-		KubernetesMode:   false, // Set to true when running in Kubernetes
-		VLANAware:        true,  // Enable VLAN-aware processing
+		KubernetesMode: kubernetesMode,
+		Namespace:      os.Getenv("POD_NAMESPACE"),
+		NodeName:       nodeName,
+		VLANAware:      true, // Enable VLAN-aware processing
 	}
 
 	dpiManager, err := dpi.NewDPIManager(dpiOpts)
@@ -76,9 +87,9 @@ func main() {
 
 	// Define a sample profile (in real usage, this would be from a configuration)
 	profile := &dpi.DPIProfile{
-		Name:        "default-profile",
-		Description: "Default DPI profile",
-		Enabled:     true,
+		Name:            "default-profile",
+		Description:     "Default DPI profile",
+		Enabled:         true,
 		InspectionDepth: 5,
 		Applications: []string{
 			"http",
@@ -103,9 +114,9 @@ func main() {
 
 	// Create a blocklist for malicious IPs
 	maliciousIPs := []string{
-		"192.0.2.1",   // Example IP (TEST-NET-1)
+		"192.0.2.1",    // Example IP (TEST-NET-1)
 		"198.51.100.1", // Example IP (TEST-NET-2)
-		"203.0.113.1", // Example IP (TEST-NET-3)
+		"203.0.113.1",  // Example IP (TEST-NET-3)
 	}
 
 	// Update Suricata IP list
@@ -128,4 +139,19 @@ func main() {
 		log.Fatalf("Error stopping DPI manager: %v", err)
 	}
 	log.Println("DPI manager stopped, exiting")
+}
+
+func runningInKubernetes() bool {
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != "" || os.Getenv("POD_NAMESPACE") != ""
+}
+
+func defaultCiliumAPIEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("CILIUM_API_SERVICE")); endpoint != "" {
+		if strings.Contains(endpoint, "://") {
+			return endpoint
+		}
+		return "http://" + endpoint
+	}
+
+	return "http://localhost:9234"
 }

@@ -6,6 +6,7 @@ namespace: network
 resources:
   - ntp-crd.yaml
   - ntp-controller.yaml
+  - service.yaml
   - chrony-server.yaml
   - ntp-monitoring.yaml
 

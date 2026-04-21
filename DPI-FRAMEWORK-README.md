@@ -1,13 +1,13 @@
 # DPI Framework for Talos Linux
 
-This repository contains a Deep Packet Inspection (DPI) Framework designed specifically for Talos Linux and Kubernetes. The framework uses Zeek for network traffic analysis and integrates with Cilium for policy enforcement, fully aligned with Talos Linux's immutable infrastructure model.
+This repository contains a Deep Packet Inspection (DPI) Framework designed specifically for Talos Linux and Kubernetes. The active repository-owned topology is node-local: Suricata and Zeek sensors write to host-visible log paths on each node, and a node-local `dpi-manager` `DaemonSet` consumes those logs and integrates with Cilium for policy enforcement. That keeps the deployment aligned with Talos Linux's immutable infrastructure model and the current manifest/runtime contract.
 
 ## Architecture
 
 The DPI Framework consists of the following components:
 
-1. **Zeek**: Deployed as a container with host networking to capture and analyze network traffic
-2. **DPI Framework**: A Kubernetes deployment that processes Zeek logs and generates network policies
+1. **Suricata and Zeek sensors**: Node-local containers that write security telemetry into host-visible paths under `/var/log/fos1`
+2. **`dpi-manager`**: A Kubernetes `DaemonSet` with one pod per node that watches the local Suricata/Zeek log contract, exposes Prometheus metrics on `:8080`, and generates network-policy responses
 3. **Cilium Integration**: Network policies are applied through Cilium's Kubernetes CRDs
 
 ## Prerequisites
@@ -43,7 +43,7 @@ This will deploy Zeek as a container with host networking to capture and analyze
 kubectl apply -f deploy/kubernetes/dpi-framework-deployment.yaml
 ```
 
-This will deploy the DPI Framework that processes Zeek logs and generates network policies.
+This deploys the repository-owned node-local DPI manager path that processes the shared Suricata/Zeek host-log contract and generates network policies.
 
 ### Non-Kubernetes Installation
 
@@ -99,7 +99,7 @@ flows:  # Define traffic flows to monitor
 
 ## Monitoring
 
-The DPI Framework exposes Prometheus metrics on port 8080. You can use these metrics to monitor:
+The node-local `dpi-manager` pods expose Prometheus metrics on port 8080 and are intended to be scraped through pod annotations. The repository-owned Kind bootstrap harness now proves that Prometheus discovers those pods and records `up=1` for the annotated `:8080/metrics` targets. You can use these metrics to monitor:
 
 - DPI events by type and application
 - Protocol statistics
@@ -155,7 +155,7 @@ The DPI Framework uses Cilium's Kubernetes CRDs to enforce network policies base
 The DPI Framework is fully integrated with Kubernetes:
 
 1. **ConfigMaps**: Configuration is managed through Kubernetes ConfigMaps
-2. **Prometheus Metrics**: Exposes metrics for monitoring
+2. **Prometheus Metrics**: Each node-local `dpi-manager` pod exposes metrics for monitoring
 3. **RBAC**: Uses Kubernetes RBAC for access control
 4. **CRDs**: Leverages Cilium CRDs for policy enforcement
 

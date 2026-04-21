@@ -15,63 +15,65 @@ import (
 // DPIManager manages Deep Packet Inspection functionality
 type DPIManager struct {
 	// Configuration
-	mu              sync.Mutex
-	profiles        map[string]*DPIProfile
-	flows           map[string]*DPIFlow
-	flowStats       map[string]*FlowStatistics
-	appDetector     *ApplicationDetector
+	mu          sync.Mutex
+	profiles    map[string]*DPIProfile
+	flows       map[string]*DPIFlow
+	flowStats   map[string]*FlowStatistics
+	appDetector *ApplicationDetector
 
 	// Integration with Cilium
-	ciliumClient    cilium.CiliumClient
-	networkCtrl     *cilium.NetworkController
+	ciliumClient cilium.CiliumClient
+	networkCtrl  *cilium.NetworkController
 
 	// DPI engine connectors
 	zeekConnector     *connectors.ZeekConnector
 	suricataConnector *connectors.SuricataConnector
 
 	// Event processing
-	eventChan        chan common.DPIEvent
-	eventHandlers    []func(common.DPIEvent)
+	eventChan     chan common.DPIEvent
+	eventHandlers []func(common.DPIEvent)
 
 	// Policy pipeline for DPI event -> Cilium policy automation
-	policyPipeline   *PolicyPipeline
+	policyPipeline *PolicyPipeline
+	nodeName       string
 
 	// Control
-	ctx              context.Context
-	cancel           context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // DPIManagerOptions configures the DPI manager
 type DPIManagerOptions struct {
-	CiliumClient     cilium.CiliumClient
+	CiliumClient cilium.CiliumClient
 
 	// Zeek options
-	ZeekLogsPath     string
-	ZeekPolicyPath   string
+	ZeekLogsPath   string
+	ZeekPolicyPath string
 
 	// Suricata options
-	SuricataEvePath  string
+	SuricataEvePath   string
 	SuricataRulesPath string
-	SuricataListPath string
-	SuricataMode     string // "ids" or "ips"
+	SuricataListPath  string
+	SuricataMode      string // "ids" or "ips"
 
 	// Policy pipeline rules for automated DPI -> Cilium policy enforcement
-	PolicyRules      []PolicyRule
+	PolicyRules []PolicyRule
 
 	// General options
-	KubernetesMode   bool   // Whether running in Kubernetes
-	Namespace        string // Kubernetes namespace
-	VLANAware        bool   // Whether to process VLAN tags
-	VLANs            map[int]connectors.VLANConfig // VLAN configurations
+	KubernetesMode bool                          // Whether running in Kubernetes
+	Namespace      string                        // Kubernetes namespace
+	NodeName       string                        // Kubernetes node name for node-local scoping
+	VLANAware      bool                          // Whether to process VLAN tags
+	VLANs          map[int]connectors.VLANConfig // VLAN configurations
 }
 
 // VLANConfig represents configuration for a VLAN
 type VLANConfig struct {
-	ID             int
-	Name           string
-	Subnet         string
-	DefaultPolicy  string // "allow", "deny", or "restrict"
-	Applications   []string // Allowed applications
+	ID            int
+	Name          string
+	Subnet        string
+	DefaultPolicy string   // "allow", "deny", or "restrict"
+	Applications  []string // Allowed applications
 }
 
 // NewDPIManager creates a new DPI manager
@@ -90,6 +92,9 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 			opts.Namespace = "default"
 		}
 	}
+	if opts.KubernetesMode && opts.NodeName == "" {
+		opts.NodeName = os.Getenv("NODE_NAME")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -107,7 +112,7 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 			},
 		}
 	}
-	pipeline := NewPolicyPipeline(opts.CiliumClient, pipelineRules)
+	pipeline := NewPolicyPipeline(opts.CiliumClient, pipelineRules, opts.NodeName)
 
 	manager := &DPIManager{
 		profiles:       make(map[string]*DPIProfile),
@@ -119,6 +124,7 @@ func NewDPIManager(opts DPIManagerOptions) (*DPIManager, error) {
 		eventChan:      make(chan common.DPIEvent, 1000),
 		eventHandlers:  make([]func(common.DPIEvent), 0),
 		policyPipeline: pipeline,
+		nodeName:       opts.NodeName,
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -424,8 +430,8 @@ func (m *DPIManager) applyProfilesToEngines() {
 		// Create configuration for Zeek
 		config := map[string]interface{}{
 			"applications": applications,
-			"logs_path": m.zeekConnector.GetLogsPath(),
-			"policy_path": m.zeekConnector.GetPolicyPath(),
+			"logs_path":    m.zeekConnector.GetLogsPath(),
+			"policy_path":  m.zeekConnector.GetPolicyPath(),
 		}
 
 		// Apply configuration
@@ -448,7 +454,7 @@ func (m *DPIManager) applyProfilesToEngines() {
 		// Create configuration for Suricata
 		config := map[string]interface{}{
 			"categories": categories,
-			"mode": m.suricataConnector.GetMode(),
+			"mode":       m.suricataConnector.GetMode(),
 		}
 
 		// Apply configuration
@@ -536,18 +542,16 @@ func (m *DPIManager) ConfigurePolicyBasedRouting(applicationName, nextHop string
 	policy := &cilium.CiliumPolicy{
 		Name: fmt.Sprintf("app-routing-%s", applicationName),
 		Labels: map[string]string{
-			"app":       applicationName,
-			"type":      "routing-policy",
-			"next-hop":  nextHop,
+			"app":      applicationName,
+			"type":     "routing-policy",
+			"next-hop": nextHop,
 		},
 	}
 
 	// Add rules to redirect the application traffic
 	policy.Rules = append(policy.Rules, cilium.CiliumRule{
 		ToPorts: []cilium.PortRule{
-			{
-
-			},
+			{},
 		},
 		ToEndpoints: []cilium.Endpoint{
 			{
@@ -614,15 +618,15 @@ func (m *DPIManager) UpdateSuricataIPList(listName string, ips []string) error {
 
 // DPIProfile represents a DPI profile
 type DPIProfile struct {
-	Name                 string
-	Description          string
-	Enabled              bool
-	InspectionDepth      int
-	Applications         []string
+	Name                  string
+	Description           string
+	Enabled               bool
+	InspectionDepth       int
+	Applications          []string
 	ApplicationCategories []string
-	TrafficClasses       []TrafficClass
-	CustomSignatures     []CustomSignature
-	Logging              LoggingConfig
+	TrafficClasses        []TrafficClass
+	CustomSignatures      []CustomSignature
+	Logging               LoggingConfig
 }
 
 // DPIFlow represents a DPI flow
@@ -632,16 +636,16 @@ type DPIFlow struct {
 	SourceNetwork      string
 	DestinationNetwork string
 	Profile            string
-	VLAN               int      // VLAN ID for this flow
+	VLAN               int // VLAN ID for this flow
 	BypassRules        []BypassRule
 }
 
 // TrafficClass represents a traffic class for QoS
 type TrafficClass struct {
-	Name                 string
-	Applications         []string
+	Name                  string
+	Applications          []string
 	ApplicationCategories []string
-	DSCP                 int
+	DSCP                  int
 }
 
 // CustomSignature represents a custom DPI signature
@@ -700,11 +704,7 @@ func (m *DPIManager) forwardEvents(events <-chan common.DPIEvent, source string)
 				return
 			}
 
-			// Add source information
-			if event.RawData == nil {
-				event.RawData = make(map[string]interface{})
-			}
-			event.RawData["source"] = source
+			event = m.enrichEvent(event, source)
 
 			// Forward to main event channel
 			select {
@@ -720,6 +720,8 @@ func (m *DPIManager) forwardEvents(events <-chan common.DPIEvent, source string)
 
 // handleEvent handles a DPI event
 func (m *DPIManager) handleEvent(event common.DPIEvent) {
+	event = m.enrichEvent(event, "")
+
 	// Update flow statistics
 	if event.SourceIP != "" && event.DestIP != "" {
 		m.updateFlowStats(event)
@@ -744,6 +746,19 @@ func (m *DPIManager) handleEvent(event common.DPIEvent) {
 	for _, handler := range m.eventHandlers {
 		handler(event)
 	}
+}
+
+func (m *DPIManager) enrichEvent(event common.DPIEvent, source string) common.DPIEvent {
+	if event.RawData == nil {
+		event.RawData = make(map[string]interface{})
+	}
+	if source != "" {
+		event.RawData["source"] = source
+	}
+	if m.nodeName != "" {
+		event.RawData["node_name"] = m.nodeName
+	}
+	return event
 }
 
 // updateFlowStats updates flow statistics based on an event
@@ -1035,4 +1050,3 @@ func isImportantProtocol(proto string) bool {
 
 	return importantProtocols[proto]
 }
-

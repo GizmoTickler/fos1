@@ -11,50 +11,52 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
+	"github.com/fsnotify/fsnotify"
 )
+
+const defaultSuricataEvePath = "/var/log/suricata/eve.json"
 
 // SuricataConnector integrates Suricata with Cilium
 type SuricataConnector struct {
 	// Configuration
-	evePath        string
-	rulesetPath    string
-	listPath       string
-	mode           string // "ids" or "ips"
-	ciliumClient   cilium.CiliumClient
-	networkCtrl    *cilium.NetworkController
+	evePath      string
+	rulesetPath  string
+	listPath     string
+	mode         string // "ids" or "ips"
+	ciliumClient cilium.CiliumClient
+	networkCtrl  *cilium.NetworkController
 
 	// State
-	watcher        *fsnotify.Watcher
-	alertRules     map[string]*cilium.CiliumPolicy
-	ipLists        map[string][]string
+	watcher    *fsnotify.Watcher
+	alertRules map[string]*cilium.CiliumPolicy
+	ipLists    map[string][]string
 
 	// Event handling
-	eventChan      chan map[string]interface{}
+	eventChan chan map[string]interface{}
 
 	// Locking
-	mu             sync.RWMutex
+	mu sync.RWMutex
 
 	// Control
-	ctx            context.Context
-	cancel         context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // SuricataOptions configures the Suricata connector
 type SuricataOptions struct {
-	EvePath        string
-	RulesetPath    string
-	ListPath       string
-	Mode           string // "ids" or "ips"
-	CiliumClient   cilium.CiliumClient
+	EvePath      string
+	RulesetPath  string
+	ListPath     string
+	Mode         string // "ids" or "ips"
+	CiliumClient cilium.CiliumClient
 }
 
 // NewSuricataConnector creates a new Suricata connector
 func NewSuricataConnector(opts SuricataOptions) (*SuricataConnector, error) {
 	if opts.EvePath == "" {
-		opts.EvePath = "/var/log/suricata/eve.json"
+		opts.EvePath = defaultSuricataEvePath
 	}
 
 	if opts.RulesetPath == "" {
@@ -102,10 +104,14 @@ func NewSuricataConnector(opts SuricataOptions) (*SuricataConnector, error) {
 
 // Start starts the Suricata connector
 func (c *SuricataConnector) Start() error {
+	if err := validateSuricataEvePath(c.evePath); err != nil {
+		return err
+	}
+
 	// Monitor the Eve file for new alerts
 	err := c.watcher.Add(c.evePath)
 	if err != nil {
-		return fmt.Errorf("failed to watch eve.json: %w", err)
+		return fmt.Errorf("failed to watch Suricata eve.json at %q: %w", c.evePath, err)
 	}
 
 	// Load IP lists
@@ -115,6 +121,28 @@ func (c *SuricataConnector) Start() error {
 
 	// Start processing events
 	go c.processEvents()
+
+	return nil
+}
+
+func validateSuricataEvePath(evePath string) error {
+	info, err := os.Stat(evePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			parent := filepath.Dir(evePath)
+			if _, parentErr := os.Stat(parent); parentErr == nil {
+				return fmt.Errorf("Suricata eve.json %q does not exist; expected the shared log mount to expose this file. Check the Suricata and dpi-manager volume mounts", evePath)
+			}
+
+			return fmt.Errorf("Suricata eve.json %q does not exist and parent directory %q is also missing; check the shared host log contract and mount paths", evePath, parent)
+		}
+
+		return fmt.Errorf("failed to stat Suricata eve.json %q: %w", evePath, err)
+	}
+
+	if info.IsDir() {
+		return fmt.Errorf("Suricata eve.json path %q is a directory; check the shared log mount configuration", evePath)
+	}
 
 	return nil
 }
@@ -428,12 +456,12 @@ func (c *SuricataConnector) GetMode() string {
 
 // SuricataStatus represents the status of Suricata
 type SuricataStatus struct {
-	Mode           string            // "ids" or "ips"
-	Running        bool              // Whether Suricata is running
-	RuleStats      map[string]int    // Statistics about loaded rules
-	AlertCount     int               // Number of alerts generated
-	BlockedCount   int               // Number of connections blocked (in IPS mode)
-	IPLists        map[string]int    // IP lists and their sizes
+	Mode         string         // "ids" or "ips"
+	Running      bool           // Whether Suricata is running
+	RuleStats    map[string]int // Statistics about loaded rules
+	AlertCount   int            // Number of alerts generated
+	BlockedCount int            // Number of connections blocked (in IPS mode)
+	IPLists      map[string]int // IP lists and their sizes
 }
 
 // Status returns the current status of Suricata
@@ -558,9 +586,9 @@ func (c *SuricataConnector) GetEvents(ctx context.Context) (<-chan common.DPIEve
 func (c *SuricataConnector) convertToDPIEvent(event map[string]interface{}) common.DPIEvent {
 	// Create a new DPI event
 	dpiEvent := common.DPIEvent{
-		Timestamp:   time.Now(),
-		EventType:   "alert",
-		RawData:     event,
+		Timestamp: time.Now(),
+		EventType: "alert",
+		RawData:   event,
 	}
 
 	// Extract alert information

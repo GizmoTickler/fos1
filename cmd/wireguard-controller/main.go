@@ -3,17 +3,20 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	wgcontroller "github.com/GizmoTickler/fos1/pkg/vpn/controller"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
-
-	_ "github.com/GizmoTickler/fos1/pkg/vpn/controller"
 )
 
 func main() {
@@ -48,20 +51,37 @@ func main() {
 		klog.Fatalf("Failed to create config: %v", err)
 	}
 
-	_, err = kubernetes.NewForConfig(config)
+	kubeClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		klog.Fatalf("Failed to create client: %v", err)
 	}
 
-	// Create informer factory
-	// In a real implementation, this would use a typed client and informer factory
-	// For this placeholder, we'll just log a message
-	klog.Info("Would create informer factory here")
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Failed to create dynamic client: %v", err)
+	}
 
-	// Create controller
-	// In a real implementation, this would use the informer factory to create the controller
-	// For this placeholder, we'll just log a message
-	klog.Info("Would create WireGuard controller here")
+	gvr := schema.GroupVersionResource{
+		Group:    "vpn.fos1.io",
+		Version:  "v1alpha1",
+		Resource: "wireguardinterfaces",
+	}
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, "", nil)
+	informer := factory.ForResource(gvr).Informer()
+
+	controller, err := wgcontroller.NewWireGuardController(
+		kubeClient,
+		informer,
+		&wgcontroller.Config{
+			ResyncPeriod: resyncPeriod,
+			Workers:      workers,
+			ConfigDir:    configDir,
+			WGBinary:     wgBinary,
+		},
+	)
+	if err != nil {
+		klog.Fatalf("Failed to create WireGuard controller: %v", err)
+	}
 	
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -76,12 +96,15 @@ func main() {
 		cancel()
 	}()
 
-	// Start the controller
-	// In a real implementation, this would start the controller
-	// For this placeholder, we'll just log a message
-	klog.Info("Would start WireGuard controller here")
+	klog.Info("Starting WireGuard controller")
+	go func() {
+		if err := controller.Run(ctx); err != nil && ctx.Err() == nil {
+			klog.Errorf("WireGuard controller exited with error: %v", err)
+			cancel()
+		}
+	}()
 
 	// Wait for context cancellation
 	<-ctx.Done()
-	klog.Info("Shutting down")
+	klog.Info(fmt.Sprintf("Shutting down"))
 }

@@ -10,16 +10,81 @@ data:
     network.host: 0.0.0.0
     discovery.type: single-node
     xpack.security.enabled: false
-    xpack.monitoring.enabled: true
-    xpack.monitoring.collection.enabled: true
     path.data: /usr/share/elasticsearch/data
     path.logs: /usr/share/elasticsearch/logs
     indices.memory.index_buffer_size: 30%
     indices.fielddata.cache.size: 30%
+    indices.lifecycle.poll_interval: 10m
     indices.query.bool.max_clause_count: 10240
     search.max_buckets: 100000
     thread_pool.write.queue_size: 1000
     thread_pool.search.queue_size: 1000
+    cluster.routing.allocation.disk.threshold_enabled: true
+    cluster.routing.allocation.disk.watermark.low: 80%
+    cluster.routing.allocation.disk.watermark.high: 90%
+    cluster.routing.allocation.disk.watermark.flood_stage: 95%
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-retention-bootstrap
+  namespace: monitoring
+data:
+  bootstrap-retention.sh: |
+    #!/bin/sh
+    set -eu
+
+    endpoint="http://127.0.0.1:9200"
+
+    until curl -fsS "${endpoint}/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do
+      echo "waiting for elasticsearch"
+      sleep 5
+    done
+
+    curl -fsS -X PUT "${endpoint}/_ilm/policy/fos1-log-retention-14d" \
+      -H "Content-Type: application/json" \
+      --data-binary @/bootstrap/fos1-log-retention-14d.json
+
+    curl -fsS -X PUT "${endpoint}/_index_template/fos1-log-retention-template" \
+      -H "Content-Type: application/json" \
+      --data-binary @/bootstrap/fos1-log-retention-template.json
+
+  fos1-log-retention-14d.json: |
+    {
+      "policy": {
+        "phases": {
+          "hot": {
+            "actions": {}
+          },
+          "delete": {
+            "min_age": "14d",
+            "actions": {
+              "delete": {}
+            }
+          }
+        }
+      }
+    }
+  fos1-log-retention-template.json: |
+    {
+      "index_patterns": [
+        "fos1-security-*",
+        "fos1-logs-*"
+      ],
+      "priority": 500,
+      "template": {
+        "settings": {
+          "index.lifecycle.name": "fos1-log-retention-14d",
+          "index.number_of_shards": 1,
+          "index.number_of_replicas": 0,
+          "index.refresh_interval": "10s"
+        }
+      },
+      "_meta": {
+        "description": "Single-node FOS1 log indices retain 14 days and avoid replica allocation on the baseline cluster."
+      }
+    }
 
 ---
 apiVersion: apps/v1
@@ -97,10 +162,30 @@ spec:
             port: 9200
           initialDelaySeconds: 60
           timeoutSeconds: 10
+      - name: retention-bootstrap
+        image: curlimages/curl:8.7.1
+        command:
+        - sh
+        - -c
+        - /bootstrap/bootstrap-retention.sh && tail -f /dev/null
+        resources:
+          limits:
+            cpu: 50m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        volumeMounts:
+        - name: retention-bootstrap
+          mountPath: /bootstrap
       volumes:
       - name: config
         configMap:
           name: elasticsearch-config
+      - name: retention-bootstrap
+        configMap:
+          name: elasticsearch-retention-bootstrap
+          defaultMode: 0755
   volumeClaimTemplates:
   - metadata:
       name: data

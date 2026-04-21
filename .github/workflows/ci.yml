@@ -29,134 +29,35 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
-      # Only run Go linting if there are Go files
-      - name: Check for Go files
-        id: check-go
-        run: |
-          if find . -name "*.go" | grep -q .; then
-            echo "::set-output name=has_go_files::true"
-          else
-            echo "::set-output name=has_go_files::false"
-          fi
 
       - name: Set up Go
-        if: steps.check-go.outputs.has_go_files == 'true'
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
 
       - name: Install golangci-lint
-        if: steps.check-go.outputs.has_go_files == 'true'
         run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.51.2
 
       - name: Run golangci-lint
-        if: steps.check-go.outputs.has_go_files == 'true'
         run: golangci-lint run ./...
 
-      # Check if manifests directory exists before running YAML lint
-      - name: Check for YAML manifests
-        id: check-yaml
-        run: |
-          if [ -d "manifests" ] && find manifests -name "*.yaml" -o -name "*.yml" | grep -q .; then
-            echo "::set-output name=has_yaml_files::true"
-          else
-            echo "::set-output name=has_yaml_files::false"
-          fi
-
       - name: YAML Lint
-        if: steps.check-yaml.outputs.has_yaml_files == 'true'
         uses: ibiqlik/action-yamllint@v3
         with:
           file_or_dir: manifests/
           config_file: .yamllint.yml
 
-  test:
-    name: Test
+  verify-mainline:
+    name: Verify Mainline
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-        
-      # Only run Go tests if there are Go files
-      - name: Check for Go files
-        id: check-go
-        run: |
-          if find . -name "*.go" | grep -q .; then
-            echo "::set-output name=has_go_files::true"
-          else
-            echo "::set-output name=has_go_files::false"
-          fi
 
       - name: Set up Go
-        if: steps.check-go.outputs.has_go_files == 'true'
         uses: actions/setup-go@v4
         with:
           go-version: '1.20'
 
-      - name: Run unit tests
-        if: steps.check-go.outputs.has_go_files == 'true'
-        run: go test -v ./...
-
-      - name: Upload coverage report
-        if: steps.check-go.outputs.has_go_files == 'true'
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.txt
-          fail_ci_if_error: false
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-        
-      # Only run Go build if there are Go files
-      - name: Check for Go files
-        id: check-go
-        run: |
-          if find . -name "*.go" | grep -q .; then
-            echo "::set-output name=has_go_files::true"
-          else
-            echo "::set-output name=has_go_files::false"
-          fi
-
-      - name: Set up Go
-        if: steps.check-go.outputs.has_go_files == 'true'
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.20'
-
-      - name: Build
-        if: steps.check-go.outputs.has_go_files == 'true'
-        run: go build -v ./...
-
-  validate-manifests:
-    name: Validate Kubernetes Manifests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      # Check if manifests directory exists and has YAML files
-      - name: Check for YAML manifests
-        id: check-yaml
-        run: |
-          if [ -d "manifests" ] && find manifests -name "*.yaml" -o -name "*.yml" | grep -q .; then
-            echo "::set-output name=has_yaml_files::true"
-          else
-            echo "::set-output name=has_yaml_files::false"
-          fi
-
-      - name: Set up kubeconform
-        if: steps.check-yaml.outputs.has_yaml_files == 'true'
-        run: |
-          wget https://github.com/yannh/kubeconform/releases/download/v0.6.2/kubeconform-linux-amd64.tar.gz
-          tar xf kubeconform-linux-amd64.tar.gz
-          sudo mv kubeconform /usr/local/bin/
-      
-      - name: Validate Kubernetes manifests
-        if: steps.check-yaml.outputs.has_yaml_files == 'true'
-        run: |
-          find manifests -name "*.yaml" -o -name "*.yml" | xargs kubeconform || true
+      - name: Run canonical Go verification
+        run: make verify-mainline

@@ -6,172 +6,287 @@ on:
     paths:
       - 'manifests/**'
       - '.github/workflows/test-bootstrap.yml'
+      - 'scripts/ci/**'
 
 jobs:
   bootstrap-test:
     name: Bootstrap Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      KIND_VERSION: v0.17.0
+      WORKLOAD_TIMEOUT: 240s
+      DPI_MANAGER_IMAGE: fos1-local/dpi-manager:ci
+      NTP_CONTROLLER_IMAGE: fos1-local/ntp-controller:ci
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Kubernetes
         run: |
-          # Install kubectl
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          set -euo pipefail
+
+          curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-          
-          # Install Kind
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.17.0/kind-linux-amd64
+
+          curl -fsSLo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
-          
-          # Create Kind cluster
-          cat > kind-config.yaml << EOF
+
+          cat > kind-config.yaml <<'EOF'
           kind: Cluster
           apiVersion: kind.x-k8s.io/v1alpha4
           nodes:
-          - role: control-plane
-          - role: worker
+            - role: control-plane
+            - role: worker
           networking:
             podSubnet: "10.244.0.0/16"
             serviceSubnet: "10.96.0.0/12"
           EOF
-          
+
           kind create cluster --config kind-config.yaml --wait 2m
           kubectl cluster-info
-          kubectl get nodes
+          kubectl get nodes -o wide
 
       - name: Install Kustomize
         run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          set -euo pipefail
+
+          curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
           sudo mv kustomize /usr/local/bin/
+
+      - name: Build local proof images
+        run: |
+          set -euo pipefail
+
+          docker build -t "${DPI_MANAGER_IMAGE}" -f Dockerfile .
+          docker build -t "${NTP_CONTROLLER_IMAGE}" -f pkg/ntp/Dockerfile .
+
+      - name: Load local proof images into Kind
+        run: |
+          set -euo pipefail
+
+          kind load docker-image "${DPI_MANAGER_IMAGE}" --name fos1-local-proof
+          kind load docker-image "${NTP_CONTROLLER_IMAGE}" --name fos1-local-proof
 
       - name: Create namespaces
         run: |
-          kubectl create namespace network
-          kubectl create namespace security
-          kubectl create namespace monitoring
+          set -euo pipefail
 
-      - name: Pre-process manifests for testing
+          for namespace in network security monitoring; do
+            kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f -
+          done
+
+      - name: Pre-process manifests for Kind
         run: |
-          # Create directories for modified manifests
+          set -euo pipefail
+
           mkdir -p test-manifests/base
-          
-          # Copy all base manifests
-          cp -r manifests/base/* test-manifests/base/
-          
-          # Modify host network settings for Kind compatibility
+          cp -r manifests/base/. test-manifests/base/
+
           find test-manifests -type f -name "*.yaml" -exec sed -i 's/hostNetwork: true/hostNetwork: false/g' {} \;
-          
-          # Disable privileged mode where not absolutely required
           find test-manifests -type f -name "*.yaml" -exec sed -i '/capabilities:/,/add:/s/NET_ADMIN//' {} \;
           find test-manifests -type f -name "*.yaml" -exec sed -i '/capabilities:/,/add:/s/NET_RAW//' {} \;
           find test-manifests -type f -name "*.yaml" -exec sed -i '/capabilities:/,/add:/s/SYS_TIME//' {} \;
-          
-          # Adjust interface names for container environment
-          find test-manifests -type f -name "*.yaml" -exec sed -i 's/interface: eth0/interface: eth0/g' {} \;
-          
-          # Create timestamp file to track deployment
-          date > deploy-start.txt
 
-      - name: Deploy Core Components
-        run: |
-          echo "Deploying Core Components..."
-          kubectl apply -k test-manifests/base/core || true
-          kubectl -n network get pods
-          
-          # Wait for pods to be created (they might not fully start due to permissions)
-          sleep 30
+          # Keep the Kind harness focused on the repository-owned NTP controller
+          # scrape path. Optional operator add-ons and the chrony daemonset are
+          # intentionally excluded from this proof slice.
+          cat > test-manifests/base/dns/kustomization.yaml <<'EOF'
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
 
-      - name: Deploy Network Components
-        run: |
-          echo "Deploying Network Components..."
-          kubectl apply -k test-manifests/base/network || true
-          kubectl -n network get pods
-          
-          # Wait for pods to be created
-          sleep 30
+          resources:
+            - crds/dnszone.yaml
+            - crds/mdnsreflection.yaml
+            - crds/dnsclient.yaml
+            - crds/dnsfilterlist.yaml
+            - crds/ptrzone.yaml
+          EOF
 
-      - name: Deploy DNS Services
-        run: |
-          echo "Deploying DNS Services..."
-          kubectl apply -k test-manifests/base/dns || true
-          kubectl -n network get pods
-          
-          # Wait for pods to be created
-          sleep 30
+          cat > test-manifests/base/dhcp/kustomization.yaml <<'EOF'
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
 
-      - name: Deploy DHCP Services
-        run: |
-          echo "Deploying DHCP Services..."
-          kubectl apply -k test-manifests/base/dhcp || true
-          kubectl -n network get pods
-          
-          # Wait for pods to be created
-          sleep 30
+          resources:
+            - crds/dhcpv4service.yaml
+            - crds/dhcpv6service.yaml
+          EOF
 
-      - name: Deploy Security Services
-        run: |
-          echo "Deploying Security Services..."
-          kubectl apply -k test-manifests/base/security || true
-          kubectl -n security get pods
-          
-          # Wait for pods to be created
-          sleep 30
+          cat > test-manifests/base/ntp/kustomization.yaml <<'EOF'
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
 
-      - name: Deploy Monitoring Services
-        run: |
-          echo "Deploying Monitoring Services..."
-          kubectl apply -k test-manifests/base/monitoring || true
-          kubectl -n monitoring get pods
-          
-          # Wait for pods to be created
-          sleep 30
+          namespace: network
 
-      - name: Summary Report
+          resources:
+            - ntp-crd.yaml
+            - ntp-controller.yaml
+            - service.yaml
+
+          commonLabels:
+            app.kubernetes.io/part-of: fos1
+            app.kubernetes.io/component: ntp
+            app.kubernetes.io/managed-by: kustomize
+          EOF
+
+          sed -i 's/--integration=true/--integration=false/' test-manifests/base/ntp/ntp-controller.yaml
+          sed -i "s|image: custom/ntp-controller:latest|image: ${NTP_CONTROLLER_IMAGE}|" test-manifests/base/ntp/ntp-controller.yaml
+          sed -i "s|imagePullPolicy: IfNotPresent|imagePullPolicy: Never|" test-manifests/base/ntp/ntp-controller.yaml
+          perl -0pi -e 's/zeek:\n(\s+)enabled: true/zeek:\n${1}enabled: false/' test-manifests/base/security/dpi-manager.yaml
+          sed -i "s|image: your-org/fos1-dpi-manager:latest|image: ${DPI_MANAGER_IMAGE}|" test-manifests/base/security/dpi-manager.yaml
+          sed -i "s|imagePullPolicy: Always|imagePullPolicy: Never|" test-manifests/base/security/dpi-manager.yaml
+
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > deploy-start.txt
+
+      - name: Render manifests
         run: |
+          set -euo pipefail
+
+          for component in core network dns dhcp ntp security monitoring; do
+            output_file="$(mktemp)"
+            kustomize build "test-manifests/base/${component}" > "${output_file}"
+            object_count="$(awk '/^kind:/ { count++ } END { print count + 0 }' "${output_file}")"
+            echo "Rendered ${component}: ${object_count} objects"
+            rm -f "${output_file}"
+          done
+
+      - name: Deploy core components
+        run: |
+          set -euo pipefail
+
+          kubectl apply -k test-manifests/base/core
+          bash scripts/ci/k8s-wait-for-readiness.sh network "${WORKLOAD_TIMEOUT}" true
+
+      - name: Deploy network components
+        run: |
+          set -euo pipefail
+
+          rendered="$(mktemp)"
+          kustomize build test-manifests/base/network > "${rendered}"
+          if grep -q '[^[:space:]]' "${rendered}"; then
+            kubectl apply -f "${rendered}"
+          else
+            echo "No network resources rendered; skipping apply."
+          fi
+          rm -f "${rendered}"
+
+      - name: Deploy DNS services
+        run: |
+          set -euo pipefail
+
+          kubectl apply -k test-manifests/base/dns
+          bash scripts/ci/k8s-wait-for-readiness.sh network "${WORKLOAD_TIMEOUT}" true
+
+      - name: Deploy DHCP services
+        run: |
+          set -euo pipefail
+
+          kubectl apply -k test-manifests/base/dhcp
+          bash scripts/ci/k8s-wait-for-readiness.sh network "${WORKLOAD_TIMEOUT}" true
+
+      - name: Deploy NTP controller proof slice
+        run: |
+          set -euo pipefail
+
+          kubectl apply -k test-manifests/base/ntp
+          bash scripts/ci/k8s-wait-for-readiness.sh network "${WORKLOAD_TIMEOUT}" true
+
+      - name: Deploy security services
+        run: |
+          set -euo pipefail
+
+          kubectl apply -k test-manifests/base/security
+          bash scripts/ci/k8s-wait-for-readiness.sh security "${WORKLOAD_TIMEOUT}" true
+
+      - name: Deploy monitoring services
+        run: |
+          set -euo pipefail
+
+          kubectl apply -k test-manifests/base/monitoring
+          for workload in deployment/prometheus daemonset/fluentd statefulset/elasticsearch; do
+            kubectl rollout status "${workload}" -n monitoring --timeout="${WORKLOAD_TIMEOUT}"
+          done
+
+      - name: Runtime proof checks
+        run: |
+          set -euo pipefail
+
+          for service in prometheus elasticsearch; do
+            endpoints="$(kubectl get endpoints "${service}" -n monitoring -o jsonpath='{.subsets[*].addresses[*].ip}')"
+            if [[ -z "${endpoints}" ]]; then
+              echo "Service ${service} in monitoring has no ready endpoints." >&2
+              exit 1
+            fi
+            echo "Service ${service} endpoints: ${endpoints}"
+          done
+
+          dpi_endpoints="$(kubectl get endpoints dpi-manager -n security -o jsonpath='{.subsets[*].addresses[*].ip}')"
+          if [[ -z "${dpi_endpoints}" ]]; then
+            echo "Service dpi-manager in security has no ready endpoints." >&2
+            exit 1
+          fi
+          echo "Service dpi-manager endpoints: ${dpi_endpoints}"
+
+          bash scripts/ci/prove-security-log-pipeline.sh
+          bash scripts/ci/prove-prometheus-scrapes.sh
+
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+
+          echo "=== FAILED WORKLOAD SNAPSHOT ==="
+          kubectl get pods -A -o wide
+          echo
+
+          echo "=== RECENT EVENTS ==="
+          kubectl get events -A --sort-by='.metadata.creationTimestamp' | tail -n 200
+          echo
+
+          echo "=== NON-READY POD DETAILS ==="
+          mapfile -t pods < <(kubectl get pods -A --no-headers | awk '$4 != "Running" && $4 != "Completed" {print $1 " " $2}')
+          if ((${#pods[@]} == 0)); then
+            echo "All pods are Running or Completed."
+            exit 0
+          fi
+
+          for pod in "${pods[@]}"; do
+            namespace="${pod%% *}"
+            name="${pod##* }"
+            echo "--- describe pod/${name} -n ${namespace} ---"
+            kubectl describe pod "${name}" -n "${namespace}"
+            echo "--- logs pod/${name} -n ${namespace} --all-containers --tail=100 ---"
+            if ! kubectl logs "${name}" -n "${namespace}" --all-containers --tail=100; then
+              echo "Unable to fetch logs for pod/${name} in namespace ${namespace}."
+            fi
+            echo
+          done
+
+      - name: Summary report
+        if: always()
+        run: |
+          set -euo pipefail
+
           echo "=== DEPLOYMENT SUMMARY ==="
           echo "Deployment started at: $(cat deploy-start.txt)"
-          echo "Deployment completed at: $(date)"
-          echo ""
-          
+          echo "Deployment completed at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo
+
           echo "=== NAMESPACES ==="
           kubectl get namespaces
-          echo ""
-          
-          echo "=== PODS STATUS ==="
+          echo
+
+          echo "=== WORKLOAD STATUS ==="
+          kubectl get deployments,daemonsets,statefulsets -A
+          echo
+
+          echo "=== POD STATUS ==="
           kubectl get pods -A
-          echo ""
-          
+          echo
+
           echo "=== SERVICES ==="
           kubectl get services -A
-          echo ""
-          
-          echo "=== CONFIGMAPS ==="
-          kubectl get configmaps -A | grep -v kube
-          echo ""
-          
-          echo "=== EVENTS ==="
-          kubectl get events --sort-by='.metadata.creationTimestamp' | tail -n 20
-          echo ""
-          
-          echo "=== POD PROBLEMS ==="
-          kubectl get pods -A | grep -v "Running" | grep -v "Completed" || echo "All pods are running or completed"
-          echo ""
-          
-          echo "=== BOOTSTRAP TEST SUMMARY ==="
-          TOTAL_PODS=$(kubectl get pods -A | grep -v NAMESPACE | wc -l)
-          RUNNING_PODS=$(kubectl get pods -A | grep Running | wc -l)
-          PROBLEM_PODS=$(($TOTAL_PODS - $RUNNING_PODS))
-          
-          echo "Total pods: $TOTAL_PODS"
-          echo "Running pods: $RUNNING_PODS"
-          echo "Problem pods: $PROBLEM_PODS"
-          
-          if [ $PROBLEM_PODS -gt 0 ]; then
-            echo "Some pods are not running. This is expected in this test environment due to permissions and network requirements."
-            echo "In a real Talos environment with proper permissions, these would start correctly."
-          fi
-          
-          echo "Bootstrap test completed successfully!"

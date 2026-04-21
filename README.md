@@ -4,13 +4,15 @@ A modern, container-based router and firewall distribution utilizing Talos Linux
 
 ## Current Status
 
-As of 2026-04-18, the repository is no longer a design-only scaffold. The main routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, and authentication paths are implemented, and the current `origin/main` snapshot verifies cleanly with:
+As of 2026-04-19, the repository is no longer a design-only scaffold. The main routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, and authentication paths are implemented. The repository-owned developer and CI verification contract is now centered on:
 
-- `git rebase origin/main` -> `HEAD is up to date.`
-- `go test ./...`
-- `go build ./...`
+- `make verify-mainline` for the canonical Go pre-merge gate
+- `.github/workflows/ci.yml` enforcing `make verify-mainline` on pushes to `main` and PRs targeting `main`
+- `.github/workflows/validate-manifests.yml` validating manifests on PRs without swallowing real `kubeconform` failures
 
-The remaining work is concentrated in legacy or secondary control paths that still contain placeholder behavior, especially security policy enforcement/controller consolidation, duplicate Cilium scaffolding cleanup, observability/event-correlation follow-through, and hardware/offload hardening.
+The owned observability baseline is now the pod-annotation scrape path documented in [docs/observability-architecture.md](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/docs/observability-architecture.md): `dpi-manager` pods are expected to expose `:8080/metrics`, and `ntp-controller` pods are expected to expose `:9559/metrics`. That is a repository-owned manifest contract, not proof that a live cluster is scraping those exporters end to end.
+
+The remaining work is concentrated in secondary runtime and ops hardening, especially event-correlation ingestion/sinks, broader observability-stack verification beyond the pod-annotation baseline, threat-intelligence depth, and hardware/platform hardening.
 
 ## Project Overview
 
@@ -54,6 +56,8 @@ Start with:
 - [docs/implementation-plan.md](docs/implementation-plan.md) for the verified implementation baseline
 - [Status.md](Status.md) for the current status snapshot and next steps
 - [docs/design/test_matrix.md](docs/design/test_matrix.md) for the current controller/package coverage map
+
+Before opening a PR, run `make verify-mainline`. If your change touches manifests or manifest-validation workflow behavior, also run the relevant manifest checks locally because CI will now enforce both the canonical Go gate and manifest validation in their respective workflows.
 
 ## Features
 

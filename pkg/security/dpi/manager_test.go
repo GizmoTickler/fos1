@@ -71,12 +71,14 @@ func (m *MockCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName s
 	return nil
 }
 
-func (m *MockCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error)              { return nil, nil }
-func (m *MockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) { return nil, nil }
-func (m *MockCiliumClient) AddRoute(route cilium.Route) error                                    { return nil }
-func (m *MockCiliumClient) DeleteRoute(route cilium.Route) error                                 { return nil }
-func (m *MockCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error                      { return nil }
-func (m *MockCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error                   { return nil }
+func (m *MockCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error) { return nil, nil }
+func (m *MockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) {
+	return nil, nil
+}
+func (m *MockCiliumClient) AddRoute(route cilium.Route) error                  { return nil }
+func (m *MockCiliumClient) DeleteRoute(route cilium.Route) error               { return nil }
+func (m *MockCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error    { return nil }
+func (m *MockCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error { return nil }
 
 // TestDPIManager_AddProfile tests the AddProfile method
 func TestDPIManager_AddProfile(t *testing.T) {
@@ -93,9 +95,9 @@ func TestDPIManager_AddProfile(t *testing.T) {
 
 	// Create a test profile
 	profile := &DPIProfile{
-		Name:        "test-profile",
-		Description: "Test profile",
-		Enabled:     true,
+		Name:            "test-profile",
+		Description:     "Test profile",
+		Enabled:         true,
 		InspectionDepth: 5,
 		Applications: []string{
 			"http",
@@ -301,6 +303,25 @@ func TestDPIManager_HandleAlertEvent(t *testing.T) {
 	}
 }
 
+func TestNewDPIManagerPropagatesNodeNameToPolicyPipeline(t *testing.T) {
+	mockClient := &MockCiliumClient{}
+
+	manager, err := NewDPIManager(DPIManagerOptions{
+		CiliumClient: mockClient,
+		NodeName:     "worker-b",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create DPI manager: %v", err)
+	}
+
+	if manager.GetPolicyPipeline() == nil {
+		t.Fatal("expected policy pipeline to be initialized")
+	}
+	if manager.GetPolicyPipeline().nodeName != "worker-b" {
+		t.Fatalf("policy pipeline nodeName = %q, want %q", manager.GetPolicyPipeline().nodeName, "worker-b")
+	}
+}
+
 // TestDPIManager_GetDetectedProtocols tests the GetDetectedProtocols method
 func TestDPIManager_GetDetectedProtocols(t *testing.T) {
 	// Create a mock Cilium client
@@ -355,9 +376,9 @@ func TestDPIManager_HandleDNSFlow(t *testing.T) {
 		Description: "DNS query for example.com",
 		SessionID:   "test-session",
 		RawData: map[string]interface{}{
-			"query":  "example.com",
-			"qtype":  "A",
-			"rcode":  "NOERROR",
+			"query":   "example.com",
+			"qtype":   "A",
+			"rcode":   "NOERROR",
 			"answers": "93.184.216.34",
 		},
 	}
@@ -380,8 +401,8 @@ func TestDPIManager_HandleDNSFlow(t *testing.T) {
 		Description: "DNS over TLS query",
 		SessionID:   "test-session-dot",
 		RawData: map[string]interface{}{
-			"query":  "example.org",
-			"qtype":  "A",
+			"query": "example.org",
+			"qtype": "A",
 		},
 	}
 

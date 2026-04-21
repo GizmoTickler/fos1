@@ -4,6 +4,15 @@
 
 This document outlines the comprehensive design for the Advanced Deep Packet Inspection (DPI) system, which serves as a core security component in our Kubernetes-based router/firewall architecture. The Advanced DPI System integrates multiple packet inspection technologies to provide application-level visibility, threat detection, and policy enforcement capabilities.
 
+## Current Repository-Owned Runtime Contract
+
+The active repository-owned deployment contract is node-local rather than central:
+
+- Suricata and Zeek sensors run as node-local collectors and write to shared host paths under `/var/log/fos1`
+- `dpi-manager` runs as a node-local `DaemonSet`, not a single central `Deployment`
+- each `dpi-manager` pod watches the local node's shared Suricata/Zeek log contract, exposes metrics on `:8080`, and emits node-aware policy/event metadata
+- the current Kind harness proves the repository-owned Prometheus scrape path for those `dpi-manager` pods; broader policy orchestration and advanced features below remain design-level unless explicitly called out elsewhere
+
 ## Design Goals
 
 1. **Comprehensive Application Detection**: Accurately identify applications and protocols at Layer 7
@@ -18,9 +27,9 @@ This document outlines the comprehensive design for the Advanced Deep Packet Ins
 ### Core Components
 
 1. **DPI Manager** (`pkg/security/dpi/manager.go`):
-   - Central orchestrator for DPI functionality
+   - Node-local orchestrator for DPI functionality on each node
    - Manages DPI profiles and flows
-   - Connects with DPI engines
+   - Connects with the local node's sensor log contract
    - Interfaces with Cilium policy engine
 
 2. **Engine Connectors**:
@@ -70,7 +79,7 @@ This document outlines the comprehensive design for the Advanced Deep Packet Ins
 
 ### DPI Manager
 
-The DPI Manager orchestrates all DPI functionality and serves as the central integration point:
+The DPI Manager orchestrates all DPI functionality and serves as the node-local integration point on each sensor node:
 
 ```go
 // DPIManager manages Deep Packet Inspection functionality
@@ -318,9 +327,9 @@ Detection methods:
 ## Kubernetes Integration
 
 1. **Deployment Model**:
-   - DPI manager deployed as a Deployment
+   - DPI manager deployed as a node-local `DaemonSet`
    - Engine connectors as DaemonSets on nodes
-   - Shared configuration via ConfigMaps
+   - Shared configuration via ConfigMaps plus shared host log paths under `/var/log/fos1`
    - Settings stored in CustomResources
 
 2. **Resource Requirements**:

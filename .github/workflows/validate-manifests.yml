@@ -6,6 +6,11 @@ on:
     paths:
       - 'manifests/**'
       - '.github/workflows/validate-manifests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'manifests/**'
+      - '.github/workflows/validate-manifests.yml'
 
 jobs:
   validate:
@@ -42,13 +47,13 @@ jobs:
       - name: Validate with Kubeconform
         run: |
           echo "Validating base manifests..."
-          kubeconform -summary -output json dist/manifests/base.yaml || true
-          
+          kubeconform -summary -output json dist/manifests/base.yaml
+
           echo "Validating dev overlay manifests..."
-          kubeconform -summary -output json dist/manifests/dev.yaml || true
-          
+          kubeconform -summary -output json dist/manifests/dev.yaml
+
           echo "Validating prod overlay manifests..."
-          kubeconform -summary -output json dist/manifests/prod.yaml || true
+          kubeconform -summary -output json dist/manifests/prod.yaml
 
       - name: Check for resource completeness
         run: |

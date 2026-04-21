@@ -199,8 +199,12 @@ func (c *DPIController) handleDPIPolicyDelete(key string) error {
 		return fmt.Errorf("invalid key %s: %w", key, err)
 	}
 	
-	// In a real implementation, we would delete the corresponding Cilium DPI configuration
-	
+	ctx := context.Background()
+	policyName := GetCiliumDPIPolicyName(namespace, name)
+	if err := c.ciliumClient.DeleteNetworkPolicy(ctx, policyName); err != nil {
+		return fmt.Errorf("failed to delete Cilium DPI policy %s: %w", policyName, err)
+	}
+
 	klog.Infof("Deleted Cilium DPI configuration for DPIPolicy %s in namespace %s", name, namespace)
 	return nil
 }
@@ -247,8 +251,8 @@ func (c *DPIController) handleDPIPolicyCreateOrUpdate(obj *unstructured.Unstruct
 	// Extract enforcement mode
 	enforcementMode, found, err := unstructured.NestedString(spec, "enforcementMode")
 	if err != nil || !found {
-		// Default to "log" if not specified
-		enforcementMode = "log"
+		// Default to "allow" if not specified
+		enforcementMode = "allow"
 	}
 	
 	// Extract target interfaces

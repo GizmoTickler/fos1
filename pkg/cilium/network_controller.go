@@ -14,6 +14,7 @@ type NetworkController struct {
 // NetworkCiliumClient represents the interface to Cilium's API for network operations
 type NetworkCiliumClient interface {
 	ApplyNetworkPolicy(ctx context.Context, policy *CiliumPolicy) error
+	DeleteNetworkPolicy(ctx context.Context, policyName string) error
 	CreateNAT(ctx context.Context, config *CiliumNATConfig) error
 	ConfigureVLANRouting(ctx context.Context, config *CiliumVLANRoutingConfig) error
 	ConfigureDPIIntegration(ctx context.Context, config *CiliumDPIIntegrationConfig) error
@@ -185,7 +186,7 @@ func (c *NetworkController) IntegrateDPI(ctx context.Context, appPolicies map[st
 	config := &CiliumDPIIntegrationConfig{
 		Enabled: true,
 		ApplicationsToMonitor: apps,
-		EnforcementMode: "log", // Default to log-only mode
+		EnforcementMode: "allow",
 	}
 
 	return c.ciliumClient.ConfigureDPIIntegration(ctx, config)

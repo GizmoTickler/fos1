@@ -129,7 +129,21 @@ spec:
         configMap:
           name: alertmanager-templates
       - name: data-volume
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: alertmanager-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-data
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
 
 ---
 apiVersion: v1

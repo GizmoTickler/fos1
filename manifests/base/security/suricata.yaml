@@ -165,7 +165,9 @@ spec:
       - name: lists-volume
         emptyDir: {}
       - name: logs-volume
-        emptyDir: {}
+        hostPath:
+          path: /var/log/fos1/suricata
+          type: DirectoryOrCreate
       - name: run-volume
         emptyDir: {}
       - name: lib-volume

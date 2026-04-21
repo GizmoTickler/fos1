@@ -13,32 +13,39 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
+	"github.com/fsnotify/fsnotify"
+)
+
+const (
+	defaultZeekLogsPath             = "/usr/local/zeek/logs/current"
+	defaultZeekKubernetesLogsPath   = "/var/log/zeek/current"
+	defaultZeekPolicyPath           = "/usr/local/zeek/share/zeek/policy"
+	defaultZeekKubernetesPolicyPath = "/zeek-policy"
 )
 
 // ZeekConnector integrates Zeek with Cilium and implements the ZeekConnectorInterface
 type ZeekConnector struct {
 	// Configuration
-	logsPath      string
-	policyPath    string
-	ciliumClient  cilium.CiliumClient
-	networkCtrl   *cilium.NetworkController
-	vlanAware     bool
-	vlans         map[int]VLANConfig
+	logsPath     string
+	policyPath   string
+	ciliumClient cilium.CiliumClient
+	networkCtrl  *cilium.NetworkController
+	vlanAware    bool
+	vlans        map[int]VLANConfig
 
 	// State
-	watcher       *fsnotify.Watcher
-	policies      map[string]*cilium.CiliumPolicy
-	protocolStats map[string]*ProtocolStats
+	watcher        *fsnotify.Watcher
+	policies       map[string]*cilium.CiliumPolicy
+	protocolStats  map[string]*ProtocolStats
 	applicationMap map[string]string // Maps service names to application names
 
 	// Locking
-	mu            sync.RWMutex
+	mu sync.RWMutex
 
 	// Event handling
-	eventChan     chan common.DPIEvent
+	eventChan chan common.DPIEvent
 
 	// Control
 	ctx           context.Context
@@ -58,14 +65,14 @@ type ZeekOptions struct {
 	Namespace      string // Kubernetes namespace
 
 	// VLAN configuration
-	VLANAware      bool              // Whether to process VLAN tags
-	VLANs          map[int]VLANConfig // VLAN configurations
+	VLANAware bool               // Whether to process VLAN tags
+	VLANs     map[int]VLANConfig // VLAN configurations
 
 	// TLS configuration
-	TLSEnabled     bool   // Whether to use TLS for communication
-	TLSCertPath    string // Path to TLS certificate
-	TLSKeyPath     string // Path to TLS key
-	TLSCAPath      string // Path to TLS CA certificate
+	TLSEnabled  bool   // Whether to use TLS for communication
+	TLSCertPath string // Path to TLS certificate
+	TLSKeyPath  string // Path to TLS key
+	TLSCAPath   string // Path to TLS CA certificate
 }
 
 // ProtocolStats contains statistics for a protocol
@@ -75,17 +82,17 @@ type ProtocolStats struct {
 	Packets     int64
 	Duration    int64
 	Hosts       map[string]bool
-	VLANs        map[int]int64 // Count of connections per VLAN
+	VLANs       map[int]int64 // Count of connections per VLAN
 	LastSeen    time.Time
 }
 
 // VLANConfig contains configuration for a VLAN
 type VLANConfig struct {
-	ID          int
-	Name        string
-	Subnet      string
-	DefaultPolicy string // "allow", "deny", or "restrict"
-	Applications []string // Allowed applications
+	ID            int
+	Name          string
+	Subnet        string
+	DefaultPolicy string   // "allow", "deny", or "restrict"
+	Applications  []string // Allowed applications
 }
 
 // NewZeekConnector creates a new Zeek connector
@@ -93,21 +100,17 @@ func NewZeekConnector(opts ZeekOptions) (*ZeekConnector, error) {
 	// Set default paths based on environment
 	if opts.LogsPath == "" {
 		if opts.KubernetesMode {
-			// In Kubernetes, logs are typically mounted at /zeek-logs
-			opts.LogsPath = "/zeek-logs/current"
+			opts.LogsPath = defaultZeekKubernetesLogsPath
 		} else {
-			// Default path for non-Kubernetes environments
-			opts.LogsPath = "/usr/local/zeek/logs/current"
+			opts.LogsPath = defaultZeekLogsPath
 		}
 	}
 
 	if opts.PolicyPath == "" {
 		if opts.KubernetesMode {
-			// In Kubernetes, policy path is typically mounted at /zeek-policy
-			opts.PolicyPath = "/zeek-policy"
+			opts.PolicyPath = defaultZeekKubernetesPolicyPath
 		} else {
-			// Default path for non-Kubernetes environments
-			opts.PolicyPath = "/usr/local/zeek/share/zeek/policy"
+			opts.PolicyPath = defaultZeekPolicyPath
 		}
 	}
 
@@ -123,20 +126,20 @@ func NewZeekConnector(opts ZeekOptions) (*ZeekConnector, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	connector := &ZeekConnector{
-		logsPath:      opts.LogsPath,
-		policyPath:    opts.PolicyPath,
-		ciliumClient:  opts.CiliumClient,
-		networkCtrl:   cilium.NewNetworkController(opts.CiliumClient),
-		vlanAware:     opts.VLANAware,
-		vlans:         opts.VLANs,
-		watcher:       watcher,
-		policies:      make(map[string]*cilium.CiliumPolicy),
-		protocolStats: make(map[string]*ProtocolStats),
+		logsPath:       opts.LogsPath,
+		policyPath:     opts.PolicyPath,
+		ciliumClient:   opts.CiliumClient,
+		networkCtrl:    cilium.NewNetworkController(opts.CiliumClient),
+		vlanAware:      opts.VLANAware,
+		vlans:          opts.VLANs,
+		watcher:        watcher,
+		policies:       make(map[string]*cilium.CiliumPolicy),
+		protocolStats:  make(map[string]*ProtocolStats),
 		applicationMap: initApplicationMap(),
-		eventChan:     make(chan common.DPIEvent, 1000),
-		ctx:           ctx,
-		cancel:        cancel,
-		startTime:     time.Now(),
+		eventChan:      make(chan common.DPIEvent, 1000),
+		ctx:            ctx,
+		cancel:         cancel,
+		startTime:      time.Now(),
 	}
 
 	return connector, nil
@@ -144,46 +147,40 @@ func NewZeekConnector(opts ZeekOptions) (*ZeekConnector, error) {
 
 // Start starts the Zeek connector
 func (c *ZeekConnector) Start() error {
-	// Ensure log directory exists
-	if _, err := os.Stat(c.logsPath); os.IsNotExist(err) {
-		fmt.Printf("Zeek logs directory %s does not exist, waiting for it to be created\n", c.logsPath)
-
-		// In Kubernetes, the directory might be created after we start
-		// Start a goroutine to wait for the directory
-		go c.waitForLogsDirectory()
-		return nil
+	if err := validateZeekLogsPath(c.logsPath); err != nil {
+		return err
 	}
 
-	// Watch the notice.log, conn.log, and http.log files
-	noticePath := filepath.Join(c.logsPath, "notice.log")
-	if err := c.watcher.Add(noticePath); err != nil {
-		fmt.Printf("Failed to watch notice.log: %v\n", err)
-	}
-
-	connPath := filepath.Join(c.logsPath, "conn.log")
-	if err := c.watcher.Add(connPath); err != nil {
-		fmt.Printf("Failed to watch conn.log: %v\n", err)
-	}
-
-	httpPath := filepath.Join(c.logsPath, "http.log")
-	if err := c.watcher.Add(httpPath); err != nil {
-		fmt.Printf("Failed to watch http.log: %v\n", err)
-	}
-
-	sslPath := filepath.Join(c.logsPath, "ssl.log")
-	if err := c.watcher.Add(sslPath); err != nil {
-		fmt.Printf("Failed to watch ssl.log: %v\n", err)
-	}
-
-	dnsPath := filepath.Join(c.logsPath, "dns.log")
-	if err := c.watcher.Add(dnsPath); err != nil {
-		fmt.Printf("Failed to watch dns.log: %v\n", err)
+	if err := c.watcher.Add(c.logsPath); err != nil {
+		return fmt.Errorf("failed to watch Zeek logs directory %q: %w", c.logsPath, err)
 	}
 
 	// Start processing events
 	go c.processEvents()
 
 	c.running = true
+	return nil
+}
+
+func validateZeekLogsPath(logsPath string) error {
+	info, err := os.Stat(logsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			parent := filepath.Dir(logsPath)
+			if _, parentErr := os.Stat(parent); parentErr == nil {
+				return fmt.Errorf("Zeek logs path %q does not exist; expected the shared log mount to expose this directory. Check the Zeek and dpi-manager volume mounts", logsPath)
+			}
+
+			return fmt.Errorf("Zeek logs path %q does not exist and parent directory %q is also missing; check the shared host log contract and mount paths", logsPath, parent)
+		}
+
+		return fmt.Errorf("failed to stat Zeek logs path %q: %w", logsPath, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("Zeek logs path %q is not a directory; check the shared log mount configuration", logsPath)
+	}
+
 	return nil
 }
 
@@ -854,12 +851,12 @@ func (c *ZeekConnector) processSSLLog(path string) {
 			Description: fmt.Sprintf("SSL/TLS %s connection to %s", version, serverName),
 			SessionID:   uid,
 			RawData: map[string]interface{}{
-				"version":      version,
-				"cipher":       cipher,
-				"server_name":  serverName,
-				"subject":      subject,
-				"issuer":       issuer,
-				"validation":   validationStatus,
+				"version":     version,
+				"cipher":      cipher,
+				"server_name": serverName,
+				"subject":     subject,
+				"issuer":      issuer,
+				"validation":  validationStatus,
 			},
 		}
 
@@ -967,7 +964,7 @@ func (c *ZeekConnector) processDNSLog(path string) {
 		// DNSCrypt typically uses port 443/tcp or 443/udp or 5353
 		isDNSCrypt := false
 		if (destPortNum == 443 || srcPortNum == 443 || destPortNum == 5353 || srcPortNum == 5353) &&
-		   (query == "-" || strings.Contains(query, "dnscrypt") || strings.Contains(query, "dns-crypt")) {
+			(query == "-" || strings.Contains(query, "dnscrypt") || strings.Contains(query, "dns-crypt")) {
 			isDNSCrypt = true
 			application = "dnscrypt"
 		}
@@ -975,7 +972,7 @@ func (c *ZeekConnector) processDNSLog(path string) {
 		// Check for DNS over HTTPS (DoH) - this is a heuristic since DoH is hard to detect from DNS logs alone
 		// DoH typically uses port 443 and may have specific patterns in queries
 		if destPortNum == 443 && !isDNSCrypt &&
-		   (strings.Contains(query, "doh") || strings.Contains(query, "dns-query")) {
+			(strings.Contains(query, "doh") || strings.Contains(query, "dns-query")) {
 			application = "dns-over-https"
 		}
 
@@ -1049,10 +1046,10 @@ func isSuspiciousDNSQuery(query, qtype string) bool {
 
 	// Check for unusual query types that might indicate tunneling
 	unusualTypes := map[string]bool{
-		"TXT": true,
-		"NULL": true,
+		"TXT":   true,
+		"NULL":  true,
 		"CNAME": false, // Common, but can be used for tunneling
-		"MX": false,    // Common, but can be used for tunneling
+		"MX":    false, // Common, but can be used for tunneling
 	}
 
 	if isUnusual, exists := unusualTypes[qtype]; exists && isUnusual {
@@ -1195,15 +1192,15 @@ func (c *ZeekConnector) ExtractProtocols() (map[string]int, error) {
 	// If still no protocols have been detected, return some defaults
 	if len(result) == 0 {
 		return map[string]int{
-			"http":          0,
-			"https":         0,
-			"ssh":           0,
-			"dns":           0,
-			"dns-over-tls":  0,
+			"http":           0,
+			"https":          0,
+			"ssh":            0,
+			"dns":            0,
+			"dns-over-tls":   0,
 			"dns-over-https": 0,
-			"dnscrypt":      0,
-			"mqtt":          0,
-			"ftp":           0,
+			"dnscrypt":       0,
+			"mqtt":           0,
+			"ftp":            0,
 		}, nil
 	}
 
@@ -1334,11 +1331,11 @@ func (c *ZeekConnector) Status() (common.ZeekStatus, error) {
 	defer c.mu.RUnlock()
 
 	status := common.ZeekStatus{
-		Running:      true, // If this function is called, the connector is running
-		Uptime:       time.Since(c.startTime),
+		Running:       true, // If this function is called, the connector is running
+		Uptime:        time.Since(c.startTime),
 		LogsProcessed: c.logsProcessed,
-		LastError:    c.lastError,
-		Version:      "Zeek Connector v1.0", // In a real implementation, would get from Zeek
+		LastError:     c.lastError,
+		Version:       "Zeek Connector v1.0", // In a real implementation, would get from Zeek
 	}
 
 	return status, nil
@@ -1362,115 +1359,115 @@ func (c *ZeekConnector) GetPolicyPath() string {
 func categorizeApplication(app string) string {
 	categories := map[string]string{
 		// Web applications
-		"http":     "web",
-		"https":    "web",
+		"http":  "web",
+		"https": "web",
 
 		// Email applications
-		"smtp":     "email",
-		"pop3":     "email",
-		"imap":     "email",
-		"email":    "email",
+		"smtp":  "email",
+		"pop3":  "email",
+		"imap":  "email",
+		"email": "email",
 
 		// File transfer
-		"ftp":      "file-transfer",
-		"sftp":     "file-transfer",
-		"scp":      "file-transfer",
+		"ftp":           "file-transfer",
+		"sftp":          "file-transfer",
+		"scp":           "file-transfer",
 		"file-transfer": "file-transfer",
 
 		// Remote access
-		"ssh":      "remote-access",
-		"rdp":      "remote-access",
-		"telnet":   "remote-access",
-		"vnc":      "remote-access",
+		"ssh":           "remote-access",
+		"rdp":           "remote-access",
+		"telnet":        "remote-access",
+		"vnc":           "remote-access",
 		"remote-access": "remote-access",
 
 		// Streaming services
-		"rtmp":     "streaming",
-		"rtsp":     "streaming",
-		"rtp":      "streaming",
-		"streaming": "streaming",
-		"netflix":  "streaming",
-		"youtube":  "streaming",
-		"spotify":  "streaming",
-		"hulu":     "streaming",
-		"disney-plus": "streaming",
-		"amazon-video": "streaming",
-		"hbo-max":  "streaming",
-		"twitch":   "streaming",
-		"apple-tv": "streaming",
-		"peacock":  "streaming",
+		"rtmp":           "streaming",
+		"rtsp":           "streaming",
+		"rtp":            "streaming",
+		"streaming":      "streaming",
+		"netflix":        "streaming",
+		"youtube":        "streaming",
+		"spotify":        "streaming",
+		"hulu":           "streaming",
+		"disney-plus":    "streaming",
+		"amazon-video":   "streaming",
+		"hbo-max":        "streaming",
+		"twitch":         "streaming",
+		"apple-tv":       "streaming",
+		"peacock":        "streaming",
 		"paramount-plus": "streaming",
-		"tubi":     "streaming",
-		"crunchyroll": "streaming",
+		"tubi":           "streaming",
+		"crunchyroll":    "streaming",
 
 		// Video conferencing
-		"zoom":     "video-conferencing",
-		"ms-teams": "video-conferencing",
-		"google-meet": "video-conferencing",
-		"webex":    "video-conferencing",
+		"zoom":               "video-conferencing",
+		"ms-teams":           "video-conferencing",
+		"google-meet":        "video-conferencing",
+		"webex":              "video-conferencing",
 		"video-conferencing": "video-conferencing",
 
 		// Social media
-		"facebook": "social-media",
-		"instagram": "social-media",
-		"twitter":  "social-media",
-		"tiktok":   "social-media",
-		"snapchat": "social-media",
-		"pinterest": "social-media",
-		"reddit":   "social-media",
+		"facebook":     "social-media",
+		"instagram":    "social-media",
+		"twitter":      "social-media",
+		"tiktok":       "social-media",
+		"snapchat":     "social-media",
+		"pinterest":    "social-media",
+		"reddit":       "social-media",
 		"social-media": "social-media",
 
 		// Gaming
-		"steam":    "gaming",
-		"epic-games": "gaming",
-		"xbox-live": "gaming",
+		"steam":               "gaming",
+		"epic-games":          "gaming",
+		"xbox-live":           "gaming",
 		"playstation-network": "gaming",
-		"nintendo": "gaming",
-		"roblox":   "gaming",
-		"minecraft": "gaming",
-		"gaming":   "gaming",
+		"nintendo":            "gaming",
+		"roblox":              "gaming",
+		"minecraft":           "gaming",
+		"gaming":              "gaming",
 
 		// Messaging
-		"xmpp":     "messaging",
-		"sip":      "voip",
-		"slack":    "messaging",
-		"discord":  "messaging",
+		"xmpp":      "messaging",
+		"sip":       "voip",
+		"slack":     "messaging",
+		"discord":   "messaging",
 		"messaging": "messaging",
-		"voip":     "voip",
+		"voip":      "voip",
 
 		// IoT
-		"mqtt":     "iot",
-		"coap":     "iot",
-		"modbus":   "iot",
-		"iot":      "iot",
-		"amazon-echo": "iot",
-		"google-home": "iot",
-		"nest":     "iot",
-		"ring":     "iot",
-		"philips-hue": "iot",
-		"sonos":    "iot",
-		"roku":     "iot",
-		"chromecast": "iot",
-		"smart-tv": "iot",
-		"samsung-tv": "iot",
-		"lg-tv":    "iot",
-		"vizio-tv": "iot",
-		"smart-plug": "iot",
-		"smart-bulb": "iot",
-		"smart-lock": "iot",
+		"mqtt":             "iot",
+		"coap":             "iot",
+		"modbus":           "iot",
+		"iot":              "iot",
+		"amazon-echo":      "iot",
+		"google-home":      "iot",
+		"nest":             "iot",
+		"ring":             "iot",
+		"philips-hue":      "iot",
+		"sonos":            "iot",
+		"roku":             "iot",
+		"chromecast":       "iot",
+		"smart-tv":         "iot",
+		"samsung-tv":       "iot",
+		"lg-tv":            "iot",
+		"vizio-tv":         "iot",
+		"smart-plug":       "iot",
+		"smart-bulb":       "iot",
+		"smart-lock":       "iot",
 		"smart-thermostat": "iot",
-		"smart-doorbell": "iot",
-		"smart-camera": "iot",
-		"smart-speaker": "iot",
+		"smart-doorbell":   "iot",
+		"smart-camera":     "iot",
+		"smart-speaker":    "iot",
 
 		// Network services
-		"dns":      "network-service",
-		"dnscrypt": "network-service",
-		"dns-over-tls": "network-service",
-		"dns-over-https": "network-service",
-		"dhcp":     "network-service",
-		"ntp":      "network-service",
-		"snmp":     "network-service",
+		"dns":             "network-service",
+		"dnscrypt":        "network-service",
+		"dns-over-tls":    "network-service",
+		"dns-over-https":  "network-service",
+		"dhcp":            "network-service",
+		"ntp":             "network-service",
+		"snmp":            "network-service",
 		"network-service": "network-service",
 
 		// Databases
@@ -1481,12 +1478,12 @@ func categorizeApplication(app string) string {
 		"database": "database",
 
 		// Productivity
-		"office365": "productivity",
-		"google-docs": "productivity",
-		"dropbox":  "productivity",
-		"box":      "productivity",
-		"onedrive": "productivity",
-		"sharepoint": "productivity",
+		"office365":    "productivity",
+		"google-docs":  "productivity",
+		"dropbox":      "productivity",
+		"box":          "productivity",
+		"onedrive":     "productivity",
+		"sharepoint":   "productivity",
 		"productivity": "productivity",
 	}
 
@@ -1542,126 +1539,126 @@ func (c *ZeekConnector) waitForLogsDirectory() {
 func initApplicationMap() map[string]string {
 	return map[string]string{
 		// Web applications
-		"http":       "http",
-		"https":      "https",
-		"ssl":        "https",
-		"http/2":     "http",
+		"http":   "http",
+		"https":  "https",
+		"ssl":    "https",
+		"http/2": "http",
 
 		// Email applications
-		"smtp":       "email",
-		"pop3":       "email",
-		"imap":       "email",
+		"smtp": "email",
+		"pop3": "email",
+		"imap": "email",
 
 		// File transfer
-		"ftp":        "file-transfer",
-		"sftp":       "file-transfer",
-		"scp":        "file-transfer",
+		"ftp":  "file-transfer",
+		"sftp": "file-transfer",
+		"scp":  "file-transfer",
 
 		// Remote access
-		"ssh":        "remote-access",
-		"rdp":        "remote-access",
-		"telnet":     "remote-access",
-		"vnc":        "remote-access",
+		"ssh":    "remote-access",
+		"rdp":    "remote-access",
+		"telnet": "remote-access",
+		"vnc":    "remote-access",
 
 		// Streaming
-		"rtmp":       "streaming",
-		"rtsp":       "streaming",
-		"rtp":        "streaming",
-		"netflix":    "netflix",
-		"youtube":    "youtube",
-		"spotify":    "spotify",
-		"hulu":       "hulu",
-		"disney-plus": "disney-plus",
-		"amazon-video": "amazon-video",
-		"hbo-max":    "hbo-max",
-		"twitch":     "twitch",
-		"apple-tv":   "apple-tv",
-		"peacock":    "peacock",
+		"rtmp":           "streaming",
+		"rtsp":           "streaming",
+		"rtp":            "streaming",
+		"netflix":        "netflix",
+		"youtube":        "youtube",
+		"spotify":        "spotify",
+		"hulu":           "hulu",
+		"disney-plus":    "disney-plus",
+		"amazon-video":   "amazon-video",
+		"hbo-max":        "hbo-max",
+		"twitch":         "twitch",
+		"apple-tv":       "apple-tv",
+		"peacock":        "peacock",
 		"paramount-plus": "paramount-plus",
-		"tubi":       "tubi",
-		"crunchyroll": "crunchyroll",
+		"tubi":           "tubi",
+		"crunchyroll":    "crunchyroll",
 
 		// Video conferencing
-		"zoom":       "zoom",
-		"ms-teams":   "ms-teams",
+		"zoom":        "zoom",
+		"ms-teams":    "ms-teams",
 		"google-meet": "google-meet",
-		"webex":      "webex",
-		"slack":      "slack",
-		"discord":    "discord",
+		"webex":       "webex",
+		"slack":       "slack",
+		"discord":     "discord",
 
 		// Social media
-		"facebook":   "facebook",
-		"instagram":  "instagram",
-		"twitter":    "twitter",
-		"tiktok":     "tiktok",
-		"snapchat":   "snapchat",
-		"pinterest":  "pinterest",
-		"reddit":     "reddit",
+		"facebook":  "facebook",
+		"instagram": "instagram",
+		"twitter":   "twitter",
+		"tiktok":    "tiktok",
+		"snapchat":  "snapchat",
+		"pinterest": "pinterest",
+		"reddit":    "reddit",
 
 		// Gaming
-		"steam":      "steam",
-		"epic-games": "epic-games",
-		"xbox-live":  "xbox-live",
+		"steam":               "steam",
+		"epic-games":          "epic-games",
+		"xbox-live":           "xbox-live",
 		"playstation-network": "playstation-network",
-		"nintendo":   "nintendo",
-		"roblox":     "roblox",
-		"minecraft":  "minecraft",
+		"nintendo":            "nintendo",
+		"roblox":              "roblox",
+		"minecraft":           "minecraft",
 
 		// Messaging
-		"xmpp":       "messaging",
-		"sip":        "voip",
+		"xmpp": "messaging",
+		"sip":  "voip",
 
 		// IoT protocols
-		"mqtt":       "iot",
-		"mqtt-sn":    "iot",
-		"coap":       "iot",
-		"amqp":       "iot",
-		"zigbee":     "iot",
-		"zwave":      "iot",
-		"thread":     "iot",
-		"bacnet":     "iot",
-		"modbus":     "iot",
-		"knx":        "iot",
-		"lora":       "iot",
-		"sigfox":     "iot",
-		"weave":      "iot",
-		"homekit":    "iot",
+		"mqtt":    "iot",
+		"mqtt-sn": "iot",
+		"coap":    "iot",
+		"amqp":    "iot",
+		"zigbee":  "iot",
+		"zwave":   "iot",
+		"thread":  "iot",
+		"bacnet":  "iot",
+		"modbus":  "iot",
+		"knx":     "iot",
+		"lora":    "iot",
+		"sigfox":  "iot",
+		"weave":   "iot",
+		"homekit": "iot",
 
 		// IoT devices
-		"amazon-echo": "amazon-echo",
-		"google-home": "google-home",
-		"nest":       "nest",
-		"ring":       "ring",
-		"philips-hue": "philips-hue",
-		"sonos":      "sonos",
-		"roku":       "roku",
-		"chromecast": "chromecast",
-		"smart-tv":   "smart-tv",
-		"samsung-tv": "samsung-tv",
-		"lg-tv":      "lg-tv",
-		"vizio-tv":   "vizio-tv",
-		"smart-plug": "smart-plug",
-		"smart-bulb": "smart-bulb",
-		"smart-lock": "smart-lock",
+		"amazon-echo":      "amazon-echo",
+		"google-home":      "google-home",
+		"nest":             "nest",
+		"ring":             "ring",
+		"philips-hue":      "philips-hue",
+		"sonos":            "sonos",
+		"roku":             "roku",
+		"chromecast":       "chromecast",
+		"smart-tv":         "smart-tv",
+		"samsung-tv":       "samsung-tv",
+		"lg-tv":            "lg-tv",
+		"vizio-tv":         "vizio-tv",
+		"smart-plug":       "smart-plug",
+		"smart-bulb":       "smart-bulb",
+		"smart-lock":       "smart-lock",
 		"smart-thermostat": "smart-thermostat",
-		"smart-doorbell": "smart-doorbell",
-		"smart-camera": "smart-camera",
-		"smart-speaker": "smart-speaker",
+		"smart-doorbell":   "smart-doorbell",
+		"smart-camera":     "smart-camera",
+		"smart-speaker":    "smart-speaker",
 
 		// Network services
-		"dns":        "network-service",
-		"dnscrypt":   "network-service",
-		"dns-over-tls": "network-service",
+		"dns":            "network-service",
+		"dnscrypt":       "network-service",
+		"dns-over-tls":   "network-service",
 		"dns-over-https": "network-service",
-		"dhcp":       "network-service",
-		"ntp":        "network-service",
-		"snmp":       "network-service",
+		"dhcp":           "network-service",
+		"ntp":            "network-service",
+		"snmp":           "network-service",
 
 		// Databases
-		"mysql":      "database",
-		"postgres":   "database",
-		"mongodb":    "database",
-		"redis":      "database",
+		"mysql":    "database",
+		"postgres": "database",
+		"mongodb":  "database",
+		"redis":    "database",
 	}
 }
 
@@ -1670,50 +1667,50 @@ func determineApplicationByPort(port int, protocol string) string {
 	// Common port to application mappings
 	portMap := map[int]string{
 		// Web
-		80:    "http",
-		443:   "https",
-		8080:  "http",
-		8443:  "https",
+		80:   "http",
+		443:  "https",
+		8080: "http",
+		8443: "https",
 
 		// Email
-		25:    "smtp",
-		587:   "smtp",
-		465:   "smtp",
-		110:   "pop3",
-		995:   "pop3",
-		143:   "imap",
-		993:   "imap",
+		25:  "smtp",
+		587: "smtp",
+		465: "smtp",
+		110: "pop3",
+		995: "pop3",
+		143: "imap",
+		993: "imap",
 
 		// File transfer
-		21:    "ftp",
-		22:    "ssh",  // SSH/SFTP
+		21: "ftp",
+		22: "ssh", // SSH/SFTP
 
 		// Remote access
-		3389:  "rdp",
-		23:    "telnet",
-		5900:  "vnc",
+		3389: "rdp",
+		23:   "telnet",
+		5900: "vnc",
 
 		// Streaming
-		1935:  "rtmp",
-		554:   "rtsp",
+		1935: "rtmp",
+		554:  "rtsp",
 
 		// Messaging
-		5222:  "xmpp",
-		5060:  "sip",
-		5061:  "sip",
+		5222: "xmpp",
+		5060: "sip",
+		5061: "sip",
 
 		// IoT
-		1883:  "mqtt",
-		8883:  "mqtt",
-		5683:  "coap",
-		502:   "modbus",
+		1883: "mqtt",
+		8883: "mqtt",
+		5683: "coap",
+		502:  "modbus",
 
 		// Network services
-		53:    "dns",
-		67:    "dhcp",
-		68:    "dhcp",
-		123:   "ntp",
-		161:   "snmp",
+		53:  "dns",
+		67:  "dhcp",
+		68:  "dhcp",
+		123: "ntp",
+		161: "snmp",
 
 		// Databases
 		3306:  "mysql",

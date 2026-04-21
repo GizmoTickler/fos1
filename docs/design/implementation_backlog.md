@@ -575,6 +575,248 @@ Engineer E:
 Shared stabilization:
 - ticket 20 (should begin after at least milestones 1-3 are complete to have meaningful reconciliation paths to test)
 
+## Sprint 29: Runtime Depth And Post-Baseline Hardening
+
+This sprint continues from the verified `origin/main` state after tickets 1-28 plus the post-ticket-20 convergence sprint and the ops follow-through. The owned Kind harness now proves the DPI/NTP pod-annotation scrape path plus a deterministic Suricata canary into Elasticsearch with `fos1-log-retention-14d` ILM/template attachment. Sprint 29 broadens proof beyond the current canary/presence slice, closes out advertised-but-unshipped enforcement and auth surfaces, and raises test depth on historically thin packages.
+
+Fresh baseline expected before this sprint:
+- in-flight event-correlator runtime branch (`cmd/event-correlator/` plus `pkg/security/ids/correlation/{runtime,config,processor,probes,deployment_paths}.go` and the associated harness) is landed on `origin/main`
+- `make verify-mainline` passes on that state
+- the Kind bootstrap harness already proves DPI/NTP pod scraping and the Suricata canary plus ILM/template attachment
+
+Scope intentionally excludes:
+- eBPF program compilation and loading for XDP or TC (needs its own dedicated sprint)
+- HA/clustering and controller state replication
+- REST or gRPC management API server
+- upstream threat-intelligence feed ingestion
+
+Critical path:
+- 29 -> 30 -> 31 -> (32, 33, 34, 35 in parallel) -> 36 -> 37
+
+### P0
+
+#### Ticket 29: Land The Event-Correlator Runtime And Prove One Event End To End
+Status:
+- open
+
+Scope:
+- the in-flight branch adds `cmd/event-correlator/main.go`, `build/event-correlator/Dockerfile`, and a file-contract runtime at `pkg/security/ids/correlation/{runtime,config,processor,probes,deployment_paths}.go`
+- the controller already mounts source/sink parent directories via hostPath and sets `Phase=Running` only when the Deployment reports ready replicas, but no repo path proves that a real event flows source -> correlator -> sink
+- extend the Kind harness so it emits a deterministic canary event into the configured `spec.source.path`, asserts the sink produces the correlated JSON, and asserts the runtime `/ready` endpoint returns 200
+- keep the runtime file-only and intentionally small; do not add broker/broker-less transports in this ticket
+
+Primary areas:
+- `cmd/event-correlator/main.go`
+- `pkg/security/ids/correlation/`
+- `build/event-correlator/Dockerfile`
+- `.github/workflows/test-bootstrap.yml`
+- `scripts/ci/`
+- `docs/observability-architecture.md`
+
+Acceptance:
+- Kind harness writes one deterministic input event and asserts the correlated output lands in the configured sink
+- controller status still only advances to `Running` on real Deployment readiness, not on ConfigMap/Service reconciliation alone
+- tests cover runtime config validation (missing `source.path`, unsupported sink type, disallowed host path prefix)
+- docs stop describing event correlation as "controller-only" once the runtime proof exists
+
+#### Ticket 30: Exercise Elasticsearch Retention And Rollover Beyond Bootstrap Presence
+Status:
+- open
+
+Scope:
+- today the harness proves `fos1-log-retention-14d` ILM/template attachment and a single canary document landing in `fos1-security-*`, but it does not prove rollover or aged-index deletion
+- add a harness step that either writes enough canary documents to force at least one ILM rollover, or installs an accelerated ILM policy (hot-phase `max_age` in seconds, delete phase minutes) for the proof window
+- assert via Elasticsearch APIs that at least one index rolled and at least one aged index was deleted
+- document the accelerated-policy contract clearly so nobody confuses the proof envelope with the production `14d` retention target
+
+Primary areas:
+- `manifests/base/monitoring/elasticsearch.yaml`
+- `scripts/ci/prove-security-log-pipeline.sh`
+- `.github/workflows/test-bootstrap.yml`
+- `docs/observability-architecture.md`
+
+Acceptance:
+- harness proves at least one `fos1-security-*` rollover and one aged-index deletion under an owned policy
+- docs distinguish the accelerated CI policy from the production `14d`/`30Gi` baseline
+- no status claim asserts retention behavior as verified without pointing at the rollover/deletion proof step
+
+### P1
+
+#### Ticket 31: Prove DPI And Security-Log Ingestion Under Natural Traffic
+Status:
+- open
+
+Scope:
+- the current harness proof is a log-line canary injected near the sink, not a network event flowing through Suricata/Zeek
+- add a harness step that emits a deterministic network payload from a test pod (for example a curl matching an owned Suricata signature or a protocol pattern Zeek logs) and asserts:
+  - Suricata eve.json emits the expected event
+  - Fluentd ships it into `fos1-security-*`
+  - the DPI manager `:8080/metrics` counter for that event class advances
+- this is the proof that the sensor -> log -> metric pipeline works, not only that Elasticsearch accepts hand-written documents
+
+Primary areas:
+- `scripts/ci/`
+- `manifests/base/security/{suricata,zeek,dpi-manager}.yaml`
+- `.github/workflows/test-bootstrap.yml`
+- `docs/observability-architecture.md`
+
+Acceptance:
+- harness drives a real network payload, not a log-line injection, and proves event observability end to end through at least one sensor path
+- proof is deterministic and does not depend on external threat feeds
+- docs describe the natural-traffic proof explicitly and distinguish it from the existing canary
+
+#### Ticket 32: Validate Dashboard And Alert-Rule Queries Against Live Series
+Status:
+- open
+
+Scope:
+- `manifests/dashboards/*.json` and `manifests/base/monitoring/alert-rules.yaml` today reference metrics that may or may not exist in the owned exporter set
+- add a CI validator that extracts every PromQL expression from the owned dashboards and alert rules, runs each one against the Kind Prometheus, and either confirms a series exists or fails the check
+- for each failing expression, either wire the missing metric into an owned exporter, delete the panel/alert, or move the reference to a clearly labelled "target architecture only" section
+
+Primary areas:
+- `manifests/dashboards/`
+- `manifests/base/monitoring/alert-rules.yaml`
+- new validator under `scripts/ci/` or `tools/`
+- `.github/workflows/test-bootstrap.yml`
+- `docs/observability-architecture.md`
+
+Acceptance:
+- every PromQL expression in an owned dashboard or alert rule either returns a series in the Kind harness, is documented as target architecture, or is deleted
+- the validator runs in the existing bootstrap workflow
+- docs match the validated set of series
+
+#### Ticket 33: Translate `FilterPolicy` And `FirewallRule` CRDs Into Real Cilium Network Policies
+Status:
+- open
+
+Scope:
+- `Status.md` still reports `FilterPolicy`/`FirewallRule` as type-definitions-only with no enforcement
+- ADR-0001 says the authoritative enforcement path is Cilium, not nftables
+- implement the translator path so at least one `FilterPolicy` example reconciles into a real `CiliumNetworkPolicy` (or `CiliumClusterwideNetworkPolicy`) through the existing Cilium client
+- make the controller idempotent and statusful in the same shape as the NAT controller (spec-hash comparison, `Applied`/`Degraded`/`Invalid`/`Removed` conditions)
+- do not add an nftables backend in this ticket; if nftables is still named in docs as a supported backend, either remove the claim or mark it an explicit non-goal
+
+Primary areas:
+- `pkg/controllers/filter_policy_controller.go`
+- `pkg/apis/.../FilterPolicy` types
+- `pkg/cilium/network_controller.go`
+- `pkg/cilium/client.go`
+- example manifests under `manifests/examples/security/`
+- `docs/design/policy-based-filtering.md`
+
+Acceptance:
+- at least one `FilterPolicy` CR produces a real Cilium network policy through the active client
+- deletion removes the applied policy
+- controller is idempotent and statusful with the same condition set the NAT controller already uses
+- tests cover add/update/delete and reject invalid rule combinations
+- docs stop advertising an nftables backend, or explicitly label it a non-goal
+
+#### Ticket 34: Decide And Converge On SAML / RADIUS / Certificate Auth Providers
+Status:
+- open
+
+Scope:
+- `pkg/security/auth/manager.go` factory methods still return `<type> provider not implemented` for SAML, RADIUS, and certificate providers, even though local, LDAP, and OAuth are fully wired
+- pick one of two outcomes per provider and execute it:
+  - implement the provider against a real library (e.g. `crewjam/saml` for SAML) with the same construction/session semantics as the LDAP/OAuth providers, or
+  - remove the provider from the factory, the `AuthProvider` CRD enum, manifest examples, and docs so the repo stops advertising a capability it does not ship
+- no "not implemented" error string may remain in an active manager factory path
+
+Primary areas:
+- `pkg/security/auth/manager.go`
+- `pkg/security/auth/providers/`
+- `pkg/apis/.../AuthProvider` types
+- `manifests/examples/` auth examples
+- `docs/design/security-orchestration-system.md`
+
+Acceptance:
+- every `AuthProvider` kind accepted by the CRD maps to a real provider construction path
+- no "<x> provider not implemented" string remains in the active path
+- tests verify construction and at least one authentication flow for any newly implemented provider
+- docs and CRD enum agree with shipped behavior
+
+#### Ticket 35: Real NIC Capability Reporting And Packet-Capture Contract
+Status:
+- open
+
+Scope:
+- `pkg/hardware/nic/` and `pkg/hardware/capture/` still return placeholder zero-values or interface-only stubs, similar to the pre-ticket-26 offload-statistics state
+- apply the ticket-26 pattern: implement real ethtool / AF_PACKET / `SO_ATTACH_FILTER` queries where the running kernel/driver actually exposes them, and return explicit "unsupported on this driver/kernel" errors everywhere else
+- document which NIC families (Intel X540, X550, I225) are expected to return real data versus explicit unsupported on the current build matrix
+
+Primary areas:
+- `pkg/hardware/nic/`
+- `pkg/hardware/capture/`
+- `pkg/hardware/types/`
+- `docs/design/hardware-integration.md`
+
+Acceptance:
+- `GetStatistics` / capability queries no longer return placeholder zero-value success for NIC or capture paths
+- unsupported counters/features return explicit documented errors
+- tests cover at least one supported path and one explicitly unsupported path
+- docs explain supported versus unsupported NIC/driver paths for the current build matrix
+
+### P2
+
+#### Ticket 36: Raise Reconciliation-Style Coverage On Thin Packages
+Status:
+- open
+
+Scope:
+- `Status.md` §Testing reports ~30-35% coverage, concentrated in a few packages
+- target reconciliation-style tests (apply real spec -> read back applied state -> assert), not line-coverage chasing, on packages that currently lack them: `pkg/traffic/`, `pkg/security/policy/`, `pkg/hardware/wan/`, `pkg/network/ebpf/`
+- any package still at near-zero coverage after this ticket must be explicitly called out as an accepted gap in `docs/design/test_matrix.md`
+
+Primary areas:
+- `pkg/traffic/`
+- `pkg/security/policy/`
+- `pkg/hardware/wan/`
+- `pkg/network/ebpf/`
+- `docs/design/test_matrix.md`
+
+Acceptance:
+- each listed package has at least one reconciliation-style test that exercises a real apply plus readback
+- `go test -cover ./...` reports at least 50% on each listed package, or the gap is explicitly accepted in `test_matrix.md` with a reason
+- regressions in those packages produce loud, specific test failures
+
+#### Ticket 37: Truth-Up Status Docs After Sprint 29 Lands
+Status:
+- open
+
+Scope:
+- same truth-up pattern used after tickets 20 and 27: reconcile every status claim in `Status.md`, `docs/project-tracker.md`, `docs/implementation-plan.md`, and `docs/observability-architecture.md` against what Sprint 29 actually landed
+- no status claim may survive this ticket without pointing at a merged test, manifest, or harness step
+
+Primary areas:
+- `Status.md`
+- `docs/project-tracker.md`
+- `docs/implementation-plan.md`
+- `docs/observability-architecture.md`
+
+Acceptance:
+- no status claim in the listed docs is unsupported by a landed test, manifest, or harness step
+- all Sprint 29 ticket outcomes (including removed capabilities) are reflected
+- remaining non-goals after Sprint 29 are explicit
+
+## Suggested Parallel Ownership (Sprint 29)
+
+Engineer A:
+- ticket 29 first (event-correlator end-to-end proof), then ticket 31 (natural-traffic proof reuses the same Kind harness scaffolding)
+
+Engineer B:
+- ticket 30 first (Elasticsearch retention/rollover), then ticket 32 (dashboard/alert validator reuses Prometheus/Elasticsearch fixtures)
+
+Engineer C:
+- ticket 33 (`FilterPolicy` -> real Cilium policy; self-contained once 29 merges)
+
+Engineer D:
+- ticket 34 first (auth provider closeout), then ticket 35 (NIC/capture reporting)
+
+Shared stabilization:
+- ticket 36 runs alongside the ticket work once the touched packages stabilize
+- ticket 37 lands last, after 29-36 are merged
+
 ## Architect Review Questions
 
 1. Should CRD-backed route state remain the interim source of truth before direct Cilium datapath inspection exists?

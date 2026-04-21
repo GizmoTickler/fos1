@@ -6,6 +6,7 @@ This document is the original phase-by-phase tracker and is now primarily a hist
 Current verified status:
 - The repository is no longer design-only; tickets 1-20 in [docs/implementation-plan.md](docs/implementation-plan.md) are complete on `origin/main`.
 - Fresh verification on 2026-04-18 completed with `go test ./...` and `go build ./...`.
+- The observability manifests now encode a single-node durability baseline, including PVC-backed Prometheus/Grafana/Alertmanager state and Elasticsearch `14d` retention for `fos1-security-*` and `fos1-logs-*`, but that is still manifest-level ownership rather than live-cluster proof.
 - For the current implementation snapshot and next workstreams, use [Status.md](../Status.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
 ## Phase 1: Environment Setup & Documentation Structure (Weeks 1-2)
@@ -436,12 +437,12 @@ Current verified status:
 - Implemented Observability Stack
   - Created Alertmanager deployment and configuration
   - Implemented comprehensive alert rules for network, security, and system
-  - Deployed Elasticsearch, Fluentd, and Kibana (EFK) for logging
+  - Added Elasticsearch, Fluentd, and Kibana manifest templates for logging
   - Created Grafana dashboards for network, security, and system monitoring
   - Developed observability stack architecture documentation
   - Created dashboard user guide
   - Integrated Prometheus with Alertmanager
-  - Configured service discovery for all components
+  - Configured repository-owned manifest discovery and routing baselines for observability components
 - Implemented Traffic Management
   - Created QoS controller for QoSProfile CRD
   - Implemented traffic classification functionality

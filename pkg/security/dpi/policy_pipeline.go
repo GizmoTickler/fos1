@@ -3,6 +3,8 @@ package dpi
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +37,7 @@ type EnforcementAction struct {
 	Timestamp  time.Time
 	ActionType string // "created", "removed", "expired"
 	PolicyName string
+	NodeName   string
 	SourceIP   string
 	Rule       string
 	Detail     string
@@ -43,6 +46,7 @@ type EnforcementAction struct {
 // ActivePolicy tracks a policy that has been applied to the firewall.
 type ActivePolicy struct {
 	Name       string
+	NodeName   string
 	SourceIP   string
 	Policy     *cilium.CiliumPolicy
 	CreatedAt  time.Time
@@ -51,14 +55,15 @@ type ActivePolicy struct {
 	Rule       string // name of the PolicyRule that created this
 
 	// Enforcement audit metadata
-	TriggerEvent common.DPIEvent      // the event that triggered this policy
-	Actions      []EnforcementAction  // audit trail of enforcement actions
+	TriggerEvent common.DPIEvent     // the event that triggered this policy
+	Actions      []EnforcementAction // audit trail of enforcement actions
 }
 
 // PolicyPipeline processes DPI events and auto-generates firewall policies
 // based on configurable rules with severity thresholds, deduplication, and TTL expiry.
 type PolicyPipeline struct {
 	ciliumClient   cilium.CiliumClient
+	nodeName       string
 	rules          []PolicyRule
 	activePolicies map[string]*ActivePolicy // key: "rule:sourceIP"
 	recentEvents   map[string]time.Time     // deduplication tracking
@@ -66,9 +71,15 @@ type PolicyPipeline struct {
 }
 
 // NewPolicyPipeline creates a new DPI-to-firewall policy pipeline.
-func NewPolicyPipeline(client cilium.CiliumClient, rules []PolicyRule) *PolicyPipeline {
+func NewPolicyPipeline(client cilium.CiliumClient, rules []PolicyRule, nodeName ...string) *PolicyPipeline {
+	scopeNode := ""
+	if len(nodeName) > 0 {
+		scopeNode = nodeName[0]
+	}
+
 	return &PolicyPipeline{
 		ciliumClient:   client,
+		nodeName:       scopeNode,
 		rules:          rules,
 		activePolicies: make(map[string]*ActivePolicy),
 		recentEvents:   make(map[string]time.Time),
@@ -85,7 +96,7 @@ func (p *PolicyPipeline) ProcessEvent(ctx context.Context, event common.DPIEvent
 			continue
 		}
 
-		policyKey := fmt.Sprintf("%s:%s", rule.Name, event.SourceIP)
+		policyKey := p.policyKey(rule.Name, event.SourceIP)
 
 		// Check deduplication window
 		if rule.AggregateWindow > 0 {
@@ -146,17 +157,25 @@ func (p *PolicyPipeline) ruleMatches(rule PolicyRule, event common.DPIEvent) boo
 
 // createPolicy creates and applies a Cilium policy for the matched event.
 func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, event common.DPIEvent, policyKey string) error {
-	policyName := fmt.Sprintf("dpi-auto-%s-%s", rule.Name, sanitizePolicyName(event.SourceIP))
+	policyName := p.policyName(rule.Name, event.SourceIP)
+	description := fmt.Sprintf("Auto-generated from DPI event: %s (severity=%d)", event.Description, event.Severity)
+	if p.nodeName != "" {
+		description = fmt.Sprintf("%s on node %s", description, p.nodeName)
+	}
 
 	policy := &cilium.CiliumPolicy{
 		Name:        policyName,
-		Description: fmt.Sprintf("Auto-generated from DPI event: %s (severity=%d)", event.Description, event.Severity),
+		Description: description,
 		Labels: map[string]string{
 			"fos1.io/auto-generated": "true",
 			"fos1.io/dpi-rule":       rule.Name,
 			"fos1.io/source-ip":      event.SourceIP,
 			"fos1.io/action":         string(rule.Action),
 		},
+	}
+	if p.nodeName != "" {
+		policy.Labels["fos1.io/source-node"] = p.nodeName
+		policy.Labels["fos1.io/policy-scope"] = "node-local"
 	}
 
 	// Build CIDR for the source IP
@@ -192,6 +211,7 @@ func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, even
 	now := time.Now()
 	ap := &ActivePolicy{
 		Name:         policyName,
+		NodeName:     p.nodeName,
 		SourceIP:     event.SourceIP,
 		Policy:       policy,
 		CreatedAt:    now,
@@ -203,9 +223,10 @@ func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, even
 				Timestamp:  now,
 				ActionType: "created",
 				PolicyName: policyName,
+				NodeName:   p.nodeName,
 				SourceIP:   event.SourceIP,
 				Rule:       rule.Name,
-				Detail:     fmt.Sprintf("action=%s severity=%d category=%s description=%q", rule.Action, event.Severity, event.Category, event.Description),
+				Detail:     fmt.Sprintf("node=%s action=%s severity=%d category=%s description=%q", policyScopeNode(p.nodeName), rule.Action, event.Severity, event.Category, event.Description),
 			},
 		},
 	}
@@ -216,8 +237,8 @@ func (p *PolicyPipeline) createPolicy(ctx context.Context, rule PolicyRule, even
 
 	p.activePolicies[policyKey] = ap
 
-	klog.Infof("Created DPI auto-policy %s: action=%s source=%s severity=%d category=%s",
-		policyName, rule.Action, event.SourceIP, event.Severity, event.Category)
+	klog.Infof("Created DPI auto-policy %s: node=%s action=%s source=%s severity=%d category=%s",
+		policyName, policyScopeNode(p.nodeName), rule.Action, event.SourceIP, event.Severity, event.Category)
 
 	return nil
 }
@@ -334,4 +355,47 @@ func sanitizePolicyName(s string) string {
 		result = result[:63]
 	}
 	return string(result)
+}
+
+func (p *PolicyPipeline) policyKey(ruleName, sourceIP string) string {
+	if p.nodeName == "" {
+		return fmt.Sprintf("%s:%s", ruleName, sourceIP)
+	}
+	return fmt.Sprintf("%s:%s:%s", p.nodeName, ruleName, sourceIP)
+}
+
+func (p *PolicyPipeline) policyName(ruleName, sourceIP string) string {
+	parts := []string{"dpi", "auto", sanitizePolicyName(ruleName)}
+	if p.nodeName != "" {
+		parts = append(parts, sanitizePolicyName(p.nodeName))
+	}
+	if sourceIP == "" {
+		parts = append(parts, "unknown")
+	} else {
+		parts = append(parts, sanitizePolicyName(sourceIP))
+	}
+
+	base := strings.Trim(strings.Join(parts, "-"), "-")
+	suffix := shortPolicyHash(p.policyKey(ruleName, sourceIP))
+	if len(base) > 54 {
+		base = strings.Trim(base[:54], "-")
+	}
+	if base == "" {
+		base = "dpi-auto"
+	}
+
+	return fmt.Sprintf("%s-%s", base, suffix)
+}
+
+func shortPolicyHash(value string) string {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(value))
+	return fmt.Sprintf("%08x", hasher.Sum32())
+}
+
+func policyScopeNode(nodeName string) string {
+	if nodeName == "" {
+		return "unknown"
+	}
+	return nodeName
 }

@@ -39,6 +39,13 @@ func (m *MockNetworkCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy
 	return nil
 }
 
+func (m *MockNetworkCiliumClient) DeleteNetworkPolicy(ctx context.Context, policyName string) error {
+	if m.ShouldError {
+		return errTestOperationFailed
+	}
+	return nil
+}
+
 // CreateNAT mocks creating NAT rules
 func (m *MockNetworkCiliumClient) CreateNAT(ctx context.Context, config *CiliumNATConfig) error {
 	m.CreateNATCalled = true
@@ -314,8 +321,8 @@ func TestNetworkController_IntegrateDPI(t *testing.T) {
 			t.Errorf("Expected application %s to be monitored", app)
 		}
 	}
-	if mockClient.LastDPIConfig.EnforcementMode != "log" {
-		t.Errorf("Unexpected enforcement mode: got %s, want log", mockClient.LastDPIConfig.EnforcementMode)
+	if mockClient.LastDPIConfig.EnforcementMode != "allow" {
+		t.Errorf("Unexpected enforcement mode: got %s, want allow", mockClient.LastDPIConfig.EnforcementMode)
 	}
 
 	// Test error case

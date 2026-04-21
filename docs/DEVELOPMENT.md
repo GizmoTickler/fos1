@@ -85,7 +85,7 @@ make build-<component>
 ### Running Tests
 
 ```bash
-# Run the required pre-merge/mainline verification checks
+# Run the canonical pre-merge/mainline Go verification gate
 make verify-mainline
 
 # Run all tests
@@ -122,6 +122,20 @@ This canonical target is the required pre-merge check and currently runs the ver
 go test ./...
 go build ./...
 ```
+
+CI now enforces this same Go gate in [ci.yml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/.github/workflows/ci.yml) for pushes to `main` and pull requests targeting `main`.
+
+If your change touches Kubernetes manifests or the manifest-validation workflow, also run the smallest relevant manifest checks locally before you open a PR:
+
+```bash
+# Rebuild the base manifest bundle
+kustomize build manifests/base
+
+# Optional broader schema validation if kubeconform is installed
+make validate-manifests
+```
+
+The repository-owned manifest CI in [validate-manifests.yml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/.github/workflows/validate-manifests.yml) now runs on pull requests and fails on real `kubeconform` errors. That workflow validates rendered manifests, but it does not prove end-to-end cluster deployment behavior.
 
 After that passes, ensure it also passes the broader quality checks used during development:
 
@@ -169,7 +183,8 @@ Documentation is written in Markdown and stored in the `docs/` directory. When m
 1. Create a new branch for your changes
 2. Make your changes following our coding standards
 3. Write or update tests to cover your changes
-4. Run `make verify-mainline` as the required pre-merge verification step
-5. Submit a pull request with a clear description of the changes
+4. Run `make verify-mainline` as the required local Go verification step
+5. If you changed manifests or manifest-validation behavior, run the relevant local manifest checks as well
+6. Submit a pull request with a clear description of the changes
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for more details on contributing to the project.

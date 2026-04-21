@@ -12,12 +12,12 @@ import (
 
 // pipelineMockCiliumClient tracks calls to ApplyNetworkPolicy and DeleteNetworkPolicy.
 type pipelineMockCiliumClient struct {
-	mu                         sync.Mutex
-	ApplyNetworkPolicyCalled   bool
-	AppliedPolicies            []*cilium.CiliumPolicy
-	DeleteNetworkPolicyCalled  bool
-	DeletedPolicyNames         []string
-	LastPolicy                 *cilium.CiliumPolicy
+	mu                        sync.Mutex
+	ApplyNetworkPolicyCalled  bool
+	AppliedPolicies           []*cilium.CiliumPolicy
+	DeleteNetworkPolicyCalled bool
+	DeletedPolicyNames        []string
+	LastPolicy                *cilium.CiliumPolicy
 }
 
 func (m *pipelineMockCiliumClient) ApplyNetworkPolicy(ctx context.Context, policy *cilium.CiliumPolicy) error {
@@ -58,12 +58,16 @@ func (m *pipelineMockCiliumClient) CreatePortForward(ctx context.Context, config
 func (m *pipelineMockCiliumClient) RemovePortForward(ctx context.Context, config *cilium.PortForwardConfig) error {
 	return nil
 }
-func (m *pipelineMockCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error)              { return nil, nil }
-func (m *pipelineMockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) { return nil, nil }
-func (m *pipelineMockCiliumClient) AddRoute(route cilium.Route) error                                    { return nil }
-func (m *pipelineMockCiliumClient) DeleteRoute(route cilium.Route) error                                 { return nil }
-func (m *pipelineMockCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error                      { return nil }
-func (m *pipelineMockCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error                   { return nil }
+func (m *pipelineMockCiliumClient) ListRoutes(ctx context.Context) ([]cilium.Route, error) {
+	return nil, nil
+}
+func (m *pipelineMockCiliumClient) ListVRFRoutes(ctx context.Context, vrfID int) ([]cilium.Route, error) {
+	return nil, nil
+}
+func (m *pipelineMockCiliumClient) AddRoute(route cilium.Route) error                  { return nil }
+func (m *pipelineMockCiliumClient) DeleteRoute(route cilium.Route) error               { return nil }
+func (m *pipelineMockCiliumClient) AddVRFRoute(route cilium.Route, vrfID int) error    { return nil }
+func (m *pipelineMockCiliumClient) DeleteVRFRoute(route cilium.Route, vrfID int) error { return nil }
 func (m *pipelineMockCiliumClient) ConfigureVLANRouting(ctx context.Context, config *cilium.CiliumVLANRoutingConfig) error {
 	return nil
 }
@@ -420,5 +424,45 @@ func TestPolicyPipelineEnforcementAudit(t *testing.T) {
 	}
 	if ap.Actions[0].SourceIP != "10.0.0.99" {
 		t.Errorf("expected action source IP 10.0.0.99, got %s", ap.Actions[0].SourceIP)
+	}
+}
+
+func TestPolicyPipelineScopesPolicyIdentityByNode(t *testing.T) {
+	mock := &pipelineMockCiliumClient{}
+	rules := []PolicyRule{
+		{
+			Name:        "block-rule",
+			MinSeverity: 1,
+			Action:      ActionBlock,
+		},
+	}
+
+	pipeline := NewPolicyPipeline(mock, rules)
+	pipeline.nodeName = "worker-a"
+
+	err := pipeline.ProcessEvent(context.Background(), common.DPIEvent{
+		SourceIP:    "192.168.1.25",
+		Severity:    4,
+		Category:    "malware",
+		Description: "node-local alert",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	policies := pipeline.GetActivePolicies()
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 active policy, got %d", len(policies))
+	}
+
+	ap := policies[0]
+	if ap.Name == "dpi-auto-block-rule-192-168-1-25" {
+		t.Fatalf("policy name %q does not include node scope", ap.Name)
+	}
+	if ap.Policy.Labels["fos1.io/source-node"] != "worker-a" {
+		t.Fatalf("expected source-node label worker-a, got %q", ap.Policy.Labels["fos1.io/source-node"])
+	}
+	if ap.Actions[0].Detail == `action=block severity=4 category=malware description="node-local alert"` {
+		t.Fatalf("audit detail %q does not include node metadata", ap.Actions[0].Detail)
 	}
 }

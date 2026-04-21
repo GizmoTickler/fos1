@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.20-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
@@ -20,7 +20,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -installsuffix cgo -o dpi-framework ./cmd/dpi-framework
 
 # Use a minimal alpine image for the final container
-FROM --platform=$TARGETPLATFORM alpine:3.17
+FROM --platform=$TARGETPLATFORM alpine:3.19
 
 RUN apk --no-cache add ca-certificates tzdata
 
