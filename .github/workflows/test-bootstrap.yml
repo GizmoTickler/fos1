@@ -21,6 +21,8 @@ jobs:
       WORKLOAD_TIMEOUT: 240s
       DPI_MANAGER_IMAGE: fos1-local/dpi-manager:ci
       NTP_CONTROLLER_IMAGE: fos1-local/ntp-controller:ci
+      EVENT_CORRELATOR_IMAGE: fos1-local/event-correlator:ci
+      IDS_CONTROLLER_IMAGE: fos1-local/ids-controller:ci
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -64,6 +66,8 @@ jobs:
 
           docker build -t "${DPI_MANAGER_IMAGE}" -f Dockerfile .
           docker build -t "${NTP_CONTROLLER_IMAGE}" -f pkg/ntp/Dockerfile .
+          docker build -t "${EVENT_CORRELATOR_IMAGE}" -f build/event-correlator/Dockerfile .
+          docker build -t "${IDS_CONTROLLER_IMAGE}" -f build/ids-controller/Dockerfile .
 
       - name: Load local proof images into Kind
         run: |
@@ -71,6 +75,8 @@ jobs:
 
           kind load docker-image "${DPI_MANAGER_IMAGE}" --name fos1-local-proof
           kind load docker-image "${NTP_CONTROLLER_IMAGE}" --name fos1-local-proof
+          kind load docker-image "${EVENT_CORRELATOR_IMAGE}" --name fos1-local-proof
+          kind load docker-image "${IDS_CONTROLLER_IMAGE}" --name fos1-local-proof
 
       - name: Create namespaces
         run: |
@@ -139,6 +145,14 @@ jobs:
           perl -0pi -e 's/zeek:\n(\s+)enabled: true/zeek:\n${1}enabled: false/' test-manifests/base/security/dpi-manager.yaml
           sed -i "s|image: your-org/fos1-dpi-manager:latest|image: ${DPI_MANAGER_IMAGE}|" test-manifests/base/security/dpi-manager.yaml
           sed -i "s|imagePullPolicy: Always|imagePullPolicy: Never|" test-manifests/base/security/dpi-manager.yaml
+
+          # Rewire the IDS controller manifest so it consumes the locally
+          # loaded image. The correlator runtime Deployment the
+          # controller synthesises still hard-codes the public image
+          # name; the E2E proof script patches that Deployment in-place
+          # after reconciliation.
+          sed -i "s|image: fos1/ids-controller:latest|image: ${IDS_CONTROLLER_IMAGE}|" test-manifests/base/security/ids/ids-controller.yaml
+          sed -i "0,/imagePullPolicy: IfNotPresent/s|imagePullPolicy: IfNotPresent|imagePullPolicy: Never|" test-manifests/base/security/ids/ids-controller.yaml
 
           date -u +"%Y-%m-%dT%H:%M:%SZ" > deploy-start.txt
 
@@ -245,6 +259,34 @@ jobs:
           kubectl apply -f manifests/base/monitoring/elasticsearch-ci-accelerated-ilm.yaml
 
           bash scripts/ci/prove-es-retention-rollover.sh
+
+      - name: Deploy IDS controller for event correlation proof
+        run: |
+          set -euo pipefail
+
+          # The base security kustomization intentionally excludes the
+          # IDS controller subtree. Apply just the pieces the correlator
+          # E2E proof needs: the EventCorrelation CRD and the controller
+          # Deployment/RBAC that reconciles EventCorrelation instances
+          # into Deployments.
+          kubectl apply -f test-manifests/base/security/ids/crds/eventcorrelation.yaml
+          kubectl apply -f test-manifests/base/security/ids/ids-controller.yaml
+
+          kubectl rollout status deployment/ids-controller -n security \
+            --timeout="${WORKLOAD_TIMEOUT}"
+
+      - name: Prove event correlation end-to-end
+        env:
+          E2E_CORRELATOR_IMAGE_OVERRIDE: ${{ env.EVENT_CORRELATOR_IMAGE }}
+        run: |
+          set -euo pipefail
+
+          # The EventCorrelation controller hard-codes
+          # "fos1/event-correlator:latest" on the generated Deployment.
+          # The proof script detects E2E_CORRELATOR_IMAGE_OVERRIDE and
+          # patches the Deployment to use the locally loaded image with
+          # imagePullPolicy=Never before asserting readiness.
+          bash scripts/ci/prove-event-correlation-e2e.sh
 
       - name: Failure diagnostics
         if: failure()

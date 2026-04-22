@@ -6,7 +6,7 @@
 
 This repository has progressed from an architectural blueprint to a **functional implementation** with verified, passing Go build and test coverage on the integrated post-ticket-28 tree as of 2026-04-19. The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, and first post-20 convergence sprint are implemented.
 
-The highest-value remaining work has narrowed further. The follow-on ops sprint completed the canonical CI enforcement path, aligned the owned exporter deployment/scrape baseline for DPI and NTP with the repository manifests, and made the single-node monitoring durability story explicit in manifests. The bootstrap harness now runtime-proves the repository-owned Suricata log path into Elasticsearch, the Elasticsearch ILM/template bootstrap, and the Prometheus pod-annotation scrape path for node-local `dpi-manager` plus `ntp-controller`. What remains is the broader runtime depth beyond those focused proofs: natural traffic ingestion, event-correlation ingestion/sinks, operator-style observability add-ons, HA/storage hardening, and wider platform hardening.
+The highest-value remaining work has narrowed further. The follow-on ops sprint completed the canonical CI enforcement path, aligned the owned exporter deployment/scrape baseline for DPI and NTP with the repository manifests, and made the single-node monitoring durability story explicit in manifests. The bootstrap harness now runtime-proves the repository-owned Suricata log path into Elasticsearch, the Elasticsearch ILM/template bootstrap, the Prometheus pod-annotation scrape path for node-local `dpi-manager` plus `ntp-controller`, and a deterministic end-to-end canary round-trip through the event correlator runtime (file source to file sink, with a `/ready` assertion). What remains is the broader runtime depth beyond those focused proofs: natural traffic ingestion, non-canary event-correlation ingestion from live sensors and durable export sinks, operator-style observability add-ons, HA/storage hardening, and wider platform hardening.
 
 ## Verification Snapshot
 
@@ -25,6 +25,7 @@ Owned observability contract as of 2026-04-20:
 - Elasticsearch ships a single `30Gi` PVC and a repository-owned ILM bootstrap that attaches the `fos1-log-retention-14d` policy to `fos1-security-*` and `fos1-logs-*`; the `14d` wall-clock envelope is a manifest-level target and is not exercised end-to-end by CI
 - the bootstrap harness proves one deterministic Suricata canary path into `fos1-security-*` plus `fos1-log-retention-14d` policy/template **attachment** through Elasticsearch APIs
 - the bootstrap harness also runs [`scripts/ci/prove-es-retention-rollover.sh`](scripts/ci/prove-es-retention-rollover.sh) against a CI-only `fos1-ci-accelerated` policy targeting `fos1-ci-retention-*`, which verifies that ILM `rollover` and `delete` actions actually execute under accelerated (seconds/minutes) conditions; this is a contract proof of the policy shape, not a proof of the production `14d`/`30Gi` envelope
+- the bootstrap harness additionally proves a deterministic end-to-end round-trip through the event correlator runtime (`scripts/ci/prove-event-correlation-e2e.sh`): canary event injected into the configured file source, correlated record observed on the configured file sink, `/ready` returns HTTP 200
 - Remaining gaps are broader than the owned baseline: no proof yet for PVC failover behavior, the production `14d` wall-clock deletion on `fos1-security-*`/`fos1-logs-*`, optional operator resources, dashboards, or natural sensor traffic without the injected canary
 
 ### Key Metrics
@@ -44,7 +45,7 @@ Owned observability contract as of 2026-04-20:
 
 1. Extend observability proof beyond the current baseline by validating natural sensor traffic, downstream dashboards/alerts, and any non-canary ingestion paths rather than only the narrow owned proof slice.
 2. ILM rollover + delete actions now execute under an accelerated CI policy (sprint 29 ticket 30); still open: exercise the production `14d`/`30Gi` envelope against natural load, and decide whether the single-node envelope needs snapshotting or HA work.
-3. Carry event correlation beyond controller/runtime resource reconciliation into verified ingestion and durable output paths.
+3. Carry event correlation beyond the deterministic canary E2E proof in [scripts/ci/prove-event-correlation-e2e.sh](scripts/ci/prove-event-correlation-e2e.sh) into verified ingestion from live Suricata/Zeek sensors and durable export sinks.
 
 ---
 
@@ -93,12 +94,7 @@ Owned observability contract as of 2026-04-20:
 | **Local Auth Provider** | `pkg/security/auth/providers/local.go` | 1030 | Complete | File-based auth with password hashing |
 | **LDAP Auth Provider** | `pkg/security/auth/providers/ldap.go` | - | Complete | Real LDAP provider construction and authentication |
 | **OAuth Auth Provider** | `pkg/security/auth/providers/oauth.go` | - | Complete | Real OAuth provider construction and authentication |
-
-#### ⚠️ Partially Implemented
-
-| Component | Files | Lines | Status | Critical Gaps |
-|-----------|-------|-------|--------|---------------|
-| **Event Correlation** | `pkg/security/ids/correlation/` | - | Partial | Controller-owned ConfigMap/Deployment/Service contract is tested, but runtime image behavior, event ingestion, and export sinks are not repo-verified |
+| **Event Correlation** | `pkg/security/ids/correlation/`, `cmd/event-correlator/`, `build/event-correlator/Dockerfile` | - | Complete with E2E proof | Controller reconciles ConfigMap/Deployment/Service; the correlator runtime round-trip is gated by [scripts/ci/prove-event-correlation-e2e.sh](scripts/ci/prove-event-correlation-e2e.sh) in the Kind bootstrap harness (injects a canary event into the configured file source, asserts the file sink emits the correlated record, and asserts `/ready` returns HTTP 200). Live non-canary sensor ingestion and durable export sinks remain out of scope. |
 
 #### ❌ Not Implemented / Non-goal
 

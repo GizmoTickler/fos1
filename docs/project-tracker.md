@@ -391,7 +391,7 @@ Current verified status:
 - [x] Certificate Management with cert-manager (partial - no unit tests for certificates package)
 - [x] Suricata IDS/IPS (verified by tests)
 - [x] Zeek Network Analysis (verified by tests)
-- [x] Security Event Correlation (partial - correlation package has no tests)
+- [x] Security Event Correlation (complete with E2E proof - controller tested under `pkg/security/ids/correlation/`; runtime round-trip proven by `scripts/ci/prove-event-correlation-e2e.sh` in the Kind bootstrap harness)
 - [x] Authentication System with Multiple Providers (verified by tests)
 - [x] FRRouting for Dynamic Routing (verified by tests)
 - [x] Advanced NAT Configuration (verified by tests)
