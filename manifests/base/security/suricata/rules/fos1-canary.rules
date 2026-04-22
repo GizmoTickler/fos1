@@ -1,0 +1,16 @@
+# FOS1 natural-traffic DPI canary rule.
+#
+# This single rule is the deterministic signature that the
+# scripts/ci/prove-dpi-natural-traffic.sh harness relies on to prove
+# Suricata actually observes real packet payloads on the inspection
+# interface (not just hand-written log-line canaries appended to
+# eve.json). The rule matches a distinctive HTTP request header value
+# that no real-world traffic is expected to produce:
+#
+#   X-FOS1-Canary: A1B2C3D4
+#
+# sid:9000001 is reserved for this CI-only canary. Do not reuse.
+# See docs/design/policy-based-filtering.md ("Reserved Suricata SIDs")
+# and docs/observability-architecture.md ("Natural-Traffic DPI Proof")
+# for the full contract.
+alert http any any -> any any (msg:"FOS1-CANARY-OBSERVED"; flow:established,to_server; http.header; content:"X-FOS1-Canary|3a 20|A1B2C3D4"; classtype:not-suspicious; sid:9000001; rev:1;)

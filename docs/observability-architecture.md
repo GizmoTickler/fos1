@@ -151,9 +151,41 @@ The deterministic proof-of-arrival path owned by this repository is Suricata `ev
 
 If those checks pass, the repository-owned path has been proven end to end for one security sensor stream: a Suricata-format event reached the shared file contract, Fluentd tailed it, Elasticsearch indexed it under the security-specific prefix, and the repository-owned retention bootstrap attached the expected lifecycle settings to a matching index. Zeek logs are also tailed from `/var/log/fos1/zeek/current/*.log`, but the Suricata `eve.json` path remains the deterministic proof target because it is structured JSON with stable fields and does not depend on Kibana UI setup.
 
-What this proof does not yet verify:
+The log-line canary above is explicitly a **log-ingestion proof only**. Sprint 29 Ticket 31 adds a separate natural-traffic proof that exercises the sensor itself; see [Natural-Traffic DPI Proof](#natural-traffic-dpi-proof) below.
 
-- that natural sensor-generated Suricata traffic in the cluster reaches Elasticsearch without the injected canary
+### Natural-Traffic DPI Proof
+
+The natural-traffic DPI proof is a Sprint 29 Ticket 31 addition and is intentionally distinct from the log-line canary above. Where the log-line canary appends a hand-written JSON document directly into Suricata's eve.json host path, the natural-traffic proof drives a real HTTP payload across the interface Suricata inspects and asserts the sensor itself emits the matching event:
+
+- owned Suricata rule: [manifests/base/security/suricata/rules/fos1-canary.rules](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/security/suricata/rules/fos1-canary.rules), shipped as ConfigMap `suricata-rules-canary` in the `security` namespace and mounted into `/etc/suricata/rules/fos1-canary.rules`
+- reserved signature id: `9000001` (CI-reserved; see [docs/design/policy-based-filtering.md "Reserved Suricata SIDs"](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/docs/design/policy-based-filtering.md))
+- reload contract: the DaemonSet pod template carries a `fos1.io/rules-canary-checksum` annotation that CI rewrites whenever the canary rule body changes, forcing a rollout so Suricata re-reads the rule
+- traffic source: [scripts/ci/prove-dpi-natural-traffic.sh](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-dpi-natural-traffic.sh) spawns a short-lived `curlimages/curl` pod pinned via `nodeSelector: kubernetes.io/hostname` to the node where Suricata is running. The pod issues `curl -H 'X-FOS1-Canary: A1B2C3D4' <target>` a handful of times against an in-cluster target so the request crosses the host interface `af-packet` is listening on
+
+Three assertions must all pass, in order:
+
+1. **Sensor emission**: the Suricata eve.json file on its host node contains at least one `event_type=alert` record with `alert.signature_id == 9000001`. The harness polls every 2s for up to 60s via `docker exec <kind-node> grep ... eve.json`.
+2. **Elasticsearch index**: `GET /fos1-security-*/_search?q=alert.signature_id:9000001` returns at least one hit whose `_source.security_sensor == "suricata"`. The harness polls every 5s for up to 90s through a port-forward on the monitoring Elasticsearch service.
+3. **Prometheus metric advance**: `sum(dpi_events_total)` — exported by `pkg/kubernetes/metrics_server.go` on each `dpi-manager` DaemonSet pod at `:8080/metrics` — has strictly increased past a baseline captured before the curl ran. The harness deliberately does **not** pin a specific `{event_type, application, category}` label set because the exact label combination that advances depends on which DPI connector ingested the alert.
+
+What distinguishes this from the log-line canary:
+
+| Aspect | Log-line canary (prove-security-log-pipeline.sh) | Natural-traffic canary (prove-dpi-natural-traffic.sh) |
+| --- | --- | --- |
+| Event source | `docker exec ... cat >> eve.json` | Suricata observing real packets on its inspection interface |
+| Proves sensor? | No — Suricata is never consulted | Yes — the sid:9000001 signature must fire |
+| Proves log ingestion? | Yes | Yes (via Fluentd → Elasticsearch) |
+| Proves DPI counter advance? | No | Yes (Prometheus `sum(dpi_events_total)`) |
+| Owned rule sid | n/a | `9000001` |
+
+What this natural-traffic proof still does **not** verify:
+
+- that the sid:9000001 path is equivalent to every other detection path Suricata or Zeek might run in production; only one HTTP-header signature is exercised
+- that traffic between arbitrary in-cluster pods is inspected; the harness pins the curl pod to the Suricata node with `hostNetwork=true` so the payload definitely crosses the monitored interface
+- throughput or timing characteristics of the pipeline under load
+
+What this proof does not yet verify (carryover from the log-line canary):
+
 - that `fos1-logs-*` non-security indices are flowing end to end
 - that Kibana data views, saved objects, or dashboards are provisioned automatically
 - that the `14d` delete phase has actually executed against an aged index at production wall-clock time scales
