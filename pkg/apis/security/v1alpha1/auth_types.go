@@ -37,15 +37,6 @@ type AuthProviderSpec struct {
 	// OAuth is the configuration for OAuth authentication
 	OAuth *OAuthAuthConfig `json:"oauth,omitempty"`
 
-	// SAML is the configuration for SAML authentication
-	SAML *SAMLAuthConfig `json:"saml,omitempty"`
-
-	// RADIUS is the configuration for RADIUS authentication
-	RADIUS *RADIUSAuthConfig `json:"radius,omitempty"`
-
-	// Certificate is the configuration for certificate authentication
-	Certificate *CertificateAuthConfig `json:"certificate,omitempty"`
-
 	// Resources are the resource requirements
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
@@ -159,75 +150,6 @@ type OAuthAuthConfig struct {
 
 	// UserAttributes are the attributes to retrieve for users
 	UserAttributes map[string]string `json:"userAttributes,omitempty"`
-}
-
-// SAMLAuthConfig defines the configuration for SAML authentication
-type SAMLAuthConfig struct {
-	// MetadataURL is the URL of the SAML metadata
-	MetadataURL string `json:"metadataURL"`
-
-	// EntityID is the entity ID
-	EntityID string `json:"entityID"`
-
-	// AssertionConsumerServiceURL is the assertion consumer service URL
-	AssertionConsumerServiceURL string `json:"assertionConsumerServiceURL"`
-
-	// SignAuthnRequests indicates whether to sign authentication requests
-	SignAuthnRequests bool `json:"signAuthnRequests,omitempty"`
-
-	// SigningCert is the signing certificate
-	SigningCert string `json:"signingCert,omitempty"`
-
-	// SigningKey is the signing key
-	SigningKey string `json:"signingKey,omitempty"`
-
-	// EncryptionCert is the encryption certificate
-	EncryptionCert string `json:"encryptionCert,omitempty"`
-
-	// EncryptionKey is the encryption key
-	EncryptionKey string `json:"encryptionKey,omitempty"`
-
-	// UserIDAttribute is the attribute for user IDs
-	UserIDAttribute string `json:"userIDAttribute,omitempty"`
-
-	// UserAttributes are the attributes to retrieve for users
-	UserAttributes map[string]string `json:"userAttributes,omitempty"`
-}
-
-// RADIUSAuthConfig defines the configuration for RADIUS authentication
-type RADIUSAuthConfig struct {
-	// Server is the RADIUS server
-	Server string `json:"server"`
-
-	// Port is the RADIUS port
-	Port int `json:"port,omitempty"`
-
-	// Secret is the RADIUS secret
-	Secret string `json:"secret"`
-
-	// Timeout is the timeout in seconds
-	Timeout int `json:"timeout,omitempty"`
-
-	// Retries is the number of retries
-	Retries int `json:"retries,omitempty"`
-
-	// NASIdentifier is the NAS identifier
-	NASIdentifier string `json:"nasIdentifier,omitempty"`
-}
-
-// CertificateAuthConfig defines the configuration for certificate authentication
-type CertificateAuthConfig struct {
-	// CACert is the CA certificate
-	CACert string `json:"caCert"`
-
-	// UserCertAttribute is the attribute for user certificates
-	UserCertAttribute string `json:"userCertAttribute,omitempty"`
-
-	// UserIDAttribute is the attribute for user IDs
-	UserIDAttribute string `json:"userIDAttribute,omitempty"`
-
-	// VerifyClient indicates whether to verify the client
-	VerifyClient bool `json:"verifyClient,omitempty"`
 }
 
 // AuthProviderStatus defines the observed state of an authentication provider

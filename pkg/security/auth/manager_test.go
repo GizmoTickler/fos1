@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/GizmoTickler/fos1/pkg/security/auth"
@@ -220,51 +221,31 @@ func TestNewOAuthProvider_MissingClientSecret(t *testing.T) {
 	}
 }
 
-// TestNewSAMLProvider_NotSupported verifies SAML returns a clear "not yet supported" error.
-func TestNewSAMLProvider_NotSupported(t *testing.T) {
-	info := &auth.ProviderInfo{
-		Name: "test-saml",
-		Type: "saml",
-	}
-
-	_, err := auth.NewSAMLProvider(info)
-	if err == nil {
-		t.Fatal("expected error for SAML provider, got nil")
-	}
-	if err.Error() != "SAML provider is not yet supported: no implementation available" {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-// TestNewRADIUSProvider_NotSupported verifies RADIUS returns a clear "not yet supported" error.
-func TestNewRADIUSProvider_NotSupported(t *testing.T) {
-	info := &auth.ProviderInfo{
-		Name: "test-radius",
-		Type: "radius",
-	}
-
-	_, err := auth.NewRADIUSProvider(info)
-	if err == nil {
-		t.Fatal("expected error for RADIUS provider, got nil")
-	}
-	if err.Error() != "RADIUS provider is not yet supported: no implementation available" {
-		t.Errorf("unexpected error message: %v", err)
-	}
-}
-
-// TestNewCertificateProvider_NotSupported verifies certificate returns a clear "not yet supported" error.
-func TestNewCertificateProvider_NotSupported(t *testing.T) {
-	info := &auth.ProviderInfo{
-		Name: "test-cert",
-		Type: "certificate",
-	}
-
-	_, err := auth.NewCertificateProvider(info)
-	if err == nil {
-		t.Fatal("expected error for certificate provider, got nil")
-	}
-	if err.Error() != "certificate provider is not yet supported: no implementation available" {
-		t.Errorf("unexpected error message: %v", err)
+// TestAddProviderRejectsUnsupportedType verifies that the manager rejects
+// removed provider types (saml, radius, certificate) along with any other
+// unknown type, with an error message that names the supported types.
+//
+// See Sprint 29 Ticket 34 for the decision to remove SAML, RADIUS, and
+// certificate provider stubs from the auth factory.
+func TestAddProviderRejectsUnsupportedType(t *testing.T) {
+	for _, tpe := range []string{"saml", "radius", "certificate", "notarealtype"} {
+		t.Run(tpe, func(t *testing.T) {
+			mgr, err := auth.NewAuthManager(nil)
+			if err != nil {
+				t.Fatalf("failed to create auth manager: %v", err)
+			}
+			err = mgr.AddProvider(&auth.ProviderInfo{Name: "t", Type: tpe})
+			if err == nil {
+				t.Fatalf("expected error for provider type %q, got nil", tpe)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "unsupported auth provider type") {
+				t.Errorf("error message missing 'unsupported auth provider type': %v", err)
+			}
+			if !strings.Contains(msg, "local, ldap, oauth") {
+				t.Errorf("error message missing 'local, ldap, oauth': %v", err)
+			}
+		})
 	}
 }
 
@@ -302,24 +283,6 @@ func TestAddProvider_Local(t *testing.T) {
 	}
 	if providers[0].Name != "test-local" {
 		t.Errorf("expected provider name 'test-local', got %q", providers[0].Name)
-	}
-}
-
-// TestAddProvider_UnsupportedType verifies that unsupported type returns an error.
-func TestAddProvider_UnsupportedType(t *testing.T) {
-	mgr, err := auth.NewAuthManager(nil)
-	if err != nil {
-		t.Fatalf("failed to create auth manager: %v", err)
-	}
-
-	info := &auth.ProviderInfo{
-		Name: "test-kerberos",
-		Type: "kerberos",
-	}
-
-	err = mgr.AddProvider(info)
-	if err == nil {
-		t.Fatal("expected error for unsupported provider type, got nil")
 	}
 }
 
