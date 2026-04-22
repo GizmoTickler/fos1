@@ -233,6 +233,7 @@ jobs:
 
           bash scripts/ci/prove-security-log-pipeline.sh
           bash scripts/ci/prove-prometheus-scrapes.sh
+          bash scripts/ci/prove-dpi-natural-traffic.sh
 
       - name: Failure diagnostics
         if: failure()

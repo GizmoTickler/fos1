@@ -1,6 +1,31 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: suricata-rules-canary
+  namespace: security
+  labels:
+    app: suricata
+    component: ids
+    fos1.io/purpose: natural-traffic-dpi-canary
+  annotations:
+    # sid:9000001 is reserved CI-only. The signature matches a
+    # distinctive HTTP request header the prove-dpi-natural-traffic.sh
+    # harness emits. See docs/design/policy-based-filtering.md
+    # ("Reserved Suricata SIDs") and docs/observability-architecture.md
+    # ("Natural-Traffic DPI Proof").
+    fos1.io/reserved-sid: "9000001"
+data:
+  fos1-canary.rules: |
+    # FOS1 natural-traffic DPI canary rule.
+    #
+    # Matches the custom HTTP header X-FOS1-Canary: A1B2C3D4 emitted
+    # by scripts/ci/prove-dpi-natural-traffic.sh. sid:9000001 is
+    # reserved for this CI-only canary; do not reuse.
+    alert http any any -> any any (msg:"FOS1-CANARY-OBSERVED"; flow:established,to_server; http.header; content:"X-FOS1-Canary|3a 20|A1B2C3D4"; classtype:not-suspicious; sid:9000001; rev:1;)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: suricata-config
   namespace: security
 data:
@@ -65,6 +90,11 @@ data:
       - app-layer-events.rules
       - dns-events.rules
       - tls-events.rules
+      # FOS1 CI-reserved natural-traffic DPI canary (sid:9000001).
+      # Sourced from the suricata-rules-canary ConfigMap and mounted
+      # into /etc/suricata/rules/fos1-canary.rules via subPath. See
+      # docs/observability-architecture.md ("Natural-Traffic DPI Proof").
+      - fos1-canary.rules
     
     # Include any lists
     reputation-categories:
@@ -103,6 +133,14 @@ spec:
       labels:
         app: suricata
         component: ids
+      annotations:
+        # Force a rollout whenever the canary rule ConfigMap changes so
+        # Suricata actually re-reads the sid:9000001 signature. This is
+        # the reload-on-config-change contract referenced by
+        # docs/observability-architecture.md ("Natural-Traffic DPI Proof").
+        # The value is the sha256 of the canary ConfigMap data; kustomize
+        # or CI rewrites this when the rule body changes.
+        fos1.io/rules-canary-checksum: "sha256-managed-by-kustomize"
     spec:
       hostNetwork: true
       containers:
@@ -137,6 +175,9 @@ spec:
           subPath: suricata.yaml
         - name: rules-volume
           mountPath: /etc/suricata/rules
+        - name: rules-canary-volume
+          mountPath: /etc/suricata/rules/fos1-canary.rules
+          subPath: fos1-canary.rules
         - name: lists-volume
           mountPath: /etc/suricata/lists
         - name: logs-volume
@@ -162,6 +203,9 @@ spec:
           name: suricata-config
       - name: rules-volume
         emptyDir: {}
+      - name: rules-canary-volume
+        configMap:
+          name: suricata-rules-canary
       - name: lists-volume
         emptyDir: {}
       - name: logs-volume

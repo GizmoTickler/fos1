@@ -14,6 +14,29 @@ This document outlines the design for a Policy-Based Filtering (PBF) system that
 6. **Component Integration**: Integrate with the DPI system and security orchestration framework
 7. **Detailed Logging**: Provide comprehensive, centralized logging of policy decisions
 
+## Reserved Suricata SIDs
+
+The repository reserves a small set of Suricata signature IDs for CI and
+platform use. These SIDs must not be reused by user-authored rules,
+threat-intelligence imports, or upstream ruleset merges; doing so would
+cause false positives against the natural-traffic DPI proof harness.
+
+| SID       | Purpose                                   | Ticket / File                                                                                                                         |
+| --------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `9000001` | Natural-traffic DPI proof canary (CI-only) | Sprint 29 Ticket 31 / [manifests/base/security/suricata/rules/fos1-canary.rules](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/security/suricata/rules/fos1-canary.rules) |
+
+The sid `9000001` rule matches the distinctive HTTP request header
+`X-FOS1-Canary: A1B2C3D4`. It is shipped as the `suricata-rules-canary`
+ConfigMap in the `security` namespace and mounted into the Suricata
+DaemonSet at `/etc/suricata/rules/fos1-canary.rules`. The
+[scripts/ci/prove-dpi-natural-traffic.sh](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-dpi-natural-traffic.sh)
+harness drives a curl-based request carrying that header on the Suricata
+node and asserts the event propagates through eve.json, Elasticsearch
+(`fos1-security-*`), and the `dpi_events_total` Prometheus counter.
+
+Future CI-owned signatures should allocate from the `9000002`+ range and
+add a row to the table above with the owning ticket reference.
+
 ## Cilium-First Enforcement (sprint 29 ticket 33)
 
 Per ADR-0001 (Cilium-First Control Plane), Cilium is the sole enforcement

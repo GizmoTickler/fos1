@@ -6,7 +6,7 @@
 
 This repository has progressed from an architectural blueprint to a **functional implementation** with verified, passing Go build and test coverage on the integrated post-ticket-28 tree as of 2026-04-19. The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, and first post-20 convergence sprint are implemented.
 
-The highest-value remaining work has narrowed further. The follow-on ops sprint completed the canonical CI enforcement path, aligned the owned exporter deployment/scrape baseline for DPI and NTP with the repository manifests, and made the single-node monitoring durability story explicit in manifests. The bootstrap harness now runtime-proves the repository-owned Suricata log path into Elasticsearch, the Elasticsearch ILM/template bootstrap, and the Prometheus pod-annotation scrape path for node-local `dpi-manager` plus `ntp-controller`. What remains is the broader runtime depth beyond those focused proofs: natural traffic ingestion, event-correlation ingestion/sinks, operator-style observability add-ons, HA/storage hardening, and wider platform hardening.
+The highest-value remaining work has narrowed further. The follow-on ops sprint completed the canonical CI enforcement path, aligned the owned exporter deployment/scrape baseline for DPI and NTP with the repository manifests, and made the single-node monitoring durability story explicit in manifests. The bootstrap harness now runtime-proves the repository-owned Suricata log path into Elasticsearch, the Elasticsearch ILM/template bootstrap, and the Prometheus pod-annotation scrape path for node-local `dpi-manager` plus `ntp-controller`. Sprint 29 Ticket 31 extends that slice with a natural-traffic DPI proof (sid `9000001`) that drives real HTTP payloads across the Suricata inspection interface and asserts the sensor emits, Elasticsearch indexes, and the DPI Prometheus counter advances — so the owned proof now covers both the canary log-line path and a natural-traffic DPI path. What remains is the broader runtime depth beyond those focused proofs: event-correlation ingestion/sinks, operator-style observability add-ons, HA/storage hardening, and wider platform hardening.
 
 ## Verification Snapshot
 
@@ -23,8 +23,9 @@ Owned observability contract as of 2026-04-20:
 - the Kind harness narrows NTP proof deployment to the repository-owned controller slice rather than pretending optional operator add-ons or the chrony daemonset are part of the verified baseline
 - Prometheus, Grafana, and Alertmanager now persist state on PVC-backed storage in the base monitoring manifests
 - Elasticsearch now uses a single `30Gi` PVC and a repository-owned `14d` ILM bootstrap for `fos1-security-*` and `fos1-logs-*`
-- the bootstrap harness also proves one deterministic Suricata canary path into `fos1-security-*` plus ILM/template attachment through Elasticsearch APIs
-- Remaining gaps are broader than the owned baseline: no proof yet for PVC failover behavior, aged-index deletion execution, optional operator resources, dashboards, or natural sensor traffic without the injected canary
+- the bootstrap harness also proves one deterministic Suricata canary path into `fos1-security-*` plus ILM/template attachment through Elasticsearch APIs (log-ingestion proof only)
+- the bootstrap harness now additionally proves a natural-traffic DPI path end to end (Sprint 29 Ticket 31): a repo-owned Suricata rule with reserved sid `9000001` fires on a curl-driven HTTP header, the event appears in Suricata eve.json, Fluentd ships it to `fos1-security-*`, and `sum(dpi_events_total)` on the `dpi-manager` pods advances past its pre-traffic baseline — so the owned proof slice now covers both the log-line canary and a natural-traffic DPI proof
+- Remaining gaps are broader than the owned baseline: no proof yet for PVC failover behavior, aged-index deletion execution, optional operator resources, or dashboards
 
 ### Key Metrics
 
@@ -41,7 +42,7 @@ Owned observability contract as of 2026-04-20:
 
 ## Priority Next Steps
 
-1. Extend observability proof beyond the current baseline by validating natural sensor traffic, downstream dashboards/alerts, and any non-canary ingestion paths rather than only the narrow owned proof slice.
+1. Extend observability proof beyond the current baseline by validating downstream dashboards/alerts and any non-canary, non-natural-traffic-sid ingestion paths rather than only the narrow owned proof slice (natural-traffic DPI is now proven via sid `9000001`; see [scripts/ci/prove-dpi-natural-traffic.sh](scripts/ci/prove-dpi-natural-traffic.sh)).
 2. Exercise the Elasticsearch retention/storage baseline beyond bootstrap presence and decide whether the single-node `30Gi` / `14d` envelope needs snapshotting, rollover, or HA work.
 3. Carry event correlation beyond controller/runtime resource reconciliation into verified ingestion and durable output paths.
 
