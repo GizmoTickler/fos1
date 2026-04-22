@@ -817,6 +817,217 @@ Shared stabilization:
 - ticket 36 runs alongside the ticket work once the touched packages stabilize
 - ticket 37 lands last, after 29-36 are merged
 
+## Sprint 30: Critical-Path Production Gaps
+
+Candidate scope for the sprint that follows Sprint 29. Finalize after Ticket 37 (post-Sprint-29 truth-up) closes so status claims are accurate when this sprint opens.
+
+Sprint 30 target gaps, distilled from `Status.md` §Critical Implementation Gaps and §Production Readiness Assessment, and from caveats flagged during Sprint 29 execution:
+
+- **eBPF compilation + loading** — the framework manages program state but no BPF bytecode is produced or attached. Noted as the biggest remaining feature gap per `Status.md`.
+- **CRD status writeback** — Ticket 33 left `FilterPolicy.Status.Conditions` mutating the cached object only; NAT controller's `writeStatusToCRD` pattern (`pkg/controllers/nat_controller.go:558`) should be lifted into a shared helper and adopted by at least FilterPolicy.
+- **Management API** — no REST/gRPC surface; management only via `kubectl` + CRDs.
+- **RBAC / internal TLS / secrets story** — each controller runs without explicit ClusterRole scoping, internal service TLS, or a documented secrets model.
+- **Performance baseline** — zero benchmarks; unknown throughput/connection limits.
+- **QoS enforcement** — CRDs and controllers exist (`pkg/controllers/qos_controller.go`, `pkg/security/qos/manager.go`) but `Status.md` reports enforcement as stub. `pkg/network/vlan/qos.go:73` still returns `"not implemented"`.
+- **Threat-intelligence ingestion** — Sprint 29 non-goal; candidate for Sprint 30 if capacity permits.
+
+Working rules for Sprint 30: same as prior sprints (no placeholder success paths, idempotent reconciliation, statusful conditions, tests updated with behavior changes, docs updated after behavior is verified).
+
+Critical path (draft):
+- 38 -> 39 -> 40 -> (41, 42 in parallel) -> 43 -> (44, 45 in parallel) -> 46
+
+### P0
+
+#### Ticket 38: Prototype eBPF XDP Program Compilation And Attachment
+Status:
+- open
+
+Scope:
+- produce one owned eBPF XDP program under `bpf/xdp_ddos_drop.c` (simple allowlist-drop based on a map-backed denylist, enough to prove the toolchain)
+- integrate LLVM/Clang compilation into the build: either via a Makefile target that invokes `clang -O2 -target bpf -c` or via `github.com/cilium/ebpf/cmd/bpf2go` embedded in a Go generator
+- wire `pkg/hardware/ebpf/program_manager.go` to actually load the compiled object via `github.com/cilium/ebpf` (already an indirect dependency) and attach to XDP on a target interface
+- update `pkg/network/ebpf/manager.go` `LoadProgram` / `AttachProgram` to call the real path when the program type is XDP, and return an explicit "type not yet supported" error for unimplemented types
+- add a Linux-only integration test that skips when `CAP_BPF`/`CAP_NET_ADMIN` is not available
+
+Primary areas:
+- new: `bpf/xdp_ddos_drop.c`
+- new: `pkg/hardware/ebpf/xdp_loader_linux.go`
+- new: `pkg/hardware/ebpf/xdp_loader_stub.go`
+- modify: `pkg/hardware/ebpf/program_manager.go`
+- modify: `pkg/network/ebpf/manager.go`
+- modify: `Makefile` (add `bpf-objects` target)
+- new: `pkg/hardware/ebpf/xdp_loader_linux_test.go`
+
+Acceptance:
+- a single XDP program builds and loads on Linux with the required capabilities
+- non-Linux and insufficient-capability paths return explicit errors, not silent success
+- the `ProgramInfo` status transitions to a real `Attached=true` only after the BPF_PROG_ATTACH syscall succeeds
+- tests cover the supported path and the unsupported-platform path
+
+### Ticket 39: Extend eBPF Loading To A TC-Attached QoS Shaping Program
+Status:
+- open
+
+Scope:
+- produce one owned TC classifier program under `bpf/tc_qos_shape.c` (simple classify-and-mark using a map-backed class table)
+- extend the ticket-38 loader to support TC attach via `clsact` qdisc and `BPF_PROG_TYPE_SCHED_CLS`
+- route QoS controller output (`pkg/controllers/qos_controller.go`) through the new loader; remove the `Status.md` claim that QoS is a stub once the real path lands
+- reconcile the `pkg/network/vlan/qos.go:73` "not implemented" return with either a real path or an explicit non-goal
+
+Primary areas:
+- new: `bpf/tc_qos_shape.c`
+- modify: `pkg/hardware/ebpf/xdp_loader_linux.go` (extend to TC) or split into `tc_loader_linux.go`
+- modify: `pkg/controllers/qos_controller.go`
+- modify: `pkg/network/vlan/qos.go`
+- modify: `Status.md`, `docs/design/ebpf-implementation.md`
+
+Acceptance:
+- at least one QoS profile applies a real TC program via the eBPF loader
+- QoS controller status reflects applied-state, not configuration-accepted
+- tests match the ticket-38 shape
+
+### Ticket 40: Shared CRD Status Writeback Helper Adopted By FilterPolicy And One Other Controller
+Status:
+- open
+
+Scope:
+- extract the `writeStatusToCRD` pattern from `pkg/controllers/nat_controller.go:558` into `pkg/controllers/status/writer.go` (or similar shared location)
+- adopt it in `pkg/security/policy/controller.go` so `FilterPolicy.Status.Conditions` + `LastAppliedHash` are persisted back to the API (Ticket 33 left this as in-memory only)
+- adopt it in at least one additional controller as a second consumer (candidate: `routing_controller.go` or `dhcp_controller.go`)
+- write a unit test that round-trips a status mutation through the helper against a fake client
+
+Primary areas:
+- new: `pkg/controllers/status/writer.go`
+- new: `pkg/controllers/status/writer_test.go`
+- modify: `pkg/controllers/nat_controller.go`
+- modify: `pkg/security/policy/controller.go`
+- modify: one more controller
+- modify: `docs/design/implementation_caveats.md` (close the Sprint-29 follow-up note)
+
+Acceptance:
+- no controller duplicates the write-status-subresource idiom inline
+- FilterPolicy `Status.Conditions` now survive a controller restart
+- tests verify retry-on-conflict behavior
+
+### P1
+
+### Ticket 41: Read-Only REST Management API (v0)
+Status:
+- open
+
+Scope:
+- add `cmd/api-server/main.go` serving Go `net/http` routes under `/v1/`
+- expose one resource family read-only (suggest `/v1/filter-policies` + `/v1/filter-policies/{ns}/{name}`), backed by the existing controller's informer cache
+- add authentication via TLS client certs using the existing cert-manager-issued CA
+- include `/healthz` and `/readyz`
+- ship a minimal OpenAPI spec at `/openapi.json`
+
+Primary areas:
+- new: `cmd/api-server/`
+- new: `pkg/api/`
+- modify: `manifests/base/api/` (new)
+- modify: `docs/design/` new `api-server.md`
+
+Acceptance:
+- server starts, serves requests, enforces mTLS
+- one integration test exercises list + get
+- read-only v0 is explicit; write paths are a clearly-labelled follow-up
+
+### Ticket 42: RBAC ClusterRoles And Internal Service Baseline
+Status:
+- open
+
+Scope:
+- author minimum-privilege ClusterRoles for every controller currently using the generic `cluster-admin` or loose RBAC
+- add a CI check (Go test or shell script) that parses the manifests and asserts no ClusterRoleBinding references `cluster-admin`
+- optionally, wire `kube-rbac-proxy` sidecars for `:metrics` endpoints
+
+Primary areas:
+- new/modify: `manifests/base/*/rbac.yaml` per controller
+- new: `scripts/ci/prove-no-cluster-admin.sh`
+- modify: `.github/workflows/validate-manifests.yml`
+
+Acceptance:
+- no controller has `cluster-admin` in its binding
+- CI enforces it
+- docs enumerate each controller's required verbs/resources
+
+### Ticket 43: Performance Baseline Harness For One Hot Path
+Status:
+- open
+
+Scope:
+- add `tools/bench/` with a `go test -bench` harness that measures one hot path (recommended: NAT policy apply, or DPI event → Cilium policy creation)
+- produce a baseline report `docs/performance/baseline-2026-XX.md` with: ops/s, p50/p95/p99 latency, memory allocation per op
+- wire the harness into CI as a non-blocking run that uploads the report as an artifact
+- explicitly document which hot paths are NOT covered (most of them, in v0)
+
+Primary areas:
+- new: `tools/bench/`
+- new: `docs/performance/`
+- modify: `.github/workflows/test-bootstrap.yml`
+
+Acceptance:
+- one benchmark runs repeatably in CI
+- baseline numbers recorded in the repo with the date + commit
+- regressions beyond a configurable threshold flag in CI output (warning, not failure, in v0)
+
+### Ticket 44: Threat-Intelligence Feed Ingestion v0
+Status:
+- open
+
+Scope:
+- ingest one public blocklist feed (recommend abuse.ch URLhaus CSV for simplicity; MISP if a test server is available) into a Kubernetes-native CRD (`ThreatFeed`) with periodic refresh
+- translate feed entries into `CiliumPolicy` deny rules via the Ticket 17 DPI-event pipeline or a direct translator
+- expire entries past the feed's max-age
+
+Primary areas:
+- new: `pkg/security/threatintel/`
+- new: `cmd/threatintel-controller/`
+- modify: `pkg/apis/security/v1alpha1/` new `ThreatFeed` types
+- new: `manifests/examples/security/threatfeed-urlhaus.yaml`
+- modify: `docs/design/threat-intelligence-system.md`
+
+Acceptance:
+- one feed fetch + parse + translation cycle runs end-to-end
+- `ThreatFeed` CRD reports last-fetch time, entry count, expiry state
+- CI harness or fake HTTP server verifies the fetch-translate-apply cycle
+
+### Ticket 45: QoS Enforcement Via Cilium Bandwidth Manager
+Status:
+- open
+
+Scope:
+- decide whether to target Cilium Bandwidth Manager (preferred, fits ADR-0001) or the Ticket-39 TC loader for QoS enforcement; document the choice
+- wire `QoSProfile` CRs into the chosen backend
+- update `Status.md` QoS row from stub to real
+
+Primary areas:
+- `pkg/controllers/qos_controller.go`
+- `pkg/security/qos/manager.go`
+- `manifests/examples/qos/`
+
+Acceptance:
+- at least one `QoSProfile` produces real rate-limiting behavior verified in Kind
+- tests cover apply/update/delete transitions
+
+### P2
+
+### Ticket 46: Post-Sprint-30 Truth-Up
+Status:
+- open
+
+Scope:
+- same pattern as Ticket 37: reconcile every status claim in `Status.md`, `docs/project-tracker.md`, `docs/implementation-plan.md`, `docs/observability-architecture.md`, `docs/design/implementation_caveats.md` against what Sprint 30 actually landed
+- update `Status.md` production-readiness percentage
+
+Primary areas:
+- as above
+
+Acceptance:
+- no status claim unsupported by a landed test, manifest, or harness step
+- remaining gaps for Sprint 31+ explicitly enumerated
+
 ## Architect Review Questions
 
 1. Should CRD-backed route state remain the interim source of truth before direct Cilium datapath inspection exists?
