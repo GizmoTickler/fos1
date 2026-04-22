@@ -2,7 +2,7 @@
 
 This guide explains how to configure the security features of the Kubernetes-based Router/Firewall system, including firewalls, deep packet inspection (DPI), policy-based routing (PBR), and quality of service (QoS).
 
-> **Status note (Sprint 29 Ticket 33):** The `FirewallRule` / `FirewallZone` CRDs used in the §Examples section below were removed per ADR-0001 (Cilium-first control plane). Those examples are retained as historical reference only; the authoritative policy surface is now `FilterPolicy` + `FilterZone` + `FilterPolicyGroup` under `security.fos1.io/v1alpha1`, reconciled into `CiliumNetworkPolicy` objects by `pkg/security/policy/controller.go`. The Cilium-native sections at the top of this guide reflect the current enforcement path. See `docs/design/policy-based-filtering.md` for the shipping design.
+> **Status note (Sprint 29 Ticket 33 + Sprint 30 doc pass):** `FirewallRule` / `FirewallZone` CRDs were removed per ADR-0001 (Cilium-first control plane). The §Examples section now uses the shipping `FilterPolicy` + `FilterZone` + `FilterPolicyGroup` surface under `security.fos1.io/v1alpha1`, reconciled into `CiliumNetworkPolicy` objects by `pkg/security/policy/controller.go`. See `docs/design/policy-based-filtering.md` for the shipping design and `manifests/examples/policy/filter-policy-example.yaml` for an additional reference.
 
 ## Table of Contents
 
@@ -419,97 +419,141 @@ A comprehensive configuration for a home network:
 
 ```yaml
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: wan-zone
 spec:
-  name: WAN
+  description: "WAN uplink"
   interfaces:
-    - eth0
-  defaultAction: drop
+    - name: eth0
+      description: "Internet uplink"
+  trustLevel: low
+  defaultIngressAction: deny
+  defaultEgressAction: allow
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: lan-zone
 spec:
-  name: LAN
+  description: "Trusted LAN"
+  networks:
+    - cidr: "192.168.1.0/24"
   interfaces:
-    - eth1
-  defaultAction: accept
+    - name: eth1
+      description: "LAN"
+  trustLevel: high
+  defaultIngressAction: allow
+  defaultEgressAction: allow
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: iot-zone
 spec:
-  name: IoT
+  description: "IoT VLAN"
+  networks:
+    - cidr: "192.168.20.0/24"
   interfaces:
-    - vlan20
-  defaultAction: drop
+    - name: vlan20
+      description: "IoT"
+  trustLevel: low
+  defaultIngressAction: deny
+  defaultEgressAction: deny
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: guest-zone
 spec:
-  name: Guest
+  description: "Guest Wi-Fi"
+  networks:
+    - cidr: "192.168.30.0/24"
   interfaces:
-    - vlan30
-  defaultAction: drop
+    - name: vlan30
+      description: "Guest"
+  trustLevel: low
+  defaultIngressAction: deny
+  defaultEgressAction: deny
 ```
 
-2. Define basic firewall rules:
+2. Define filter policies (reconcile into `CiliumNetworkPolicy` objects):
 
 ```yaml
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: allow-lan-to-wan
 spec:
-  name: LAN-to-WAN
-  description: "Allow LAN to WAN"
-  sourceType: zone
-  source: LAN
-  destinationType: zone
-  destination: WAN
-  action: accept
-  logging: false
+  description: "Allow LAN to reach the internet"
+  scope: "zone"
+  enabled: true
   priority: 10
+  selectors:
+    sources:
+      - type: zone
+        values: ["lan-zone"]
+    destinations:
+      - type: zone
+        values: ["wan-zone"]
+  actions:
+    - type: allow
+      parameters:
+        log: false
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: allow-iot-limited
 spec:
-  name: IoT-Limited
-  description: "Allow IoT devices limited access"
-  sourceType: zone
-  source: IoT
-  destinationType: zone
-  destination: WAN
-  protocol: tcp
-  destinationPort: "80,443,53,123"
-  action: accept
-  logging: true
+  description: "Allow IoT devices limited outbound access (HTTP/HTTPS/DNS/NTP)"
+  scope: "zone"
+  enabled: true
   priority: 20
+  selectors:
+    sources:
+      - type: zone
+        values: ["iot-zone"]
+    destinations:
+      - type: zone
+        values: ["wan-zone"]
+    ports:
+      - protocol: tcp
+        ports: [80, 443, 53]
+      - protocol: udp
+        ports: [53, 123]
+  actions:
+    - type: allow
+      parameters:
+        log: true
+        logLevel: "info"
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: allow-guest-web
 spec:
-  name: Guest-Web
   description: "Allow guest devices web access only"
-  sourceType: zone
-  source: Guest
-  destinationType: zone
-  destination: WAN
-  protocol: tcp
-  destinationPort: "80,443,53"
-  action: accept
-  logging: true
+  scope: "zone"
+  enabled: true
   priority: 30
+  selectors:
+    sources:
+      - type: zone
+        values: ["guest-zone"]
+    destinations:
+      - type: zone
+        values: ["wan-zone"]
+    ports:
+      - protocol: tcp
+        ports: [80, 443]
+      - protocol: udp
+        ports: [53]
+  actions:
+    - type: allow
+      parameters:
+        log: true
+        logLevel: "info"
 ```
 
 3. Configure DPI profile:
@@ -598,104 +642,154 @@ A configuration for a small business with separate VLANs for different departmen
 
 ```yaml
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: wan-zone
 spec:
-  name: WAN
+  description: "WAN uplink"
   interfaces:
-    - eth0
-  defaultAction: drop
+    - name: eth0
+      description: "Internet uplink"
+  trustLevel: low
+  defaultIngressAction: deny
+  defaultEgressAction: allow
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: mgmt-zone
 spec:
-  name: Management
+  description: "Management VLAN"
+  networks:
+    - cidr: "10.10.10.0/24"
   interfaces:
-    - vlan10
-  defaultAction: accept
+    - name: vlan10
+      description: "Management"
+  trustLevel: high
+  defaultIngressAction: allow
+  defaultEgressAction: allow
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: staff-zone
 spec:
-  name: Staff
+  description: "Staff VLAN"
+  networks:
+    - cidr: "10.10.20.0/24"
   interfaces:
-    - vlan20
-  defaultAction: drop
+    - name: vlan20
+      description: "Staff"
+  trustLevel: medium
+  defaultIngressAction: deny
+  defaultEgressAction: allow
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: servers-zone
 spec:
-  name: Servers
+  description: "Servers VLAN"
+  networks:
+    - cidr: "10.10.30.0/24"
   interfaces:
-    - vlan30
-  defaultAction: drop
+    - name: vlan30
+      description: "Servers"
+  trustLevel: high
+  defaultIngressAction: deny
+  defaultEgressAction: allow
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallZone
+kind: FilterZone
 metadata:
   name: guest-zone
 spec:
-  name: Guest
+  description: "Guest Wi-Fi"
+  networks:
+    - cidr: "10.10.40.0/24"
   interfaces:
-    - vlan40
-  defaultAction: drop
+    - name: vlan40
+      description: "Guest"
+  trustLevel: low
+  defaultIngressAction: deny
+  defaultEgressAction: deny
 ```
 
-2. Define inter-VLAN rules:
+2. Define inter-VLAN policies:
 
 ```yaml
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: mgmt-to-servers
 spec:
-  name: Mgmt-to-Servers
   description: "Allow management access to servers"
-  sourceType: zone
-  source: Management
-  destinationType: zone
-  destination: Servers
-  action: accept
+  scope: "zone"
+  enabled: true
   priority: 10
+  selectors:
+    sources:
+      - type: zone
+        values: ["mgmt-zone"]
+    destinations:
+      - type: zone
+        values: ["servers-zone"]
+  actions:
+    - type: allow
+      parameters:
+        log: true
+        logLevel: "info"
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: staff-to-servers
 spec:
-  name: Staff-to-Servers
-  description: "Allow staff access to servers"
-  sourceType: zone
-  source: Staff
-  destinationType: zone
-  destination: Servers
-  protocol: tcp
-  destinationPort: "80,443,389,636"
-  action: accept
+  description: "Allow staff access to servers on web + LDAP ports only"
+  scope: "zone"
+  enabled: true
   priority: 20
+  selectors:
+    sources:
+      - type: zone
+        values: ["staff-zone"]
+    destinations:
+      - type: zone
+        values: ["servers-zone"]
+    ports:
+      - protocol: tcp
+        ports: [80, 443, 389, 636]
+  actions:
+    - type: allow
+      parameters:
+        log: false
 ---
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: guest-isolation
 spec:
-  name: Guest-Isolation
-  description: "Isolate guest network"
-  sourceType: zone
-  source: Guest
-  destinationType: any
-  destination: WAN
-  protocol: tcp
-  destinationPort: "80,443,53"
-  action: accept
+  description: "Guest network may reach WAN only; isolated from internal zones"
+  scope: "zone"
+  enabled: true
   priority: 100
+  selectors:
+    sources:
+      - type: zone
+        values: ["guest-zone"]
+    destinations:
+      - type: zone
+        values: ["wan-zone"]
+    ports:
+      - protocol: tcp
+        ports: [80, 443]
+      - protocol: udp
+        ports: [53]
+  actions:
+    - type: allow
+      parameters:
+        log: true
+        logLevel: "info"
 ```
 
 3. Configure application-aware DPI and PBR:

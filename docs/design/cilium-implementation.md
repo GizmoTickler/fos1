@@ -1,6 +1,6 @@
 # Cilium Implementation Design
 
-> **Status note (Sprint 29 Ticket 33):** Sections below that reference the `FirewallRule` CRD and the "Firewall Controller" component describe an earlier design that has been superseded by the `FilterPolicy` → `CiliumNetworkPolicy` translator in `pkg/security/policy/controller.go`. `FirewallRule` / `FirewallZone` CRDs, the `pkg/security/firewall/` package, and `pkg/cilium/controllers/firewall_controller.go` were removed per ADR-0001. See `docs/design/policy-based-filtering.md` §"Cilium-First Enforcement (sprint 29 ticket 33)" for the shipping design. This document is retained for historical architectural reference.
+> **Status note (Sprint 29 Ticket 33 + Sprint 30 doc pass):** The `FirewallRule` / `FirewallZone` CRDs previously referenced in this document were removed per ADR-0001 (Cilium-first control plane). The "FilterPolicy Controller" entry and the §Filter Policy CRD example below now reflect the shipping surface (`pkg/security/policy/controller.go` + `translator.go`). See `docs/design/policy-based-filtering.md` §"Cilium-First Enforcement (sprint 29 ticket 33)" for the full design. This document is retained for broader Cilium-integration architectural context.
 
 ## Overview
 
@@ -107,10 +107,11 @@ Custom CRD controllers translate our domain-specific resources into Cilium polic
    - Creates corresponding Cilium endpoints
    - Applies appropriate Cilium policies
 
-2. **Firewall Controller**:
-   - Watches `FirewallRule` and `FirewallZone` CRDs
-   - Translates to Cilium Network Policies
-   - Manages zone-based and rule-based firewall configurations
+2. **FilterPolicy Controller** (authoritative post-Sprint 29 Ticket 33):
+   - Watches `FilterPolicy`, `FilterPolicyGroup`, and `FilterZone` CRDs
+   - Translates into `CiliumNetworkPolicy` objects via `pkg/security/policy/translator.go`
+   - Reconciles idempotently via spec-hash comparison, reporting `Applied`/`Degraded`/`Invalid`/`Removed` conditions
+   - The earlier `FirewallRule` / `FirewallZone` CRDs and the `pkg/security/firewall/` package were removed per ADR-0001
 
 3. **Routing Controller**:
    - Synchronizes routes with Cilium's eBPF maps
@@ -274,19 +275,30 @@ spec:
       interface: lan1
 ```
 
-### 2. Firewall Rule CRD
+### 2. Filter Policy CRD
 
 ```yaml
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: allow-web-from-lan-to-wan
 spec:
-  fromZone: lan
-  toZone: wan
-  protocol: tcp
-  ports: [80, 443]
-  action: allow
+  description: "Allow HTTP/HTTPS from LAN to WAN"
+  scope: "zone"
+  enabled: true
+  priority: 10
+  selectors:
+    sources:
+      - type: zone
+        values: ["lan-zone"]
+    destinations:
+      - type: zone
+        values: ["wan-zone"]
+    ports:
+      - protocol: tcp
+        ports: [80, 443]
+  actions:
+    - type: allow
 ```
 
 ### 3. DPI Profile CRD
