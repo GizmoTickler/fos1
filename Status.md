@@ -633,10 +633,13 @@ Rationale: Sprint 29 closed the "advertised but unshipped" surfaces (FilterPolic
 - No daemon health monitoring
 
 ### 4. Performance Unknown (High Risk) ⚠️
-- No benchmarks
-- No load testing
-- Unknown packet processing throughput
-- Unknown connection tracking limits
+- Baseline measured for NAT policy apply (Sprint 30 / Ticket 43);
+  regressions flagged in CI as a warning (non-blocking).
+  See `docs/performance/baseline-2026-04.md` and `tools/bench/`.
+- All other hot paths still unbenchmarked (DPI event → policy,
+  routing sync, DHCP control socket, DNS zone update).
+- No load testing; unknown packet processing throughput.
+- Unknown connection tracking limits.
 
 ### 5. Security Posture (Medium Risk) ⚠️
 - RBAC minimum-privilege baseline implemented (Sprint 30 / Ticket 42):
