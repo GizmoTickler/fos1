@@ -1,0 +1,74 @@
+# CI-only accelerated Elasticsearch ILM artifacts.
+#
+# This manifest is intentionally NOT referenced by
+# manifests/base/monitoring/kustomization.yaml. It exists so
+# scripts/ci/prove-es-retention-rollover.sh (invoked from
+# .github/workflows/test-bootstrap.yml) can read a single
+# source of truth for the accelerated ILM policy + companion
+# index template.
+#
+# Production retention target stays at fos1-log-retention-14d
+# on a 30Gi single-node PVC (see elasticsearch.yaml). This
+# accelerated policy runs at seconds/minutes scale so the
+# Kind harness can prove rollover + delete actions execute
+# within a normal CI budget. It makes no claim about the
+# production 14d / 30Gi envelope.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-ci-accelerated-ilm
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/managed-by: ci-harness
+    fos1.io/ci-only: "true"
+data:
+  fos1-ci-accelerated.json: |
+    {
+      "policy": {
+        "phases": {
+          "hot": {
+            "actions": {
+              "rollover": {
+                "max_age": "30s",
+                "max_docs": 5
+              }
+            }
+          },
+          "delete": {
+            "min_age": "1m",
+            "actions": {
+              "delete": {}
+            }
+          }
+        }
+      }
+    }
+  fos1-ci-retention-template.json: |
+    {
+      "index_patterns": [
+        "fos1-ci-retention-*"
+      ],
+      "priority": 500,
+      "template": {
+        "settings": {
+          "index.lifecycle.name": "fos1-ci-accelerated",
+          "index.lifecycle.rollover_alias": "fos1-ci-retention",
+          "index.number_of_shards": 1,
+          "index.number_of_replicas": 0,
+          "index.refresh_interval": "1s"
+        }
+      },
+      "_meta": {
+        "description": "CI-only accelerated ILM target. Do NOT deploy via base kustomization; applied only by scripts/ci/prove-es-retention-rollover.sh against an ephemeral fos1-ci-retention-* alias to exercise rollover and delete actions under the Kind harness."
+      }
+    }
+  fos1-ci-retention-bootstrap.json: |
+    {
+      "aliases": {
+        "fos1-ci-retention": {
+          "is_write_index": true
+        }
+      }
+    }
