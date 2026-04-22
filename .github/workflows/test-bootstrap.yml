@@ -234,6 +234,18 @@ jobs:
           bash scripts/ci/prove-security-log-pipeline.sh
           bash scripts/ci/prove-prometheus-scrapes.sh
 
+      - name: Prove ES rollover and deletion
+        run: |
+          set -euo pipefail
+
+          # The base monitoring kustomization intentionally does NOT include
+          # elasticsearch-ci-accelerated-ilm.yaml, so apply it explicitly
+          # before the retention proof. The script itself is also tolerant
+          # if the ConfigMap is already present.
+          kubectl apply -f manifests/base/monitoring/elasticsearch-ci-accelerated-ilm.yaml
+
+          bash scripts/ci/prove-es-retention-rollover.sh
+
       - name: Failure diagnostics
         if: failure()
         run: |

@@ -153,8 +153,38 @@ What this proof does not yet verify:
 - that natural sensor-generated Suricata traffic in the cluster reaches Elasticsearch without the injected canary
 - that `fos1-logs-*` non-security indices are flowing end to end
 - that Kibana data views, saved objects, or dashboards are provisioned automatically
-- that the `14d` delete phase has actually executed against an aged index
+- that the `14d` delete phase has actually executed against an aged index at production wall-clock time scales
 - that PVC-backed monitoring state has been exercised through restart or reschedule events
+
+### CI Accelerated ILM Proof vs Production Retention Target
+
+The production retention target shipped in [manifests/base/monitoring/elasticsearch.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/monitoring/elasticsearch.yaml) stays at `fos1-log-retention-14d` against `fos1-security-*` and `fos1-logs-*` on a single `30Gi` PVC. That envelope has never been exercised end-to-end by the Kind harness, because a 14-day wall-clock wait does not fit in a CI budget, and the harness only proves that the policy and template are **attached**, not that they fire.
+
+To close the gap between "attached" and "fires", the repository now ships a second, clearly-labelled policy + template that the CI harness installs and tears down per run:
+
+- CI-only artifacts source: [manifests/base/monitoring/elasticsearch-ci-accelerated-ilm.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/monitoring/elasticsearch-ci-accelerated-ilm.yaml) packages an accelerated ILM policy and index template into a ConfigMap. The manifest is **not** referenced by `manifests/base/monitoring/kustomization.yaml`; it is applied explicitly by the CI workflow step and is not part of a normal cluster deployment.
+- CI ILM policy name: `fos1-ci-accelerated` with `hot.actions.rollover.max_age=30s`, `hot.actions.rollover.max_docs=5`, and `delete.min_age=1m`
+- CI index template: `fos1-ci-retention-template` matching `fos1-ci-retention-*` and attaching the accelerated policy, including `index.lifecycle.rollover_alias=fos1-ci-retention`
+- CI harness source: [scripts/ci/prove-es-retention-rollover.sh](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-es-retention-rollover.sh) port-forwards Elasticsearch, temporarily lowers `indices.lifecycle.poll_interval` to `1s` via the transient cluster settings API, installs the CI policy and template, bootstraps write alias `fos1-ci-retention` at backing index `fos1-ci-retention-000001`, posts canary documents in batches with explicit `POST /fos1-ci-retention/_rollover` calls between batches, and polls `GET /_cat/indices/fos1-ci-retention-*?format=json` on a 5-second cadence up to 180 seconds
+- CI harness assertions:
+  - at least 2 distinct generations of `fos1-ci-retention-*` were observed at some point during the run (rollover executed)
+  - the initial backing index `fos1-ci-retention-000001` eventually disappeared from the index list (the delete phase executed)
+- CI cleanup: the script is trap-based and removes the CI policy, template, backing indices, the CI ConfigMap (if it installed it itself), and the transient poll-interval override on exit
+
+What IS proven by the accelerated CI path:
+
+- an ILM policy with `rollover` and `delete` actions attached to a matching template actually drives Elasticsearch to create a new generation and delete the oldest under live writes
+- the policy/template + write-alias + bootstrap-index wiring produces a legal, functioning rollover chain when given real documents
+
+What is explicitly NOT proven by the accelerated CI path:
+
+- the production `14d` wall-clock retention — the CI policy is seconds/minutes, not days
+- the production `30Gi` PVC storage envelope — the CI indices never grow to that scale
+- high availability or multi-node shard placement — the Elasticsearch StatefulSet remains `discovery.type=single-node`
+- snapshot and restore — the repository does not yet own snapshot automation
+- behavior on the real `fos1-security-*` or `fos1-logs-*` indices — the CI proof runs against a dedicated `fos1-ci-retention-*` pattern specifically so it cannot contaminate or displace the production retention policy attachment
+
+Timing caveat: the accelerated proof depends on ILM actually evaluating the policy on each poll tick. The baseline `elasticsearch.yml` sets `indices.lifecycle.poll_interval=10m`, which the CI script overrides via the transient cluster settings API for the duration of the run and then restores. If that override is removed or the cluster rejects it, the proof will legitimately fail rather than silently pass, and ordering of `override_ilm_poll_interval` before `install_accelerated_policy` matters: lower the poll interval first, then install the policy, then write documents and force rollover. That ordering needs a live Kind validation before the first merge to confirm timing budgets hold on the GitHub Actions runner.
 
 ## Operational Reading Guide
 
