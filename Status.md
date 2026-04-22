@@ -1,23 +1,33 @@
 # Implementation Status Report
-**Generated:** 2026-04-20
+**Generated:** 2026-04-22
 **Repository:** Kubernetes-Based Router/Firewall (FOS1)
 
 ## Executive Summary
 
-This repository has progressed from an architectural blueprint to a **functional implementation** with verified, passing Go build and test coverage on the integrated post-ticket-28 tree as of 2026-04-19. The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, and first post-20 convergence sprint are implemented.
+This repository has progressed from an architectural blueprint to a **functional implementation** with Sprint 29 (tickets 29-37) fully merged as of 2026-04-22. `make verify-mainline` is green (`go test ./...` 37/37 packages pass, `go build ./...` succeeds). The primary routing, NAT, DNS, DHCP, NTP, WireGuard, IDS, DPI, auth, policy-enforcement, and observability-proof pipelines are implemented.
 
-The highest-value remaining work has narrowed further. The follow-on ops sprint completed the canonical CI enforcement path, aligned the owned exporter deployment/scrape baseline for DPI and NTP with the repository manifests, and made the single-node monitoring durability story explicit in manifests. The bootstrap harness now runtime-proves the repository-owned Suricata log path into Elasticsearch, the Elasticsearch ILM/template bootstrap, the Prometheus pod-annotation scrape path for node-local `dpi-manager` plus `ntp-controller`, and a deterministic end-to-end canary round-trip through the event correlator runtime (file source to file sink, with a `/ready` assertion). Sprint 29 Ticket 31 extends that slice with a natural-traffic DPI proof (sid `9000001`) that drives real HTTP payloads across the Suricata inspection interface and asserts the sensor emits, Elasticsearch indexes, and the DPI Prometheus counter advances — so the owned proof now covers both the canary log-line path and a natural-traffic DPI path. What remains is the broader runtime depth beyond those focused proofs: non-canary event-correlation ingestion from live sensors and durable export sinks, operator-style observability add-ons, HA/storage hardening, and wider platform hardening.
+Sprint 29 closed the "advertised but unshipped" surfaces and broadened proof depth:
+- **Event correlator runtime** — `scripts/ci/prove-event-correlation-e2e.sh` proves a canary round-trip through the file source → correlator → file sink with a `/ready` HTTP 200 assertion (Ticket 29).
+- **Elasticsearch rollover + delete** — `scripts/ci/prove-es-retention-rollover.sh` installs a CI-only `fos1-ci-accelerated` policy and asserts rollover + delete actions actually fire (Ticket 30). The production `14d`/`30Gi` envelope stays a manifest-level target.
+- **Natural-traffic DPI** — `scripts/ci/prove-dpi-natural-traffic.sh` drives an `X-FOS1-Canary` HTTP header across the Suricata inspection interface, asserts sid `9000001` fires, and verifies Elasticsearch indexing plus `sum(dpi_events_total)` advance (Ticket 31).
+- **Dashboard/alert query validation** — `tools/prometheus-query-validator/` runs as a Kind harness step and fails CI on any non-allowlisted empty/error PromQL expression in owned dashboards or alert rules; target-architecture expressions (node-exporter, kube-state-metrics) live in `manifests/dashboards/.queries-target-architecture.txt` (Ticket 32).
+- **FilterPolicy → Cilium** — `pkg/security/policy/controller.go` reconciles FilterPolicy to CiliumNetworkPolicy with spec-hash idempotency and Applied/Degraded/Invalid/Removed conditions. `FirewallRule` CRD, nftables translator, and `pkg/security/firewall/` removed per ADR-0001 (Ticket 33).
+- **Auth surface finalization** — SAML, RADIUS, and certificate auth stubs removed from manager factory, CRD enum, manifests, and docs. Auth is scoped to local/LDAP/OAuth (Ticket 34).
+- **NIC + capture capability reporting** — real ethtool/tcpdump on Linux, explicit unsupported errors off-Linux or when `tcpdump` is absent. eBPF-based capture is a non-goal (Ticket 35).
+- **Coverage bump on thin packages** — `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1% (Ticket 36).
+
+What remains for production readiness is captured in Sprint 30 (tickets 38-46): eBPF compile+load (XDP + TC), shared CRD status writeback helper, read-only REST API, minimum-privilege RBAC, performance baseline harness, threat-intelligence ingestion v0, and QoS enforcement via Cilium Bandwidth Manager.
 
 ## Verification Snapshot
 
-Verified contract as of 2026-04-19:
+Verified contract as of 2026-04-22:
 - `make verify-mainline` is the canonical Go verification target and runs:
-  - `go test ./...`
+  - `go test ./...` (37/37 packages pass)
   - `go build ./...`
 - `.github/workflows/ci.yml` enforces `make verify-mainline` on pushes to `main` and pull requests targeting `main`
 - `.github/workflows/validate-manifests.yml` runs on manifest-affecting pull requests and fails on real `kubeconform` validation errors
 
-Owned observability contract as of 2026-04-20:
+Owned observability contract as of 2026-04-22:
 - `dpi-manager` runs as a node-local `DaemonSet` and its annotated `:8080/metrics` endpoint is runtime-proven through the Kind Prometheus pod-scrape path
 - `ntp-controller` exposes an annotated `:9559/metrics` endpoint and that pod-scrape path is runtime-proven through the same Kind harness
 - the Kind harness narrows NTP proof deployment to the repository-owned controller slice rather than pretending optional operator add-ons or the chrony daemonset are part of the verified baseline
@@ -34,20 +44,27 @@ Owned observability contract as of 2026-04-20:
 
 | Metric | Value | Assessment |
 |--------|-------|------------|
-| Total Go Files | 230+ | Large, complex codebase |
+| Total Go Files | ~297 (219 non-test) | Large, complex codebase |
 | Lines of Go Code | ~85,000+ | Significant implementation |
-| CRD Kinds Defined | 42+ | Comprehensive API coverage |
-| Primary Ticket Track | Tickets 1-28 plus ops sprint follow-through | Core path plus CI/observability contract updates implemented |
-| Remaining Work Shape | Runtime and ops hardening | The owned Kind proof now covers Prometheus pod scraping plus the Suricata/Elasticsearch baseline, but broader runtime depth is still incomplete |
-| Verification Status | `make verify-mainline` is canonical; CI and manifest validation enforce the current contract | Docs, manifests, and the bootstrap harness now agree on the node-local DPI topology and the current observability proof boundary |
-| Documentation Files | 37 | Excellent documentation |
-| Production Ready | ❌ NO | Strong implementation base, but not yet fully converged or hardened |
+| CRD Kinds Defined | 40+ | Comprehensive API coverage (FirewallRule CRD removed per ADR-0001; SAML/RADIUS/Cert auth configs removed) |
+| Primary Ticket Track | Tickets 1-37 complete (Sprint 29 fully merged) | Core path plus observability proof depth, FilterPolicy enforcement, auth closeout, NIC/capture reporting, coverage bumps |
+| Remaining Work Shape | Sprint 30 critical-path production gaps | eBPF compile+load, REST/gRPC API, HA/clustering, performance baseline, RBAC, threat-intel, QoS enforcement |
+| Verification Status | `make verify-mainline` green, 37/37 test packages pass; Kind harness proves event correlator E2E, accelerated ILM rollover, natural-traffic DPI, and dashboard/alert PromQL validity | Docs, manifests, and the bootstrap harness agree on the current proof envelope |
+| Testing Coverage (Sprint 29 Ticket 36 measurements) | `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1% | Thin packages now have reconciliation-style coverage |
+| Documentation Files | 56 | Excellent documentation |
+| Production Ready | ❌ NO | Strong implementation base; Sprint 30 critical-path gaps still block production posture |
 
 ## Priority Next Steps
 
-1. Extend observability proof beyond the current baseline by validating downstream dashboards/alerts and any non-canary, non-natural-traffic-sid ingestion paths rather than only the narrow owned proof slice (natural-traffic DPI is now proven via sid `9000001`; see [scripts/ci/prove-dpi-natural-traffic.sh](scripts/ci/prove-dpi-natural-traffic.sh)).
-2. ILM rollover + delete actions now execute under an accelerated CI policy (sprint 29 ticket 30); still open: exercise the production `14d`/`30Gi` envelope against natural load, and decide whether the single-node envelope needs snapshotting or HA work.
-3. Carry event correlation beyond the deterministic canary E2E proof in [scripts/ci/prove-event-correlation-e2e.sh](scripts/ci/prove-event-correlation-e2e.sh) into verified ingestion from live Suricata/Zeek sensors and durable export sinks.
+Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps. Full ticket definitions live in `docs/design/implementation_backlog.md` §"Sprint 30: Critical-Path Production Gaps".
+
+1. **eBPF runtime** — Tickets 38-39 produce one owned XDP program and one TC-attached QoS classifier, integrate LLVM/Clang compilation, and wire `pkg/hardware/ebpf/program_manager.go` to load and attach real BPF objects via `github.com/cilium/ebpf`.
+2. **Shared status writeback helper** — Ticket 40 lifts the NAT controller's `writeStatusToCRD` pattern into a shared location so `FilterPolicy.Status.Conditions` (Sprint 29 Ticket 33 left these as in-memory only) and at least one other controller persist status back to the API server.
+3. **Read-only REST management API** — Ticket 41 adds `cmd/api-server/` exposing one resource family under mTLS with health/ready probes and a minimal OpenAPI spec.
+4. **Minimum-privilege RBAC** — Ticket 42 authors ClusterRoles per controller and adds CI enforcement that no binding references `cluster-admin`.
+5. **Performance baseline** — Ticket 43 adds `tools/bench/` with a `go test -bench` harness for one hot path and records ops/s + p50/p95/p99 latency in `docs/performance/`.
+6. **Threat-intelligence ingestion v0** — Ticket 44 ingests one public blocklist feed into a `ThreatFeed` CRD with periodic refresh.
+7. **QoS enforcement via Cilium Bandwidth Manager** — Ticket 45 wires `QoSProfile` CRs into the chosen backend (Bandwidth Manager preferred per ADR-0001).
 
 ---
 
@@ -85,18 +102,19 @@ Owned observability contract as of 2026-04-20:
 
 | Component | Files | Lines | Status | Notes |
 |-----------|-------|-------|--------|-------|
-| **DPI Framework Core** | `pkg/security/dpi/manager.go` | 825 | Complete | Profile/flow/event management, event dispatch system |
+| **DPI Framework Core** | `pkg/security/dpi/manager.go` | 825 | Complete | Profile/flow/event management, event dispatch system; natural-traffic proof via sid `9000001` (Sprint 29 Ticket 31) |
 | **IDS Manager** | `pkg/security/ids/manager.go` | 200+ | Complete | IDS/IPS coordination framework |
 | **Certificate Manager** | `pkg/security/certificates/manager.go` | 730 | Complete | Full cert-manager integration, lifecycle management |
-| **Authentication Framework** | `pkg/security/auth/manager.go` | 751 | Complete | Manager core with audit logging |
+| **Authentication Framework** | `pkg/security/auth/manager.go` | 751 | Complete (scope reduced per Sprint 29 Ticket 34) | Manager core with audit logging; local/LDAP/OAuth only |
 
 | **DPI Connectors** | `pkg/security/dpi/connectors/` | 2000+ | Complete | Real Suricata stats, event-to-Cilium policy pipeline with TTL expiry and cleanup |
 | **Suricata Controller** | `pkg/security/ids/suricata/` | 527+ | Complete | Real Suricata engine queries via Unix socket + Eve log parsing |
 | **Zeek Controller** | `pkg/security/ids/zeek/` | 568+ | Complete | Real Zeek Broker client integration |
+| **FilterPolicy Controller** | `pkg/security/policy/controller.go` | 700+ | Complete (Sprint 29 Ticket 33) | FilterPolicy → CiliumNetworkPolicy translation via spec-hash idempotency; Applied/Degraded/Invalid/Removed conditions; 51.1% coverage. Status persistence via CRD subresource is a known in-memory-only caveat (Sprint 30 Ticket 40). |
 | **Local Auth Provider** | `pkg/security/auth/providers/local.go` | 1030 | Complete | File-based auth with password hashing |
 | **LDAP Auth Provider** | `pkg/security/auth/providers/ldap.go` | - | Complete | Real LDAP provider construction and authentication |
 | **OAuth Auth Provider** | `pkg/security/auth/providers/oauth.go` | - | Complete | Real OAuth provider construction and authentication |
-| **Event Correlation** | `pkg/security/ids/correlation/`, `cmd/event-correlator/`, `build/event-correlator/Dockerfile` | - | Complete with E2E proof | Controller reconciles ConfigMap/Deployment/Service; the correlator runtime round-trip is gated by [scripts/ci/prove-event-correlation-e2e.sh](scripts/ci/prove-event-correlation-e2e.sh) in the Kind bootstrap harness (injects a canary event into the configured file source, asserts the file sink emits the correlated record, and asserts `/ready` returns HTTP 200). Live non-canary sensor ingestion and durable export sinks remain out of scope. |
+| **Event Correlation** | `pkg/security/ids/correlation/`, `cmd/event-correlator/`, `build/event-correlator/Dockerfile` | - | Complete (E2E proof in Kind harness) | Controller reconciles ConfigMap/Deployment/Service; the correlator runtime round-trip is gated by [scripts/ci/prove-event-correlation-e2e.sh](scripts/ci/prove-event-correlation-e2e.sh) in the Kind bootstrap harness (injects a canary event into the configured file source, asserts the file sink emits the correlated record, and asserts `/ready` returns HTTP 200). Live non-canary sensor ingestion and durable export sinks remain out of scope. |
 
 #### ❌ Not Implemented / Non-goal
 
@@ -145,17 +163,17 @@ Owned observability contract as of 2026-04-20:
 
 | Component | Files | Lines | Status | Critical Gaps |
 |-----------|-------|-------|--------|---------------|
-| **NIC Manager** | `pkg/hardware/nic/` | - | Real on Linux, stubbed off-Linux | Real ethtool / netlink queries on Linux via a mockable `ethtoolClient` seam; `ErrNICStatisticsNotSupported` / `ErrNICFeatureNotSupported` sentinels surface when drivers expose no counters. Non-Linux builds return `ErrNICUnsupportedPlatform` for every method. Intel X540/X550/I225 driver-specific quirks are still a follow-up. |
-| **Packet Capture** | `pkg/hardware/capture/` | - | Real tcpdump shim on Linux, stubbed off-Linux | Split into `manager_linux.go` + `manager_stub.go`; `NewManager` verifies `tcpdump` is on PATH and returns `ErrTCPDumpNotAvailable` when missing. A mockable `captureExec` seam powers unit tests. eBPF-based capture remains a non-goal. |
-| **Hardware Offload** | `pkg/hardware/offload/` | - | Real on Linux, stubbed off-Linux | Real ethtool feature / statistics reporting on Linux with `ErrOffloadStatisticsNotSupported` for drivers that expose no counters (ticket 26). |
+| **NIC Manager** | `pkg/hardware/nic/` | - | Real on Linux, stubbed off-Linux (Sprint 29 Ticket 35) | Real ethtool / netlink queries on Linux via a mockable `ethtoolClient` seam; `ErrNICStatisticsNotSupported` / `ErrNICFeatureNotSupported` sentinels surface when drivers expose no counters. Non-Linux builds return `ErrNICUnsupportedPlatform` for every method. Intel X540/X550/I225 driver-specific quirks are still a follow-up. Same contract shape as Sprint 28 Ticket 26 offload pattern. |
+| **Packet Capture** | `pkg/hardware/capture/` | - | Real tcpdump shim on Linux, stubbed off-Linux (Sprint 29 Ticket 35) | Split into `manager_linux.go` + `manager_stub.go`; `NewManager` verifies `tcpdump` is on PATH and returns `ErrTCPDumpNotAvailable` when missing. A mockable `captureExec` seam powers unit tests. eBPF-based capture remains a non-goal. |
+| **Hardware Offload** | `pkg/hardware/offload/` | - | Real on Linux, stubbed off-Linux (Ticket 26) | Real ethtool feature / statistics reporting on Linux with `ErrOffloadStatisticsNotSupported` for drivers that expose no counters. |
 
 ---
 
 ## Kubernetes Resources Status
 
-### ✅ Custom Resource Definitions (42+ Kinds)
+### ✅ Custom Resource Definitions (40+ Kinds)
 
-All CRD definitions are **complete and well-structured**:
+All CRD definitions are **complete and well-structured**. Removed surfaces are explicit non-goals per ADR-0001 / Sprint 29 closures:
 
 **Network CRDs:**
 - NetworkInterface, VLAN, Route, RouteTable, RoutingPolicy
@@ -168,12 +186,15 @@ All CRD definitions are **complete and well-structured**:
 - NTPService
 
 **Security CRDs:**
-- FilterPolicy, FilterPolicyGroup, FilterZone, IPSet
-- FirewallRule / FirewallZone removed in sprint 29 ticket 33 per ADR-0001; `FilterPolicy` is the authoritative policy surface.
+- FilterPolicy, FilterPolicyGroup, FilterZone, IPSet — authoritative policy surface per ADR-0001
 - DPIProfile, DPIFlow, DPIPolicy
 - SuricataInstance, ZeekInstance, EventCorrelation
 - WireGuardVPN, AuthProvider, AuthConfig
 - CiliumNetworkPolicy, CiliumClusterwideNetworkPolicy
+
+**Removed (Sprint 29):**
+- `FirewallRule` / `FirewallZone` — removed in Ticket 33 per ADR-0001 (Cilium is the sole enforcement backend).
+- SAML / RADIUS / certificate config fields on `AuthProvider` — removed in Ticket 34 per auth scope reduction.
 
 ### ✅ Kubernetes Manifests
 
@@ -220,7 +241,7 @@ All CRD definitions are **complete and well-structured**:
 | eBPF | `pkg/controllers/ebpf_controller.go` | 522 | ⚠️ Partial | Program management without loading |
 | DHCP | `pkg/controllers/dhcp_controller.go` | 579 | ⚠️ Partial | Config sync without daemon control |
 | DNS | `pkg/controllers/dns_controller.go` | 428 | ⚠️ Partial | Record management |
-| Filter Policy | `pkg/security/policy/controller.go` | 700+ | ✅ Complete | Idempotent, statusful Cilium translation with add/update/delete/disable lifecycle; spec-hash no-op, Applied/Degraded/Invalid/Removed conditions (sprint 29 ticket 33) |
+| Filter Policy | `pkg/security/policy/controller.go` | 700+ | ✅ Complete (Sprint 29 Ticket 33) | Idempotent, statusful Cilium translation with add/update/delete/disable lifecycle; spec-hash no-op, Applied/Degraded/Invalid/Removed conditions; 51.1% test coverage (Sprint 29 Ticket 36). Status subresource persistence is in-memory only; Sprint 30 Ticket 40 targets a shared writeback helper. |
 | Suricata | `pkg/security/ids/suricata/controller.go` | 527 | ⚠️ Partial | K8s integration only |
 | Zeek | `pkg/security/ids/zeek/controller.go` | 568 | ⚠️ Partial | K8s integration only |
 | WireGuard | `pkg/vpn/wireguard/controller.go` | - | ✅ Complete | Real CRD-to-interface reconciliation with status |
@@ -233,7 +254,7 @@ All CRD definitions are **complete and well-structured**:
 
 ## Documentation Status
 
-### ✅ 37 Documentation Files - Comprehensive Coverage
+### ✅ 56 Documentation Files - Comprehensive Coverage
 
 **Architecture & Design (16 files):**
 - All major components have detailed design documents
@@ -292,23 +313,28 @@ All CRD definitions are **complete and well-structured**:
 ### ⚠️ Improving Test Coverage
 
 **Test Statistics:**
-- Test Files: 20+
-- Test Functions: 100+
-- Coverage: Estimated ~30-35%
+- Test Packages Passing: 37/37 under `make verify-mainline`
+- Test Files: 60+
+- Test Functions: 200+
 
-**Existing Tests:**
-- `pkg/security/dpi/manager_test.go` - DPI manager
-- `pkg/cilium/network_controller_test.go` - Cilium controller
-- `pkg/cilium/route_sync_test.go` - Route sync
-- `pkg/cilium/router_test.go` - Router tests
-- `pkg/cilium/client_test.go` - Cilium client tests
-- `test/integration/dhcp_dns_integration_test.go` - Integration
-- Many new test files added across controllers and services
+**Measured Coverage (post-Sprint 29 Ticket 36):**
+- `pkg/traffic` — 51.4%
+- `pkg/hardware/wan` — 57.6%
+- `pkg/network/ebpf` — 93.2%
+- `pkg/security/policy` — 51.1%
+
+Other packages retain their pre-sprint coverage; aggregate coverage across the repository was previously estimated at ~30-35% and has improved on the four packages above. Accepted gaps for specific thin packages are tracked in `docs/design/test_matrix.md`.
+
+**Kind-harness E2E Proofs (Sprint 29):**
+- `scripts/ci/prove-event-correlation-e2e.sh` — canary → correlator → sink + `/ready` HTTP 200 (Ticket 29)
+- `scripts/ci/prove-es-retention-rollover.sh` — accelerated ILM rollover + delete against `fos1-ci-accelerated` (Ticket 30)
+- `scripts/ci/prove-dpi-natural-traffic.sh` — Suricata sid `9000001` → Elasticsearch → `sum(dpi_events_total)` advance (Ticket 31)
+- `tools/prometheus-query-validator/` — dashboard + alert-rule PromQL validated against live series (Ticket 32)
 
 **Missing:**
-- Unit tests for remaining packages
-- End-to-end tests
-- Performance benchmarks
+- Broader aggregate coverage across packages not specifically targeted
+- Live-sensor event ingestion beyond the deterministic canary paths
+- Performance benchmarks (Sprint 30 Ticket 43 targets a baseline harness)
 - Load testing
 
 ---
@@ -341,32 +367,73 @@ All CRD definitions are **complete and well-structured**:
 
 ### ⚠️ Areas for Improvement
 
-1. **Test Coverage** - Only 9 test files for 169 Go files
-2. **Placeholder Code** - 347+ TODO/FIXME comments
-3. **Incomplete Implementations** - Many "not implemented" stubs
-4. **Consistency** - Documentation inconsistent across packages
-5. **Error Messages** - Some generic errors need more context
+1. **Test Coverage** - 60+ test files across 37 verified packages; aggregate coverage still uneven. Four packages raised to 50%+ in Sprint 29 Ticket 36; others remain thinner.
+2. **Placeholder Code** - TODO/FIXME comments still present in non-critical paths; Sprint 29 closed `<type> provider not implemented` strings (Ticket 34) and the FilterPolicy log-only reconcile path (Ticket 33).
+3. **Incomplete Implementations** - eBPF compile+load is the largest remaining stub; QoS enforcement is stubbed pending Sprint 30 Ticket 45.
+4. **Consistency** - Documentation inconsistent across packages; status-sensitive docs are truth-upped at end of each sprint (tickets 20, 27, 37).
+5. **Error Messages** - Sprint 29 Tickets 33-35 added explicit, typed sentinel errors (`ErrNICStatisticsNotSupported`, `ErrTCPDumpNotAvailable`, `ErrNICUnsupportedPlatform`, etc.); other packages still have generic errors.
 
 ---
 
 ## Critical Implementation Gaps
 
-### 1. Kernel/System Integration ⚠️ Partially Addressed
+Closed in Sprint 29:
+- **FilterPolicy enforcement** — `pkg/security/policy/controller.go` reconciles FilterPolicy into real CiliumNetworkPolicy objects with spec-hash idempotency and Applied/Degraded/Invalid/Removed conditions (Ticket 33). `FirewallRule` CRD, nftables translator/zone manager, and `pkg/security/firewall/` removed per ADR-0001. FilterPolicy status persistence is an in-memory-only known caveat; Sprint 30 Ticket 40 targets a shared writeback helper.
+- **Auth surface finalization** — SAML/RADIUS/certificate stubs removed from manager factory, CRD enum, manifests, and docs; auth scoped to local/LDAP/OAuth (Ticket 34).
+- **NIC and capture capability reporting** — real ethtool/tcpdump shims on Linux with explicit `ErrNICStatisticsNotSupported`, `ErrTCPDumpNotAvailable`, `ErrNICUnsupportedPlatform`, `ErrOffloadStatisticsNotSupported`, and `ErrNICFeatureNotSupported` sentinels off-Linux or on unsupported drivers (Ticket 35).
+- **Observability proof depth** — event correlator E2E proof (Ticket 29), accelerated ILM rollover/delete proof (Ticket 30), natural-traffic DPI proof via sid `9000001` (Ticket 31), and dashboard/alert PromQL validation against live series (Ticket 32) all landed.
 
-**Now covered via FRR/Cilium:**
-- Route table management handled through FRR vtysh and Cilium route sync
-- NAT enforcement handled through Cilium policy generation
-- BGP/OSPF protocol state managed through FRR
+Still open for Sprint 30:
 
-**Still Missing:**
-- No netlink syscalls for direct network interface manipulation
-- No iptables/nftables rule generation
-- No actual eBPF program compilation and loading
-- No hardware NIC driver interaction
+### 1. eBPF Compilation & Loading ❌ (Sprint 30 Tickets 38-39)
 
-**Impact:** Core routing/NAT works via FRR+Cilium; direct kernel manipulation still unavailable
+**What's Missing:**
+- No LLVM/Clang integration for BPF compilation
+- No BPF program loading (no bpf() syscalls)
+- No XDP/TC hook attachment
+- No eBPF map population
+- No eBPF program verification
 
-### 2. Daemon Communication ✅ Mostly Complete
+**Impact:** High-performance packet processing unavailable. Framework manages program state, but no BPF bytecode is produced or attached. Sprint 30 Ticket 38 targets one owned XDP program; Ticket 39 targets one TC-attached QoS classifier.
+
+### 2. Management API ❌ (Sprint 30 Ticket 41)
+
+**What's Missing:**
+- No REST API exposed
+- No gRPC API server
+- No web UI backend
+
+**Impact:** Can only manage via Kubernetes API. Sprint 30 Ticket 41 targets a read-only REST v0 under `cmd/api-server/` with mTLS, `/healthz`, `/readyz`, and a minimal OpenAPI spec.
+
+### 3. HA / Clustering ❌ (not yet scoped)
+
+**What's Missing:**
+- Single-node posture for Elasticsearch, Prometheus, Grafana, Alertmanager
+- No controller replica coordination
+- No state replication
+- No snapshot/restore automation
+
+**Impact:** Single point of failure. Not scoped in Sprint 30; remains a later-sprint target.
+
+### 4. Performance Baseline ❌ (Sprint 30 Ticket 43)
+
+**What's Missing:**
+- No benchmarks
+- Unknown throughput/connection limits
+- No load tests
+
+**Impact:** Scalability unknown. Sprint 30 Ticket 43 targets one hot-path benchmark (NAT policy apply or DPI event → Cilium policy) with baseline ops/s and p50/p95/p99 latency recorded in `docs/performance/`.
+
+### 5. Security Posture: RBAC / TLS / Secrets ❌ (Sprint 30 Ticket 42)
+
+**What's Missing:**
+- Controllers run without explicit ClusterRole scoping
+- No internal service TLS documented
+- No secrets management model
+
+**Impact:** Deployment security posture is not production-ready. Sprint 30 Ticket 42 targets minimum-privilege ClusterRoles per controller plus CI enforcement that no binding references `cluster-admin`.
+
+### 6. Daemon Communication ✅ Complete
 
 **Integrated:**
 - FRRouting (FRR) vtysh integration with config validation and live state queries
@@ -376,65 +443,25 @@ All CRD definitions are **complete and well-structured**:
 - CoreDNS zone updates + reload
 - AdGuard API client integration
 
-**Remaining:**
-- No fallback if daemons are unavailable
-- Version compatibility untested
+**Remaining:** version compatibility is not exhaustively tested; fallback behavior when daemons are unavailable is limited.
 
-**Impact:** Core daemon communication is functional
+### 7. Kernel/System Integration ⚠️ Partially Addressed
 
-### 3. eBPF Compilation & Loading ❌
+**Covered via FRR/Cilium:**
+- Route table management handled through FRR vtysh and Cilium route sync
+- NAT enforcement handled through Cilium policy generation
+- BGP/OSPF protocol state managed through FRR
+- FilterPolicy enforcement through CiliumNetworkPolicy translation (Sprint 29 Ticket 33)
 
-**What's Missing:**
-- No LLVM/Clang integration for BPF compilation
-- No BPF program loading (no bpf() syscalls)
-- No XDP/TC hook attachment
-- No eBPF map population
-- No eBPF program verification
+**Explicit non-goals per ADR-0001:**
+- nftables or iptables rule generation
+- `FirewallRule` CRD and controller (both removed in Sprint 29 Ticket 33)
 
-**Impact:** High-performance packet processing unavailable
+**Still Missing:**
+- No netlink syscalls for direct network interface manipulation
+- No actual eBPF program compilation and loading (Sprint 30 Tickets 38-39)
 
-### 4. Authentication Providers ✅ Complete (Scoped)
-
-**Integrated:**
-- Local file-based auth with password hashing
-- LDAP provider wired to real construction and authentication
-- OAuth provider wired to real construction and authentication
-
-**Non-goals (removed 2026-04-21 per Sprint 29 Ticket 34):**
-- SAML provider — removed; no skeleton existed
-- RADIUS provider — removed; no skeleton existed
-- Certificate auth provider — removed; no skeleton existed
-
-If SAML or RADIUS is later wanted, it can be reintroduced through the
-established LDAP/OAuth 3-layer pattern (`pkg/security/auth/providers/*`
-+ factory registration + CRD config type).
-
-**Impact:** Core auth providers (local, LDAP, OAuth) are functional; SAML/RADIUS/cert are out of scope for this repo.
-
-### 5. Firewall & Policy Enforcement ✅ via Cilium (ADR-0001)
-
-**Integrated:**
-- `FilterPolicy` CRD translates into `CiliumNetworkPolicy` objects through
-  `pkg/security/policy/controller.go` and `pkg/cilium/client.go`.
-- Idempotent spec-hash reconcile with Applied/Degraded/Invalid/Removed
-  conditions, matching the NAT controller surface.
-- Disable and delete paths reconcile via `ciliumClient.DeleteNetworkPolicy`.
-
-**Non-goals per ADR-0001:**
-- nftables rule generation (removed in sprint 29 ticket 33).
-- `FirewallRule` CRD and its controller (removed in sprint 29 ticket 33).
-
-**Remaining:** Runtime observability on applied Cilium policies is a Ticket 32 concern.
-
-### 6. API Server ❌
-
-**What's Missing:**
-- No REST API exposed
-- No gRPC API server
-- No web UI backend
-- Limited external management interface
-
-**Impact:** Can only manage via Kubernetes API
+**Impact:** Core routing/NAT/policy works via FRR+Cilium; direct kernel manipulation is intentionally out of scope per ADR-0001 for enforcement paths.
 
 ---
 
@@ -468,14 +495,21 @@ established LDAP/OAuth 3-layer pattern (`pkg/security/auth/providers/*`
 
 1. **NTP Controller** - Config generation works, real Chrony integration in progress
 
-### ❌ Doesn't Work (Major implementation needed)
+### ❌ Doesn't Work (Major implementation needed — Sprint 30 scope)
 
-1. **Physical Network Manipulation** - No direct kernel interaction (netlink)
-2. (removed — FilterPolicy Cilium enforcement is complete per ADR-0001)
-3. **eBPF Programs** - No compilation or loading
-4. **Packet Capture** - Interface only
-5. **Threat Intelligence** - Framework only
-6. **QoS Enforcement** - Types only
+1. **eBPF Program Compilation/Loading** - No LLVM/Clang integration, no BPF bytecode attached (Sprint 30 Tickets 38-39)
+2. **REST / gRPC API** - No external management surface (Sprint 30 Ticket 41)
+3. **QoS Enforcement** - Types and controllers exist but no real rate limiting (Sprint 30 Ticket 45)
+4. **Threat Intelligence** - Framework only; no feed ingestion (Sprint 30 Ticket 44)
+5. **Performance Baseline** - No benchmarks (Sprint 30 Ticket 43)
+6. **HA / Clustering** - Single-node posture (later-sprint target)
+
+### Non-goals (explicit per ADR-0001 / Sprint 29)
+
+- `nftables` / `iptables` rule generation — Cilium is the sole enforcement backend
+- `FirewallRule` CRD and controller — removed in Sprint 29 Ticket 33
+- SAML / RADIUS / certificate auth providers — removed in Sprint 29 Ticket 34
+- eBPF-based packet capture — remains a non-goal per Sprint 29 Ticket 35
 
 ---
 
@@ -509,24 +543,29 @@ established LDAP/OAuth 3-layer pattern (`pkg/security/auth/providers/*`
 
 **Blockers for Production Use:**
 
-1. **Partial Kernel Integration** - Direct interface manipulation still missing; routing/NAT work via FRR+Cilium
-2. ~~No Daemon Control~~ - **Resolved:** FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard all integrated
-3. **Moderate Test Coverage** - ~30-35% coverage, needs improvement
-4. ~~Incomplete Auth~~ - **Resolved:** Local, LDAP, OAuth providers wired; SAML/RADIUS/cert removed as non-goals (Sprint 29 Ticket 34, 2026-04-21)
-5. ~~No Firewall~~ - **Resolved via Cilium (ADR-0001):** `FilterPolicy` translates into `CiliumNetworkPolicy` with idempotent, statusful reconciliation (sprint 29 ticket 33). nftables is a non-goal.
-6. **No eBPF Loading** - Cannot deploy high-performance packet processing
-7. **No API Server** - Limited external management
-8. **No HA/Clustering** - Single point of failure
-9. **No Performance Testing** - Unknown scalability limits
-10. **No Security Hardening** - Needs RBAC, TLS, secrets management
+1. ~~No Daemon Control~~ - **Resolved:** FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard all integrated
+2. ~~Incomplete Auth~~ - **Resolved:** Local, LDAP, OAuth providers wired; SAML/RADIUS/cert removed as non-goals per Sprint 29 Ticket 34
+3. ~~No Firewall~~ - **Resolved via Cilium (ADR-0001):** `FilterPolicy` translates into `CiliumNetworkPolicy` with idempotent, statusful reconciliation per Sprint 29 Ticket 33; nftables and `FirewallRule` are non-goals
+4. ~~NIC / Capture Stubs~~ - **Resolved:** Real ethtool + tcpdump shims on Linux with explicit sentinels off-Linux per Sprint 29 Ticket 35
+5. ~~Observability Proof Depth~~ - **Resolved:** Event correlator E2E, accelerated ILM rollover, natural-traffic DPI, and dashboard/alert PromQL validation all proved in the Kind bootstrap harness per Sprint 29 Tickets 29-32
+6. **Partial Kernel Integration** - Direct interface manipulation still missing (non-goal per ADR-0001 for enforcement paths)
+7. **Uneven Test Coverage** - Four targeted packages now at 50%+ (Sprint 29 Ticket 36); aggregate still uneven
+8. **No eBPF Loading** - Cannot deploy high-performance packet processing (Sprint 30 Tickets 38-39)
+9. **No API Server** - Limited external management (Sprint 30 Ticket 41)
+10. **No HA/Clustering** - Single point of failure; not scoped in Sprint 30
+11. **No Performance Baseline** - Scalability unknown (Sprint 30 Ticket 43)
+12. **No Security Hardening** - Needs RBAC, internal TLS, secrets management (Sprint 30 Ticket 42 for RBAC)
+13. **QoS Enforcement Stubbed** - (Sprint 30 Ticket 45 via Cilium Bandwidth Manager)
 
 **Estimated Effort to Production:**
-- **6-10 months** of full-time development
+- **4-7 months** of full-time development (reduced from 6-10 months as Sprint 29 closed out auth/firewall/nic/observability-proof-depth and narrowed the residual gap to eBPF + API + RBAC + performance + HA)
 - **2-4 experienced engineers**
-- Focus areas: eBPF loading, testing, security hardening, HA
+- Focus areas: eBPF compile/load, REST API + RBAC, performance baseline, HA/clustering (post-Sprint-30)
 
-**Current Stage:** Late Alpha
-**Production Readiness:** ~50-55%
+**Current Stage:** Late Alpha / Early Beta
+**Production Readiness:** ~60-65%
+
+Rationale: Sprint 29 closed the "advertised but unshipped" surfaces (FilterPolicy enforcement, auth surface, NIC/capture reporting) and added meaningful observability proof depth (correlator E2E, ILM rollover, natural-traffic DPI, dashboard validator). The remaining blockers are mostly net-new work — eBPF runtime, REST API, RBAC hardening, performance, HA — rather than wiring up existing stubs. Percentage is raised from the prior ~55% to ~60-65% to reflect both real completion (Sprint 29 closures) and honest scoping (SAML/RADIUS/cert, nftables, and eBPF-based capture formally marked non-goals rather than outstanding gaps).
 
 ---
 
@@ -572,17 +611,18 @@ established LDAP/OAuth 3-layer pattern (`pkg/security/auth/providers/*`
 
 ## Weaknesses & Risks
 
-### 1. Implementation Gaps (Moderate) ⚠️
-- ~25-30% of code is stubs/interfaces (down from 50-55%)
-- Direct kernel/system integration still missing for some areas
-- eBPF compilation/loading not implemented
-- nftables rule generation not implemented
+### 1. Implementation Gaps (Narrowed after Sprint 29) ⚠️
+- Sprint 29 closed FilterPolicy enforcement, auth surface scope, NIC/capture reporting, and observability proof depth
+- eBPF compilation/loading remains the largest feature gap (Sprint 30 Tickets 38-39)
+- Direct kernel/system integration beyond FRR+Cilium is an explicit non-goal per ADR-0001 for enforcement paths
+- nftables rule generation is a formal non-goal (removed in Sprint 29 Ticket 33)
 
-### 2. Test Coverage (Improving) ⚠️
-- 20+ test files, 100+ test functions
-- Estimated ~30-35% code coverage
-- Some integration tests present
-- No performance tests
+### 2. Test Coverage (Uneven) ⚠️
+- 60+ test files; 37/37 packages pass `make verify-mainline`
+- Four packages raised to 50%+ in Sprint 29 Ticket 36: `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1%
+- Aggregate coverage still uneven across other packages
+- Kind-harness E2E proofs landed in Sprint 29 (correlator, ILM rollover, natural-traffic DPI, dashboard PromQL)
+- No performance tests (Sprint 30 Ticket 43)
 - No load tests
 
 ### 3. External Dependencies (High Risk) ⚠️
@@ -720,19 +760,21 @@ This repository represents an **excellent architectural foundation** for a Kuber
 - Modern technology stack
 
 ⚠️ **Remaining Gaps:**
-- ~50-55% production ready (up from 15-20%)
-- Direct kernel integration (netlink, nftables) still missing
-- eBPF compilation/loading not implemented
-- Test coverage at ~30-35%, needs improvement
-- No HA/clustering, no API server
+- ~60-65% production ready (up from ~55% pre-Sprint-29)
+- eBPF compilation/loading not implemented (Sprint 30 Tickets 38-39)
+- No REST/gRPC API (Sprint 30 Ticket 41)
+- No minimum-privilege RBAC baseline (Sprint 30 Ticket 42)
+- No performance baseline or load tests (Sprint 30 Ticket 43)
+- No HA/clustering (later-sprint target)
+- Direct kernel integration (netlink) remains a non-goal for enforcement paths per ADR-0001; nftables, SAML/RADIUS/cert, eBPF-based capture, and `FirewallRule` are formal non-goals
 
-**Verdict:** This has evolved from an architectural blueprint to a **functional late-alpha system** with real daemon integrations (FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard), real Cilium policy generation, and working authentication providers. The remaining work focuses on eBPF, testing, and production hardening.
+**Verdict:** This has evolved from an architectural blueprint to a **functional late-alpha / early-beta system** with real daemon integrations (FRR, Suricata, Zeek, Kea, CoreDNS, AdGuard), real Cilium policy generation via FilterPolicy translation, working authentication providers (local/LDAP/OAuth), and Kind-harness E2E proofs for the event correlator, Elasticsearch rollover, natural-traffic DPI, and dashboard/alert PromQL validity. Sprint 29 closed the "advertised but unshipped" surfaces and raised coverage on thin packages.
 
-**Recommendation:** The core routing, NAT, DNS, DHCP, IDS/IPS, DPI, and filter-policy pipelines are now functional. Focus on eBPF loading, increased test coverage, and security hardening for production readiness.
+**Recommendation:** The core routing, NAT, DNS, DHCP, IDS/IPS, DPI, and filter-policy pipelines are now functional and proven in the Kind harness. Focus Sprint 30 on eBPF compile+load, REST/gRPC API, RBAC hardening, performance baseline, and threat-intelligence ingestion for production readiness. See `docs/design/implementation_backlog.md` §"Sprint 30: Critical-Path Production Gaps" for the ticket scope.
 
 ---
 
 **Report Prepared By:** Claude Code
-**Analysis Date:** 2026-04-09
-**Repository Path:** `/home/user/fos1/`
-**Commit:** `10512a9` (claude/repo-analysis-review-011CV3U5UwxJA9WVK9QWXY87)
+**Analysis Date:** 2026-04-22
+**Repository Path:** `/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/`
+**Commit:** `0929de8` (main @ end of Sprint 29)

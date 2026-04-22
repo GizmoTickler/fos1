@@ -597,7 +597,7 @@ Critical path:
 
 #### Ticket 29: Land The Event-Correlator Runtime And Prove One Event End To End
 Status:
-- open
+- completed
 
 Scope:
 - the in-flight branch adds `cmd/event-correlator/main.go`, `build/event-correlator/Dockerfile`, and a file-contract runtime at `pkg/security/ids/correlation/{runtime,config,processor,probes,deployment_paths}.go`
@@ -621,7 +621,7 @@ Acceptance:
 
 #### Ticket 30: Exercise Elasticsearch Retention And Rollover Beyond Bootstrap Presence
 Status:
-- open
+- completed
 
 Scope:
 - today the harness proves `fos1-log-retention-14d` ILM/template attachment and a single canary document landing in `fos1-security-*`, but it does not prove rollover or aged-index deletion
@@ -644,7 +644,7 @@ Acceptance:
 
 #### Ticket 31: Prove DPI And Security-Log Ingestion Under Natural Traffic
 Status:
-- open
+- completed
 
 Scope:
 - the current harness proof is a log-line canary injected near the sink, not a network event flowing through Suricata/Zeek
@@ -667,7 +667,7 @@ Acceptance:
 
 #### Ticket 32: Validate Dashboard And Alert-Rule Queries Against Live Series
 Status:
-- open
+- completed
 
 Scope:
 - `manifests/dashboards/*.json` and `manifests/base/monitoring/alert-rules.yaml` today reference metrics that may or may not exist in the owned exporter set
@@ -688,7 +688,7 @@ Acceptance:
 
 #### Ticket 33: Translate `FilterPolicy` And `FirewallRule` CRDs Into Real Cilium Network Policies
 Status:
-- open
+- completed
 
 Scope:
 - `Status.md` still reports `FilterPolicy`/`FirewallRule` as type-definitions-only with no enforcement
@@ -714,7 +714,7 @@ Acceptance:
 
 #### Ticket 34: Decide And Converge On SAML / RADIUS / Certificate Auth Providers
 Status:
-- open
+- completed
 
 Scope:
 - `pkg/security/auth/manager.go` factory methods still return `<type> provider not implemented` for SAML, RADIUS, and certificate providers, even though local, LDAP, and OAuth are fully wired
@@ -738,7 +738,7 @@ Acceptance:
 
 #### Ticket 35: Real NIC Capability Reporting And Packet-Capture Contract
 Status:
-- open
+- completed
 
 Scope:
 - `pkg/hardware/nic/` and `pkg/hardware/capture/` still return placeholder zero-values or interface-only stubs, similar to the pre-ticket-26 offload-statistics state
@@ -761,7 +761,7 @@ Acceptance:
 
 #### Ticket 36: Raise Reconciliation-Style Coverage On Thin Packages
 Status:
-- open
+- completed
 
 Scope:
 - `Status.md` §Testing reports ~30-35% coverage, concentrated in a few packages
@@ -782,7 +782,7 @@ Acceptance:
 
 #### Ticket 37: Truth-Up Status Docs After Sprint 29 Lands
 Status:
-- open
+- completed
 
 Scope:
 - same truth-up pattern used after tickets 20 and 27: reconcile every status claim in `Status.md`, `docs/project-tracker.md`, `docs/implementation-plan.md`, and `docs/observability-architecture.md` against what Sprint 29 actually landed

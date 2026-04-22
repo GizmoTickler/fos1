@@ -2,6 +2,8 @@
 
 This guide explains how to configure the security features of the Kubernetes-based Router/Firewall system, including firewalls, deep packet inspection (DPI), policy-based routing (PBR), and quality of service (QoS).
 
+> **Status note (Sprint 29 Ticket 33):** The `FirewallRule` / `FirewallZone` CRDs used in the §Examples section below were removed per ADR-0001 (Cilium-first control plane). Those examples are retained as historical reference only; the authoritative policy surface is now `FilterPolicy` + `FilterZone` + `FilterPolicyGroup` under `security.fos1.io/v1alpha1`, reconciled into `CiliumNetworkPolicy` objects by `pkg/security/policy/controller.go`. The Cilium-native sections at the top of this guide reflect the current enforcement path. See `docs/design/policy-based-filtering.md` for the shipping design.
+
 ## Table of Contents
 
 1. [Firewall Configuration](#firewall-configuration)
