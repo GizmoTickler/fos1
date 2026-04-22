@@ -548,14 +548,15 @@ Still open for Sprint 30:
 3. ~~No Firewall~~ - **Resolved via Cilium (ADR-0001):** `FilterPolicy` translates into `CiliumNetworkPolicy` with idempotent, statusful reconciliation per Sprint 29 Ticket 33; nftables and `FirewallRule` are non-goals
 4. ~~NIC / Capture Stubs~~ - **Resolved:** Real ethtool + tcpdump shims on Linux with explicit sentinels off-Linux per Sprint 29 Ticket 35
 5. ~~Observability Proof Depth~~ - **Resolved:** Event correlator E2E, accelerated ILM rollover, natural-traffic DPI, and dashboard/alert PromQL validation all proved in the Kind bootstrap harness per Sprint 29 Tickets 29-32
-6. **Partial Kernel Integration** - Direct interface manipulation still missing (non-goal per ADR-0001 for enforcement paths)
-7. **Uneven Test Coverage** - Four targeted packages now at 50%+ (Sprint 29 Ticket 36); aggregate still uneven
-8. **No eBPF Loading** - Cannot deploy high-performance packet processing (Sprint 30 Tickets 38-39)
-9. **No API Server** - Limited external management (Sprint 30 Ticket 41)
-10. **No HA/Clustering** - Single point of failure; not scoped in Sprint 30
-11. **No Performance Baseline** - Scalability unknown (Sprint 30 Ticket 43)
-12. **No Security Hardening** - Needs RBAC, internal TLS, secrets management (Sprint 30 Ticket 42 for RBAC)
-13. **QoS Enforcement Stubbed** - (Sprint 30 Ticket 45 via Cilium Bandwidth Manager)
+6. ~~RBAC minimum-privilege baseline~~ - **Resolved:** Per Sprint 30 Ticket 42 — CI gate in `scripts/ci/prove-no-cluster-admin.sh` blocks `cluster-admin` bindings without explicit `fos1.io/rbac-exception` annotation; per-controller verb/resource table in `docs/design/rbac-baseline.md`
+7. **Partial Kernel Integration** - Direct interface manipulation still missing (non-goal per ADR-0001 for enforcement paths)
+8. **Uneven Test Coverage** - Four targeted packages now at 50%+ (Sprint 29 Ticket 36); aggregate still uneven
+9. **No eBPF Loading** - Cannot deploy high-performance packet processing (Sprint 30 Tickets 38-39)
+10. **No API Server** - Limited external management (Sprint 30 Ticket 41)
+11. **No HA/Clustering** - Single point of failure; not scoped in Sprint 30
+12. **No Performance Baseline** - Scalability unknown (Sprint 30 Ticket 43)
+13. **Internal TLS + Secrets Management** - Still open; Sprint 30 Ticket 41 ships mTLS only for the REST API server
+14. **QoS Enforcement Stubbed** - (Sprint 30 Ticket 45 via Cilium Bandwidth Manager)
 
 **Estimated Effort to Production:**
 - **4-7 months** of full-time development (reduced from 6-10 months as Sprint 29 closed out auth/firewall/nic/observability-proof-depth and narrowed the residual gap to eBPF + API + RBAC + performance + HA)
@@ -638,7 +639,12 @@ Rationale: Sprint 29 closed the "advertised but unshipped" surfaces (FilterPolic
 - Unknown connection tracking limits
 
 ### 5. Security Posture (Medium Risk) ⚠️
-- No RBAC implementation
+- RBAC minimum-privilege baseline implemented (Sprint 30 / Ticket 42):
+  every ClusterRoleBinding targets a controller-scoped ClusterRole;
+  `scripts/ci/prove-no-cluster-admin.sh` blocks any new `cluster-admin`
+  binding without an explicit `fos1.io/rbac-exception` annotation.
+  See `docs/design/rbac-baseline.md` for the per-controller verb/resource
+  table.
 - No TLS for internal communication
 - Secrets management not implemented
 - No security audit performed

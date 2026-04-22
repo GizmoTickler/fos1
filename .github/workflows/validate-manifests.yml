@@ -5,6 +5,8 @@ on:
   push:
     paths:
       - 'manifests/**'
+      - 'test-manifests/**'
+      - 'scripts/ci/prove-no-cluster-admin.sh'
       - '.github/workflows/validate-manifests.yml'
   pull_request:
     branches: [ main ]
@@ -19,6 +21,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Enforce minimum-privilege RBAC (no unannotated cluster-admin bindings)
+        run: bash scripts/ci/prove-no-cluster-admin.sh
 
       - name: Install Kustomize
         run: |
