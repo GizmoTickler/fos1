@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fos1-api-server
+  namespace: security
+  labels:
+    app: fos1-api-server
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fos1-api-server
+  template:
+    metadata:
+      labels:
+        app: fos1-api-server
+        component: api
+    spec:
+      serviceAccountName: fos1-api-server
+      containers:
+        - name: api
+          image: fos1/api-server:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--address=:8443"
+            - "--server-cert=/etc/fos1/api/tls.crt"
+            - "--server-key=/etc/fos1/api/tls.key"
+            - "--client-ca=/etc/fos1/api/ca.crt"
+            - "--allowlist-file=/etc/fos1/api/allowlist"
+            - "--in-cluster=true"
+            - "--v=2"
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/fos1/api
+              readOnly: true
+            - name: allowlist
+              mountPath: /etc/fos1/api/allowlist
+              subPath: allowlist
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+      volumes:
+        - name: tls
+          secret:
+            secretName: fos1-api-server-tls
+        - name: allowlist
+          configMap:
+            name: fos1-api-server-allowlist
