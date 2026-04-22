@@ -21,21 +21,47 @@ type manager struct {
 	bandwidthAllocator BandwidthAllocator
 	updateInterval   time.Duration
 	stopCh           chan struct{}
+
+	// trafficControlApplier and trafficControlRemover are overridable hooks
+	// used to install/remove tc rules. Tests inject fakes; production uses
+	// defaultApplyTrafficControl/defaultRemoveTrafficControl which shell out
+	// to the tc(8) utility.
+	trafficControlApplier func(config *Configuration) error
+	trafficControlRemover func(interfaceName string) error
+
+	// startStatisticsLoop controls whether NewManager spawns the periodic
+	// statistics goroutine. Tests disable it to keep reconciliation
+	// deterministic.
+	startStatisticsLoop bool
 }
 
-// NewManager creates a new traffic manager
+// NewManager creates a new traffic manager.
+// It spawns a background statistics-update goroutine.
 func NewManager(classifier Classifier, bandwidthAllocator BandwidthAllocator, updateInterval time.Duration) Manager {
+	return newManager(classifier, bandwidthAllocator, updateInterval, true)
+}
+
+// newManager constructs a manager with optional background goroutines.
+// Exported helpers below keep the production default behavior unchanged.
+func newManager(classifier Classifier, bandwidthAllocator BandwidthAllocator, updateInterval time.Duration, startLoop bool) *manager {
 	m := &manager{
-		configs:          make(map[string]*Configuration),
-		statuses:         make(map[string]*Status),
-		classifier:       classifier,
-		bandwidthAllocator: bandwidthAllocator,
-		updateInterval:   updateInterval,
-		stopCh:           make(chan struct{}),
+		configs:             make(map[string]*Configuration),
+		statuses:            make(map[string]*Status),
+		classifier:          classifier,
+		bandwidthAllocator:  bandwidthAllocator,
+		updateInterval:      updateInterval,
+		stopCh:              make(chan struct{}),
+		startStatisticsLoop: startLoop,
 	}
 
-	// Start the statistics update goroutine
-	go m.updateStatisticsLoop()
+	// Default to the tc-based implementations; tests can override before use.
+	m.trafficControlApplier = m.defaultApplyTrafficControl
+	m.trafficControlRemover = m.defaultRemoveTrafficControl
+
+	if startLoop {
+		// Start the statistics update goroutine
+		go m.updateStatisticsLoop()
+	}
 
 	return m
 }
@@ -81,7 +107,7 @@ func (m *manager) ApplyConfiguration(config *Configuration) error {
 	}
 
 	// Apply the configuration
-	if err := m.applyTrafficControl(config); err != nil {
+	if err := m.trafficControlApplier(config); err != nil {
 		return fmt.Errorf("failed to apply traffic control: %w", err)
 	}
 
@@ -138,7 +164,7 @@ func (m *manager) DeleteConfiguration(interfaceName string) error {
 	}
 
 	// Remove traffic control
-	if err := m.removeTrafficControl(interfaceName); err != nil {
+	if err := m.trafficControlRemover(interfaceName); err != nil {
 		return fmt.Errorf("failed to remove traffic control: %w", err)
 	}
 
@@ -420,15 +446,17 @@ func (m *manager) getClassStatistics(interfaceName, className string) (*ClassSta
 	}, nil
 }
 
-// applyTrafficControl applies traffic control to an interface
-func (m *manager) applyTrafficControl(config *Configuration) error {
+// defaultApplyTrafficControl applies traffic control to an interface using tc(8).
+// This is the production implementation; tests override the
+// trafficControlApplier hook to avoid kernel privileges.
+func (m *manager) defaultApplyTrafficControl(config *Configuration) error {
 	// Check if the interface exists
 	if err := checkInterfaceExists(config.Interface); err != nil {
 		return fmt.Errorf("interface check failed: %w", err)
 	}
 
 	// Remove any existing traffic control
-	if err := m.removeTrafficControl(config.Interface); err != nil {
+	if err := m.defaultRemoveTrafficControl(config.Interface); err != nil {
 		klog.Warningf("Failed to remove existing traffic control for interface %s: %v", config.Interface, err)
 	}
 
@@ -488,8 +516,10 @@ func (m *manager) applyTrafficControl(config *Configuration) error {
 	return nil
 }
 
-// removeTrafficControl removes traffic control from an interface
-func (m *manager) removeTrafficControl(interfaceName string) error {
+// defaultRemoveTrafficControl removes traffic control from an interface using tc(8).
+// This is the production implementation; tests override the
+// trafficControlRemover hook to avoid kernel privileges.
+func (m *manager) defaultRemoveTrafficControl(interfaceName string) error {
 	// Check if the interface exists
 	if err := checkInterfaceExists(interfaceName); err != nil {
 		return fmt.Errorf("interface check failed: %w", err)
@@ -504,8 +534,10 @@ func (m *manager) removeTrafficControl(interfaceName string) error {
 	return nil
 }
 
-// checkInterfaceExists checks if an interface exists
-func checkInterfaceExists(interfaceName string) error {
+// checkInterfaceExists checks if an interface exists.
+// It is a variable so tests can inject a fake implementation without
+// shelling out to `ip`.
+var checkInterfaceExists = func(interfaceName string) error {
 	cmd := exec.Command("ip", "link", "show", interfaceName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("interface %s does not exist", interfaceName)
@@ -513,8 +545,10 @@ func checkInterfaceExists(interfaceName string) error {
 	return nil
 }
 
-// getInterfaceSpeed gets the speed of an interface
-func getInterfaceSpeed(interfaceName string) (int64, error) {
+// getInterfaceSpeed gets the speed of an interface.
+// It is a variable so tests can inject a fake implementation without
+// shelling out to `ethtool`.
+var getInterfaceSpeed = func(interfaceName string) (int64, error) {
 	// Get interface speed from ethtool
 	cmd := exec.Command("ethtool", interfaceName)
 	output, err := cmd.Output()
