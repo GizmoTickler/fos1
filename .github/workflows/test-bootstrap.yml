@@ -27,6 +27,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Set up Kubernetes
         run: |
           set -euo pipefail
@@ -288,6 +293,32 @@ jobs:
           # patches the Deployment to use the locally loaded image with
           # imagePullPolicy=Never before asserting readiness.
           bash scripts/ci/prove-event-correlation-e2e.sh
+
+      - name: Validate dashboard + alert-rule PromQL against live series
+        run: |
+          set -euo pipefail
+
+          # Port-forward Prometheus to the same local port the scrape-proof
+          # script uses so the validator queries the live Kind Prometheus
+          # recording series from the owned exporters.
+          kubectl port-forward -n monitoring service/prometheus 19090:9090 \
+            >/tmp/fos1-prometheus-validator-port-forward.log 2>&1 &
+          port_forward_pid=$!
+          trap 'kill "${port_forward_pid}" >/dev/null 2>&1 || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:19090/-/ready" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+
+          go build -o /tmp/prometheus-query-validator ./tools/prometheus-query-validator
+          /tmp/prometheus-query-validator \
+            -prometheus-url "http://127.0.0.1:19090" \
+            -allowlist "manifests/dashboards/.queries-target-architecture.txt" \
+            -dashboards "manifests/dashboards" \
+            -alert-rules "manifests/base/monitoring/alert-rules.yaml"
 
       - name: Failure diagnostics
         if: failure()

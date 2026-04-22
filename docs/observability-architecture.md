@@ -91,6 +91,39 @@ The bootstrap harness now proves that the owned pod-annotation scrape path is ac
 
 If those checks pass, the repository has proven the baseline it actually owns: Prometheus discovers the annotated pods, scrapes the active exporters, and records a live `up=1` series for both the node-local DPI manager path and the NTP controller path.
 
+## Dashboard And Alert Query Validation
+
+### Implemented and verified in code
+
+The repository ships Grafana dashboards under `manifests/dashboards/*.json` and Prometheus alert rules in `manifests/base/monitoring/alert-rules.yaml`. Both are easy to drift away from the metrics owned exporters actually emit — a dashboard panel that references `cilium_agent_flows` will silently render "No data" and an alert that calls `suricata_alerts_total` will never fire because its expression is permanently empty.
+
+To prevent that drift, the repository now owns a [`tools/prometheus-query-validator`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/prometheus-query-validator) Go tool and runs it as a step of the Kind bootstrap harness:
+
+- the tool walks every dashboard JSON and alert-rule expression at `panels[*].targets[*].expr`, `templating.list[*].query`, and `groups[*].rules[*].expr`
+- each expression is POSTed to the live Kind Prometheus `/api/v1/query`
+- outcomes are classified as `resolved` (≥1 series), `empty` (valid PromQL but no data), `error` (Prometheus rejected the expression), or `allowlisted` (skipped because the expression is recorded in the target-architecture allowlist)
+- any non-allowlisted `empty` or `error` classification causes the validator to exit non-zero, which fails the bootstrap workflow
+
+The CI entry point lives in [`.github/workflows/test-bootstrap.yml`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/.github/workflows/test-bootstrap.yml) under the **Validate dashboard + alert-rule PromQL against live series** step. It re-uses the same `kubectl port-forward` pattern and `19090:9090` port that `scripts/ci/prove-prometheus-scrapes.sh` uses, so the validator sees the same Prometheus instance that just proved the DPI and NTP pod-annotation scrape paths.
+
+The allowlist lives at [`manifests/dashboards/.queries-target-architecture.txt`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/dashboards/.queries-target-architecture.txt). It contains the verbatim PromQL text of every expression that references a metric the repository does not currently own — today that is the node-exporter family (`node_cpu_seconds_total`, `node_memory_*`, `node_filesystem_*`, `node_network_*`, `node_load*`, `node_disk_*`) used by `manifests/dashboards/system-dashboard.json`. Those panels describe the intended cluster shape, not the repository-owned baseline, and the allowlist makes that split explicit.
+
+### Adding A New Target-Architecture Expression
+
+When a dashboard or alert rule references a metric the repository does not yet emit from an owned exporter, the validator will flag it as `empty` and fail CI. Decide between three responses:
+
+1. **Owned, missing exporter.** Add the metric to `pkg/kubernetes/metrics_server.go` (DPI/Zeek) or `pkg/ntp/metrics/exporter.go` (NTP), or register a new owned exporter. Re-run the harness; the validator should now classify it `resolved`.
+2. **Owned, dead panel / alert.** Delete the panel or alert rule. Dashboards are allowed to change shape, but a referenced metric must either resolve or be knowingly deferred.
+3. **Target-architecture only.** Copy the exact PromQL text into `manifests/dashboards/.queries-target-architecture.txt` and add a `# why:` comment naming the upstream exporter (node-exporter, kube-state-metrics, cAdvisor, Cilium Hubble, etc.). That documents which future ticket will own wiring the exporter in. The allowlist match is byte-for-byte on the trimmed expression, so keep the copy verbatim.
+
+`error` classifications should generally not be allowlisted. Fix the syntax or delete the rule — allowlisting a syntactically-invalid expression hides a real bug.
+
+### What This Proof Does Not Cover
+
+- The validator only queries Prometheus once at the end of the harness. It does not prove the dashboard rendering path, and it does not prove that Alertmanager ever receives a firing alert.
+- It cannot tell the difference between "metric is missing" and "metric is present but has no samples in the current range"; an expression that evaluates to an empty series because nothing is generating traffic will still classify as `empty`. In practice the Kind harness generates enough owned DPI traffic through the canary proof pipeline that this has not been observed, but it remains a dependency of the upstream canary logic.
+- The allowlist captures intent, not wiring. Expressions listed there are explicitly unresolved in the Kind baseline and remain open work to bridge in future tickets.
+
 ## Broader Observability Stack
 
 ### Defined by manifests or architecture only

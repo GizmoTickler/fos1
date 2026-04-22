@@ -1,0 +1,5 @@
+groups:
+  - name: plain
+    rules:
+      - alert: Simple
+        expr: ntp_sync == 0

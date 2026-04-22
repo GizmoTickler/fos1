@@ -1,0 +1,40 @@
+# Target-architecture allowlist for prometheus-query-validator.
+#
+# Expressions listed here are intentionally skipped by the validator
+# because they reference metrics that the repository does not currently
+# emit from an owned exporter. They describe the *intended* platform
+# shape (node-exporter, kube-state-metrics, etc.), not the baseline that
+# the Kind proof harness spins up.
+#
+# Matching is an exact, trimmed, byte-for-byte comparison of the PromQL
+# expression text. Do not wrap expressions in quotes. One expression per
+# line. Comments (`#`) and blank lines are ignored.
+#
+# How to classify a new expression:
+#   1. If an owned exporter in this repo (pkg/kubernetes/metrics_server.go
+#      or pkg/ntp/metrics/exporter.go) emits the referenced metric, leave
+#      the expression out of this file and make sure the exporter path is
+#      wired up. The validator will then fail CI until the series resolves.
+#   2. If the metric is produced by node-exporter, kube-state-metrics,
+#      cAdvisor, or any other exporter that the repository does not own,
+#      add the expression here with a short `# why:` comment describing
+#      which exporter it lands on. Eventual work items will wire those
+#      exporters in; this file tracks what still needs to be bridged.
+#
+# See docs/observability-architecture.md §Dashboard And Alert Query
+# Validation for the full workflow.
+
+# --- node-exporter (system-dashboard.json) ---
+# why: node-exporter is not deployed in the Kind proof harness; these
+#      expressions exist to document the intended cluster shape.
+
+100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100
+100 - ((node_filesystem_avail_bytes{mountpoint="/"} * 100) / node_filesystem_size_bytes{mountpoint="/"})
+rate(node_network_receive_bytes_total{device!="lo"}[5m])
+rate(node_network_transmit_bytes_total{device!="lo"}[5m])
+node_load1
+node_load5
+node_load15
+rate(node_disk_read_bytes_total[5m])
+rate(node_disk_written_bytes_total[5m])

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fixture-rules
+  namespace: monitoring
+data:
+  a.yml: |
+    groups:
+    - name: fixture
+      rules:
+      - alert: SyncLost
+        expr: ntp_sync == 0
+        for: 5m
+      - alert: ErrorBurst
+        expr: sum(increase(dpi_events_total[5m])) > 50
+  b.yml: |
+    groups:
+    - name: fixture-b
+      rules:
+      - record: fixture:ntp_offset:abs
+        expr: abs(ntp_offset_milliseconds)

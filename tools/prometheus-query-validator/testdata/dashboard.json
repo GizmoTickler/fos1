@@ -1,0 +1,37 @@
+{
+  "title": "Fixture Dashboard",
+  "panels": [
+    {
+      "title": "Row With Nested Targets",
+      "type": "row",
+      "panels": [
+        {
+          "title": "Nested Panel",
+          "targets": [
+            {"refId": "A", "expr": "sum(dpi_events_total)"},
+            {"refId": "B", "expr": "rate(dpi_zeek_logs_processed[5m])"},
+            {"refId": "C", "expr": "   "}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Stat Panel",
+      "targets": [
+        {"refId": "A", "expr": "ntp_sync"}
+      ]
+    },
+    {
+      "title": "Row With No Targets",
+      "type": "row",
+      "panels": []
+    }
+  ],
+  "templating": {
+    "list": [
+      {"name": "dc", "type": "query", "query": "label_values(node_cpu_seconds_total, instance)"},
+      {"name": "ds", "type": "datasource", "query": "prom"},
+      {"name": "structured", "type": "query", "query": {"query": "label_values(up, job)"}}
+    ]
+  }
+}

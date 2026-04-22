@@ -1,0 +1,4 @@
+# Test allowlist fixture.
+# Comments and blanks should be ignored.
+
+abs(ntp_offset_milliseconds)
