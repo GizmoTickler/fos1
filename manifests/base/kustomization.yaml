@@ -6,6 +6,7 @@ resources:
   - cilium
   - core
   - security
+  - threatintel
   - dns
   - dhcp
   - monitoring

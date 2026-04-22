@@ -1,0 +1,91 @@
+# Example ThreatFeed CR — URLhaus CSV.
+#
+# v0 supports only format: urlhaus-csv. RefreshInterval controls how often
+# the controller polls the feed; MaxAge is the TTL for each applied Cilium
+# policy — once an indicator has not been seen in a successful fetch newer
+# than MaxAge, the controller removes the corresponding CiliumNetworkPolicy.
+#
+# For live-cluster proof against the canned harness feed, pair this with
+# a test pod serving the CSV at /urlhaus.csv:
+#
+#   kubectl apply -f manifests/examples/security/threatfeed-urlhaus-harness.yaml
+#
+apiVersion: security.fos1.io/v1alpha1
+kind: ThreatFeed
+metadata:
+  name: urlhaus
+spec:
+  url: https://urlhaus.abuse.ch/downloads/csv/
+  format: urlhaus-csv
+  refreshInterval: 15m
+  maxAge: 24h
+  enabled: true
+---
+# In-cluster test harness pairing. Set enabled=true on the harness ThreatFeed
+# below and deploy the sibling test pod (manifest below) to prove end-to-end
+# fetch + translate + apply without hitting the public abuse.ch feed.
+apiVersion: security.fos1.io/v1alpha1
+kind: ThreatFeed
+metadata:
+  name: urlhaus-harness
+spec:
+  url: http://threatintel-harness.security.svc.cluster.local/urlhaus.csv
+  format: urlhaus-csv
+  refreshInterval: 1m
+  maxAge: 5m
+  enabled: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threatintel-harness-csv
+  namespace: security
+data:
+  urlhaus.csv: |
+    # Canned URLhaus CSV for Sprint-30 Ticket-44 harness
+    # id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter
+    "1","2026-04-21 12:00:00","http://harness-malware.example/drop.exe","online","2026-04-21 12:00:00","malware_download","exe","https://urlhaus.abuse.ch/url/1","harness"
+    "2","2026-04-21 12:00:00","https://harness-phish.example/login","online","2026-04-21 12:00:00","phishing","login","https://urlhaus.abuse.ch/url/2","harness"
+    "3","2026-04-21 12:00:00","http://harness-c2.example/beacon","online","2026-04-21 12:00:00","c2","beacon","https://urlhaus.abuse.ch/url/3","harness"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threatintel-harness
+  namespace: security
+  labels:
+    app: threatintel-harness
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: threatintel-harness
+  template:
+    metadata:
+      labels:
+        app: threatintel-harness
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: csv
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: csv
+          configMap:
+            name: threatintel-harness-csv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: threatintel-harness
+  namespace: security
+spec:
+  selector:
+    app: threatintel-harness
+  ports:
+    - port: 80
+      targetPort: 80

@@ -95,7 +95,7 @@ Verified on 2026-04-18:
 | **nftables Firewall** | Stub | Interface definitions only, no rule generation |
 | **Policy Enforcement** | Stub | Type definitions without actual enforcement |
 | **SAML/RADIUS/Certificate Auth** | Stubs only |
-| **Threat Intelligence** | Framework defined but no data sources |
+| **Threat Intelligence** | v0 — URLhaus CSV ingestion via `ThreatFeed` CRD; other feeds (MISP, STIX) non-goal |
 
 ---
 
@@ -455,7 +455,7 @@ All CRD definitions are **complete and well-structured**:
 2. **Firewall Rules** - No nftables integration
 3. **eBPF Programs** - No compilation or loading
 4. **Packet Capture** - Interface only
-5. **Threat Intelligence** - Framework only
+5. **Threat Intelligence** - v0 URLhaus CSV ingestion shipped (ThreatFeed CRD + Cilium policy translator); MISP/STIX/reputation remain future work
 6. **QoS Enforcement** - Types only
 
 ---

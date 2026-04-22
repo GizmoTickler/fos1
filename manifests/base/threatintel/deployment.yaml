@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: threatintel-controller
+  namespace: security
+  labels:
+    app: threatintel-controller
+    component: security
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: threatintel-controller
+  template:
+    metadata:
+      labels:
+        app: threatintel-controller
+        component: security
+    spec:
+      serviceAccountName: threatintel-controller
+      containers:
+        - name: controller
+          image: ghcr.io/varuntirumala1/fos1-threatintel-controller:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--tick-interval=30s"
+            - "--http-timeout=30s"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f threatintel-controller >/dev/null"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: threatintel-controller
+  namespace: security
+  labels:
+    app: threatintel-controller
+spec:
+  selector:
+    app: threatintel-controller
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: 9090
