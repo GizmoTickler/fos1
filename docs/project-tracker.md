@@ -7,6 +7,7 @@ Current verified status:
 - The repository is no longer design-only; tickets 1-20 in [docs/implementation-plan.md](docs/implementation-plan.md) are complete on `origin/main`.
 - Fresh verification on 2026-04-18 completed with `go test ./...` and `go build ./...`.
 - The observability manifests now encode a single-node durability baseline, including PVC-backed Prometheus/Grafana/Alertmanager state and Elasticsearch `14d` retention for `fos1-security-*` and `fos1-logs-*`, but that is still manifest-level ownership rather than live-cluster proof.
+- Sprint 29 ticket 33: `FilterPolicy` → `CiliumNetworkPolicy` translator is now wired end-to-end with idempotent, statusful reconciliation matching the NAT controller pattern. `FirewallRule` CRD, nftables-based translator/zone manager, and `pkg/security/firewall` package were removed per ADR-0001. Filter policy enforcement is the Cilium-first authoritative surface.
 - For the current implementation snapshot and next workstreams, use [Status.md](../Status.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
 ## Phase 1: Environment Setup & Documentation Structure (Weeks 1-2)

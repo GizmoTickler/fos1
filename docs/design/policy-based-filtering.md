@@ -14,6 +14,71 @@ This document outlines the design for a Policy-Based Filtering (PBF) system that
 6. **Component Integration**: Integrate with the DPI system and security orchestration framework
 7. **Detailed Logging**: Provide comprehensive, centralized logging of policy decisions
 
+## Cilium-First Enforcement (sprint 29 ticket 33)
+
+Per ADR-0001 (Cilium-First Control Plane), Cilium is the sole enforcement
+backend for filtered traffic. The `FilterPolicy` CRD is the authoritative
+surface; `FirewallRule` and nftables are explicit non-goals and were
+removed from the codebase in sprint 29 ticket 33.
+
+### Apply path
+
+1. `PolicyController.processPolicy` (`pkg/security/policy/controller.go`)
+   receives a FilterPolicy from the informer, computes `specHash(spec)`,
+   and compares it with `Status.LastAppliedHash`. If the hash matches and
+   `appliedPolicies[key]` is non-empty, the reconcile is a no-op — only
+   the Applied condition is refreshed.
+2. Otherwise the controller calls `CiliumPolicyTranslator.TranslatePolicy`
+   (`pkg/security/policy/translator.go`), which produces one or more
+   `*cilium.CiliumPolicy` objects. The policy naming scheme is
+   deterministic: `fos1-filter-<namespace>-<name>`. Translator failures
+   mark the policy `Invalid=True` without retry.
+3. For each translated policy, the controller invokes
+   `ciliumClient.ApplyNetworkPolicy(ctx, p)`
+   (`pkg/cilium/client.go:26-46`). The Cilium client serializes the
+   policy into a CiliumNetworkPolicy YAML and applies it via `kubectl`.
+4. On full success, status is updated with `Applied=True`,
+   `LastAppliedHash` set, `CiliumPolicies` populated with the applied
+   names. On partial failure, `Degraded=True` is recorded and the
+   successfully applied policies remain tracked so the next reconcile
+   can converge incrementally.
+5. Disable and delete paths call `ciliumClient.DeleteNetworkPolicy` for
+   every name in `status.CiliumPolicies` and record `Removed=True` /
+   `Applied=False`.
+
+### Condition set
+
+`FilterPolicyStatus.Conditions` mirrors the NAT controller condition set
+at `pkg/network/nat/types.go:11-29` so dashboards can treat both
+controllers uniformly:
+
+| Condition | Status=True meaning |
+|-----------|--------------------|
+| `Applied` | All translated Cilium policies applied successfully. |
+| `Degraded` | At least one translated policy failed to apply; successful ones remain. |
+| `Invalid` | Translator or resolver rejected the spec. No retry until the spec changes. |
+| `Removed` | All applied policies for this FilterPolicy were deleted (disable or delete path). |
+
+### Idempotency contract
+
+- `specHash` is a SHA-256 over a canonical JSON projection of
+  `FilterPolicySpec` (selectors, actions, scope, priority, enabled,
+  inheritance, tags). Maps are key-sorted; slices are value-sorted where
+  order is semantically irrelevant.
+- When adding a field to `FilterPolicySpec`, extend
+  `canonicalizeSpec()` in `pkg/security/policy/types.go`; otherwise the
+  hash will silently ignore the new field and reconcile loops may skip
+  work that should happen.
+
+### Non-goals
+
+- nftables or iptables rule generation
+- `FirewallRule` Go types or controller
+- Server-side persistence of FilterPolicy conditions via the CRD status
+  subresource (the controller mutates the in-memory cache copy today;
+  lifting the NAT controller's `writeStatusToCRD` pattern is a planned
+  follow-up)
+
 ## System Architecture
 
 ### Core Components
@@ -21,26 +86,28 @@ This document outlines the design for a Policy-Based Filtering (PBF) system that
 1. **Policy Controller** (`pkg/security/policy/controller.go`):
    - Watches for custom policy CRDs
    - Validates policy definitions
-   - Translates custom policies to CiliumNetworkPolicies
-   - Manages policy lifecycle
+   - Drives the Cilium apply path described above under
+     "Cilium-First Enforcement"
+   - Manages policy lifecycle with spec-hash idempotency and
+     Applied/Degraded/Invalid/Removed conditions
 
-2. **Policy Resolver** (`pkg/security/policy/resolver.go`):
+2. **Policy Resolver** (`pkg/security/policy/types.go` —
+   `PolicyResolver`):
    - Resolves hierarchical policy dependencies
    - Handles policy inheritance and overrides
    - Manages policy conflict resolution
-   - Generates effective policies
 
-3. **Policy Translator** (`pkg/security/policy/translator.go`):
-   - Converts resolved policies to Cilium policies
-   - Maps custom abstractions to Cilium constructs
-   - Handles L7 policy translation
-   - Optimizes generated policies
+3. **Policy Translator** (`pkg/security/policy/translator.go` —
+   `CiliumPolicyTranslator`):
+   - Pure function: FilterPolicy → []*cilium.CiliumPolicy
+   - Emits deterministic policy names (`fos1-filter-<ns>-<name>`)
+   - L3/L4 today; L7 extensions land under the same surface
 
-4. **Policy Monitor** (`pkg/security/policy/monitor.go`):
+4. **Policy Monitor** (`pkg/security/policy/types.go` —
+   `PolicyMonitor`):
    - Tracks policy application status
    - Collects policy match statistics
-   - Provides logging and alerting
-   - Offers policy analysis tools
+   - Hook for future observability integrations
 
 ### Integration with Existing Components
 

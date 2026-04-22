@@ -1,12 +1,44 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/GizmoTickler/fos1/pkg/cilium"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// Condition type constants for FilterPolicy status, mirroring the NAT
+// controller condition set at pkg/network/nat/types.go:11-29 so operators
+// see a consistent status surface across Cilium-backed controllers.
+const (
+	// ConditionApplied indicates the FilterPolicy has been successfully
+	// translated into CiliumNetworkPolicy objects and applied via the
+	// Cilium client.
+	ConditionApplied = "Applied"
+
+	// ConditionDegraded indicates the policy was partially applied;
+	// some translated rules succeeded but at least one Cilium apply
+	// call failed.
+	ConditionDegraded = "Degraded"
+
+	// ConditionInvalid indicates the FilterPolicy spec failed validation
+	// or the translator rejected the input. No retry is attempted until
+	// the spec changes.
+	ConditionInvalid = "Invalid"
+
+	// ConditionRemoved indicates all applied Cilium policies for this
+	// FilterPolicy have been deleted (disable or delete path).
+	ConditionRemoved = "Removed"
+)
+
+// Condition status values
+const (
+	ConditionStatusTrue  = "True"
+	ConditionStatusFalse = "False"
 )
 
 // FilterPolicy defines a policy for network traffic filtering
@@ -102,9 +134,41 @@ type FilterPolicyStatus struct {
 	// Corresponding Cilium policies
 	CiliumPolicies []string `json:"ciliumPolicies,omitempty"`
 
+	// LastAppliedHash is the deterministic spec hash last used to apply the
+	// policy. The controller skips re-apply when the current spec hash
+	// matches, mirroring the NAT controller idempotency contract.
+	LastAppliedHash string `json:"lastAppliedHash,omitempty"`
+
+	// Conditions reports the transitional state of the policy
+	// (Applied / Degraded / Invalid / Removed). See the Condition
+	// constants above for semantics.
+	Conditions []PolicyCondition `json:"conditions,omitempty"`
+
 	// Statistics
 	MatchCount int64     `json:"matchCount"`
 	LastMatch  time.Time `json:"lastMatch,omitempty"`
+}
+
+// PolicyCondition captures a single transitional condition in
+// FilterPolicyStatus.Conditions. Its shape mirrors the NAT condition type
+// (pkg/network/nat/types.go) so dashboards and alerts can treat the two
+// controllers uniformly.
+type PolicyCondition struct {
+	// Type is one of the Condition* constants above.
+	Type string `json:"type"`
+
+	// Status is one of ConditionStatusTrue / ConditionStatusFalse.
+	Status string `json:"status"`
+
+	// LastTransitionTime is when this condition last changed.
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+
+	// Reason is a machine-readable CamelCase token describing why the
+	// condition has its current status.
+	Reason string `json:"reason,omitempty"`
+
+	// Message is a human-readable description of the condition.
+	Message string `json:"message,omitempty"`
 }
 
 // FilterPolicyGroup defines a group of related policies
@@ -279,44 +343,6 @@ func (r *PolicyResolver) ResolvePolicy(policy *FilterPolicy, policies map[string
 	return policy, nil
 }
 
-// CiliumPolicyTranslator translates policies to Cilium policies
-type CiliumPolicyTranslator struct {
-	logger *PolicyLogger
-}
-
-// NewCiliumPolicyTranslator creates a new Cilium policy translator
-func NewCiliumPolicyTranslator(_ cilium.CiliumClient, logger *PolicyLogger) *CiliumPolicyTranslator {
-	return &CiliumPolicyTranslator{
-		logger: logger,
-	}
-}
-
-// TranslatePolicy translates a policy to Cilium policies
-func (t *CiliumPolicyTranslator) TranslatePolicy(policy *FilterPolicy, zones map[string]*FilterZone) ([]*cilium.CiliumPolicy, error) {
-	if policy == nil {
-		return nil, fmt.Errorf("policy must not be nil")
-	}
-	if !policy.Spec.Enabled {
-		return nil, nil
-	}
-
-	_ = zones
-
-	rules := translateCiliumRules(policy)
-	translated := &cilium.CiliumPolicy{
-		Name:        ciliumPolicyName(policy),
-		Description: policy.Spec.Description,
-		Namespace:   policy.ObjectMeta.Namespace,
-		Labels: map[string]string{
-			"app.kubernetes.io/managed-by": "fos1-policy-controller",
-			"fos1.io/policy-name":          policyObjectName(policy),
-		},
-		Rules: rules,
-	}
-
-	return []*cilium.CiliumPolicy{translated}, nil
-}
-
 // PolicyMonitor monitors policy application and status
 type PolicyMonitor struct {
 	logger *PolicyLogger
@@ -344,86 +370,27 @@ func (m *PolicyMonitor) UnregisterPolicy(name string, namespace string) {
 	// In a real implementation, would unregister from monitoring
 }
 
-func translateCiliumRules(policy *FilterPolicy) []cilium.CiliumRule {
-	spec := policy.Spec
-	action, denied := translatePolicyAction(spec.Actions)
-	srcCIDRs := extractCIDRs(spec.Selectors.Sources)
-	dstCIDRs := extractCIDRs(spec.Selectors.Destinations)
-
-	if len(spec.Selectors.Ports) == 0 {
-		return []cilium.CiliumRule{{
-			Action:   action,
-			Denied:   denied,
-			FromCIDR: srcCIDRs,
-			ToCIDR:   dstCIDRs,
-		}}
-	}
-
-	rules := make([]cilium.CiliumRule, 0, len(spec.Selectors.Ports))
-	for _, selector := range spec.Selectors.Ports {
-		portRule := cilium.PortRule{
-			Ports: make([]cilium.Port, 0, len(selector.Ports)),
-		}
-		for _, port := range selector.Ports {
-			portRule.Ports = append(portRule.Ports, cilium.Port{
-				Port:     uint16(port),
-				Protocol: translateCiliumProtocol(selector.Protocol),
-			})
-		}
-		rules = append(rules, cilium.CiliumRule{
-			Protocol: selector.Protocol,
-			Action:   action,
-			Denied:   denied,
-			FromCIDR: srcCIDRs,
-			ToCIDR:   dstCIDRs,
-			ToPorts:  []cilium.PortRule{portRule},
-		})
-	}
-
-	return rules
-}
-
-func translatePolicyAction(actions []PolicyAction) (string, bool) {
-	action := "deny"
-	denied := true
-
-	for _, policyAction := range actions {
-		switch strings.ToLower(policyAction.Type) {
-		case "allow", "accept":
-			action = "allow"
-			denied = false
-		case "deny", "drop":
-			action = "deny"
-			denied = true
-		case "reject":
-			action = "reject"
-			denied = true
-		}
-	}
-
-	return action, denied
-}
-
-func translateCiliumProtocol(protocol string) string {
-	switch strings.ToLower(protocol) {
-	case "tcp":
-		return "tcp"
-	case "udp":
-		return "udp"
-	case "icmp":
-		return "icmp"
-	default:
-		return ""
-	}
-}
-
+// ciliumPolicyName returns the deterministic CiliumNetworkPolicy name for a
+// FilterPolicy. The scheme is `fos1-filter-<namespace>-<name>`; it is stable
+// across controller restarts and uniquely scoped by the FilterPolicy's
+// namespace and name so multiple FilterPolicy CRs do not collide.
 func ciliumPolicyName(policy *FilterPolicy) string {
 	name := policyObjectName(policy)
 	if namespace := policy.ObjectMeta.Namespace; namespace != "" {
 		name = namespace + "-" + name
 	}
-	name = strings.ToLower(name)
-	name = strings.Map(func(r rune) rune {
+	name = sanitizeKubernetesName(name)
+	if name == "" {
+		return "fos1-filter-policy"
+	}
+	return "fos1-filter-" + name
+}
+
+// sanitizeKubernetesName lowercases and strips characters so the result is a
+// valid RFC 1123 DNS subdomain.
+func sanitizeKubernetesName(in string) string {
+	in = strings.ToLower(in)
+	in = strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z':
 			return r
@@ -434,10 +401,161 @@ func ciliumPolicyName(policy *FilterPolicy) string {
 		default:
 			return '-'
 		}
-	}, name)
-	name = strings.Trim(name, "-.")
-	if name == "" {
-		return "filter-policy"
+	}, in)
+	return strings.Trim(in, "-.")
+}
+
+// specHash computes a deterministic SHA-256 over the FilterPolicySpec so the
+// controller can skip a no-op re-apply when the spec is unchanged. Maps and
+// slices are ordered before encoding so the hash is stable across JSON
+// marshaling order variations. Matches the idempotency idiom at
+// pkg/network/nat/types.go:173.
+func specHash(spec FilterPolicySpec) string {
+	canonical := canonicalizeSpec(spec)
+	buf, err := json.Marshal(canonical)
+	if err != nil {
+		// Fall back to a string dump; we never want a hash panic to take
+		// the controller down.
+		buf = []byte(fmt.Sprintf("%#v", canonical))
 	}
-	return "filter-" + name
+	sum := sha256.Sum256(buf)
+	return fmt.Sprintf("%x", sum)
+}
+
+// canonicalizeSpec returns a representation of the spec with deterministic
+// ordering suitable for hashing.
+func canonicalizeSpec(spec FilterPolicySpec) map[string]interface{} {
+	out := map[string]interface{}{
+		"description": spec.Description,
+		"scope":       spec.Scope,
+		"enabled":     spec.Enabled,
+		"priority":    spec.Priority,
+		"tags":        sortedCopy(spec.Tags),
+	}
+
+	inherits := make([]map[string]string, 0, len(spec.Inherits))
+	for _, inh := range spec.Inherits {
+		inherits = append(inherits, map[string]string{
+			"name":             inh.Name,
+			"overrideStrategy": inh.OverrideStrategy,
+		})
+	}
+	sort.SliceStable(inherits, func(i, j int) bool {
+		if inherits[i]["name"] != inherits[j]["name"] {
+			return inherits[i]["name"] < inherits[j]["name"]
+		}
+		return inherits[i]["overrideStrategy"] < inherits[j]["overrideStrategy"]
+	})
+	out["inherits"] = inherits
+
+	out["selectors"] = canonicalizeSelectors(spec.Selectors)
+	out["actions"] = canonicalizeActions(spec.Actions)
+
+	return out
+}
+
+func canonicalizeSelectors(sel FilterSelectors) map[string]interface{} {
+	return map[string]interface{}{
+		"sources":      canonicalizeSelectorList(sel.Sources),
+		"destinations": canonicalizeSelectorList(sel.Destinations),
+		"applications": canonicalizeSelectorList(sel.Applications),
+		"ports":        canonicalizePortSelectors(sel.Ports),
+		"timeWindows":  canonicalizeTimeWindows(sel.TimeWindows),
+	}
+}
+
+func canonicalizeSelectorList(selectors []Selector) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(selectors))
+	for _, s := range selectors {
+		values := make([]string, 0, len(s.Values))
+		for _, v := range s.Values {
+			values = append(values, fmt.Sprintf("%v", v))
+		}
+		sort.Strings(values)
+		out = append(out, map[string]interface{}{
+			"type":     strings.ToLower(s.Type),
+			"key":      s.Key,
+			"operator": s.Operator,
+			"values":   values,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return fmt.Sprintf("%v", out[i]) < fmt.Sprintf("%v", out[j])
+	})
+	return out
+}
+
+func canonicalizePortSelectors(ports []PortSelector) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(ports))
+	for _, p := range ports {
+		portsCopy := make([]int32, len(p.Ports))
+		copy(portsCopy, p.Ports)
+		sort.Slice(portsCopy, func(i, j int) bool { return portsCopy[i] < portsCopy[j] })
+		out = append(out, map[string]interface{}{
+			"protocol": strings.ToLower(p.Protocol),
+			"ports":    portsCopy,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return fmt.Sprintf("%v", out[i]) < fmt.Sprintf("%v", out[j])
+	})
+	return out
+}
+
+func canonicalizeTimeWindows(windows []TimeWindow) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(windows))
+	for _, w := range windows {
+		days := sortedCopy(w.Days)
+		out = append(out, map[string]interface{}{
+			"days":      days,
+			"startTime": w.StartTime,
+			"endTime":   w.EndTime,
+			"timezone":  w.Timezone,
+		})
+	}
+	return out
+}
+
+func canonicalizeActions(actions []PolicyAction) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(actions))
+	for _, a := range actions {
+		params := make(map[string]string, len(a.Parameters))
+		keys := make([]string, 0, len(a.Parameters))
+		for k := range a.Parameters {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			params[k] = fmt.Sprintf("%v", a.Parameters[k])
+		}
+		out = append(out, map[string]interface{}{
+			"type":       strings.ToLower(a.Type),
+			"parameters": params,
+		})
+	}
+	return out
+}
+
+func sortedCopy(in []string) []string {
+	out := make([]string, len(in))
+	copy(out, in)
+	sort.Strings(out)
+	return out
+}
+
+// setCondition upserts a PolicyCondition into the supplied list, preserving
+// LastTransitionTime when Status is unchanged. Returns the updated list.
+func setCondition(existing []PolicyCondition, cond PolicyCondition) []PolicyCondition {
+	for i, e := range existing {
+		if e.Type != cond.Type {
+			continue
+		}
+		if e.Status == cond.Status {
+			// Preserve the earlier transition time; only reason/message may drift.
+			cond.LastTransitionTime = e.LastTransitionTime
+		}
+		existing[i] = cond
+		return existing
+	}
+	return append(existing, cond)
 }

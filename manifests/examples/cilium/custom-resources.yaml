@@ -37,21 +37,26 @@ spec:
     label_value: lan
 
 ---
-# Example 3: Firewall rule
+# Example 3: FilterPolicy (sprint 29 ticket 33 — replaces the legacy
+# FirewallRule example per ADR-0001 / Cilium-first control plane).
+# The policy controller translates this into a CiliumNetworkPolicy named
+# `fos1-filter-default-allow-web-from-lan-to-wan` and reconciles it via
+# pkg/cilium.ApplyNetworkPolicy.
 apiVersion: security.fos1.io/v1alpha1
-kind: FirewallRule
+kind: FilterPolicy
 metadata:
   name: allow-web-from-lan-to-wan
 spec:
   description: "Allow web traffic from LAN to WAN zone"
+  scope: egress
   priority: 100
-  fromZone: lan
-  toZone: wan
-  protocol: tcp
-  ports: [80, 443]
-  action: allow
   enabled: true
-  logging: true
+  selectors:
+    ports:
+      - protocol: tcp
+        ports: [80, 443]
+  actions:
+    - type: allow
 
 ---
 # Example 4: NAT configuration

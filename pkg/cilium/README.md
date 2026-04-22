@@ -20,10 +20,12 @@ This package provides a unified network controller based on Cilium's eBPF capabi
 
 ### Controllers
 - `NetworkInterfaceController`: Watches for NetworkInterface CRDs and translates them to Cilium configurations
-- `FirewallController`: Watches for FirewallRule CRDs and translates them to Cilium network policies
 - `RoutingController`: Watches for Route CRDs and translates them to Cilium route configurations
 - `DPIController`: Watches for DPIPolicy CRDs and translates them to Cilium DPI configurations
 - `ControllerManager`: Coordinates all controllers for seamless integration
+
+> FirewallRule / `FirewallController` were removed in sprint 29 ticket 33 per ADR-0001.
+> FilterPolicy (see `pkg/security/policy`) is the authoritative policy surface.
 
 ## Usage
 
@@ -137,17 +139,21 @@ if err != nil {
 
 ## Migration from NFTables
 
-This package replaces the following deprecated implementations:
+Per ADR-0001 (Cilium-First Control Plane) and sprint 29 ticket 33, the
+NFTables-based firewall implementations have been fully removed:
 
-- `/pkg/security/firewall/nftables.go`: NFTables-based firewall
-- `/pkg/network/nat/nat66.go`: NFTables-based NAT66
+- `pkg/security/firewall/nftables.go` — removed along with the rest of the
+  `pkg/security/firewall/` package
+- `pkg/security/policy/translator.go` — rewritten from nftables
+  (`NFTFirewallRule`) to Cilium (`*cilium.CiliumPolicy`)
+- `pkg/security/policy/zone_manager.go` — removed (nftables-backed zone
+  chains are not part of the Cilium-first surface)
+- `pkg/cilium/controllers/firewall_controller.go` — removed along with the
+  `FirewallRule` CRD manifest
 
-When migrating from the previous implementations:
-
-1. Replace `NFTablesFirewall` with `cilium.NetworkController`
-2. Replace `NAT66Manager` with `cilium.NetworkController`
-3. Convert firewall rules to Cilium network policies
-4. Update CRDs to use Cilium's CRD types instead of custom firewall CRDs
+Existing clusters that had `FirewallRule` CRs applied must migrate them to
+`FilterPolicy` before upgrading. See the `FilterPolicy` example at
+`manifests/examples/policy/filter-policy-example.yaml`.
 
 ## Command-Line Tool
 
