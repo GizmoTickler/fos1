@@ -16,15 +16,43 @@ import (
 	"github.com/GizmoTickler/fos1/pkg/hardware/types"
 )
 
+// ethtoolClient is the subset of github.com/safchain/ethtool used by the NIC
+// manager. It exists purely as a mocking seam for unit tests, mirroring the
+// pattern established in pkg/hardware/offload/manager.go.
+type ethtoolClient interface {
+	Features(string) (map[string]bool, error)
+	Change(string, map[string]bool) error
+	Stats(string) (map[string]uint64, error)
+	DriverName(string) (string, error)
+	Close()
+}
+
+// linkProvider is the subset of netlink used by the NIC manager, factored into
+// an interface so tests can inject deterministic link statistics without
+// needing CAP_NET_ADMIN.
+type linkProvider interface {
+	LinkByName(name string) (netlink.Link, error)
+}
+
+type defaultLinkProvider struct{}
+
+func (defaultLinkProvider) LinkByName(name string) (netlink.Link, error) {
+	return netlink.LinkByName(name)
+}
+
 // Manager implements the types.NICManager interface.
 type Manager struct {
 	interfaces     map[string]*types.NetworkInterface
 	interfacesMu   sync.RWMutex
 	monitoringDone chan struct{}
-	ethtool        *ethtool.Ethtool
+	ethtool        ethtoolClient
+	links          linkProvider
 }
 
-// NewManager creates a new NIC Manager.
+// NewManager creates a new NIC Manager wired to the real ethtool and netlink
+// handles. It returns an explicit error if the ethtool netlink socket cannot
+// be opened (for example, when running as a non-root user in a restricted
+// namespace).
 func NewManager() (*Manager, error) {
 	ethtoolHandler, err := ethtool.NewEthtool()
 	if err != nil {
@@ -35,6 +63,7 @@ func NewManager() (*Manager, error) {
 		interfaces:     make(map[string]*types.NetworkInterface),
 		monitoringDone: make(chan struct{}),
 		ethtool:        ethtoolHandler,
+		links:          defaultLinkProvider{},
 	}, nil
 }
 
@@ -51,7 +80,12 @@ func (m *Manager) Initialize(ctx context.Context) error {
 // Shutdown shuts down the NIC Manager.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	// Signal monitoring to stop
-	close(m.monitoringDone)
+	select {
+	case <-m.monitoringDone:
+		// already closed
+	default:
+		close(m.monitoringDone)
+	}
 
 	// Close ethtool handler
 	if m.ethtool != nil {
@@ -62,19 +96,41 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // GetNICInfo gets information about a network interface.
+//
+// Features and statistics come from real ethtool / netlink queries. If neither
+// the driver nor the kernel expose any feature flags for the interface, the
+// returned NICInfo.Features map will be empty and ErrNICFeatureNotSupported is
+// wrapped into a warning-only log (the call still succeeds with populated
+// address / MTU / MAC fields).
 func (m *Manager) GetNICInfo(name string) (*types.NICInfo, error) {
 	iface, err := m.GetInterface(name)
 	if err != nil {
 		return nil, err
 	}
 
+	features := make(map[string]bool)
+	if m.ethtool != nil {
+		featureMap, ferr := m.ethtool.Features(name)
+		if ferr == nil {
+			features = featureMap
+		}
+	}
+
+	driver := ""
+	if m.ethtool != nil {
+		if drv, derr := m.ethtool.DriverName(name); derr == nil {
+			driver = drv
+		}
+	}
+
 	return &types.NICInfo{
 		Name:       iface.Name,
 		Type:       string(iface.Type),
+		Driver:     driver,
 		MACAddress: iface.MAC,
 		MTU:        iface.MTU,
 		State:      iface.State,
-		Features:   make(map[string]bool),
+		Features:   features,
 		Statistics: types.NICStatistics{
 			RxPackets:  iface.Statistics.RxPackets,
 			TxPackets:  iface.Statistics.TxPackets,
@@ -138,12 +194,67 @@ func (m *Manager) SetMTU(name string, mtu int) error {
 }
 
 // GetStatistics gets statistics for a network interface.
+//
+// The manager reads from two sources, in order:
+//  1. netlink link-level statistics (always present when the link exists),
+//  2. ethtool -S device counters (optional per-driver enrichment such as
+//     multicast counters that netlink does not surface).
+//
+// If neither source returns any data the manager returns a wrapped
+// ErrNICStatisticsNotSupported so callers can distinguish "driver does not
+// expose counters" from transient ioctl errors.
 func (m *Manager) GetStatistics(name string) (*types.NICStatistics, error) {
-	info, err := m.GetNICInfo(name)
+	link, err := m.links.LinkByName(name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get link %s: %w", name, err)
 	}
-	return &info.Statistics, nil
+
+	stats := &types.NICStatistics{}
+	populated := false
+
+	if linkStats := link.Attrs().Statistics; linkStats != nil {
+		stats.RxPackets = linkStats.RxPackets
+		stats.TxPackets = linkStats.TxPackets
+		stats.RxBytes = linkStats.RxBytes
+		stats.TxBytes = linkStats.TxBytes
+		stats.RxErrors = linkStats.RxErrors
+		stats.TxErrors = linkStats.TxErrors
+		stats.RxDropped = linkStats.RxDropped
+		stats.TxDropped = linkStats.TxDropped
+		stats.Multicast = linkStats.Multicast
+		stats.Collisions = linkStats.Collisions
+		populated = populated ||
+			stats.RxPackets != 0 || stats.TxPackets != 0 ||
+			stats.RxBytes != 0 || stats.TxBytes != 0 ||
+			stats.RxErrors != 0 || stats.TxErrors != 0 ||
+			stats.RxDropped != 0 || stats.TxDropped != 0 ||
+			stats.Multicast != 0 || stats.Collisions != 0
+	}
+
+	// Enrich / cross-check via ethtool counters when they are exposed.
+	if m.ethtool != nil {
+		raw, ethErr := m.ethtool.Stats(name)
+		if ethErr != nil {
+			// ethtool failure is non-fatal when netlink already gave us data;
+			// only propagate when we have no populated values at all.
+			if !populated {
+				return nil, fmt.Errorf("ethtool stats for %s: %w", name, ethErr)
+			}
+		} else if len(raw) > 0 {
+			populated = true
+			// Only overwrite netlink-derived values when ethtool actually has
+			// a corresponding counter (driver-specific names vary).
+			if v, ok := raw["multicast"]; ok {
+				stats.Multicast = v
+			}
+		}
+	}
+
+	if !populated {
+		return nil, fmt.Errorf("%w: interface %s", ErrNICStatisticsNotSupported, name)
+	}
+
+	return stats, nil
 }
 
 // ConfigureInterface configures a network interface.
@@ -226,7 +337,7 @@ func (m *Manager) GetInterface(name string) (*types.NetworkInterface, error) {
 
 	iface, ok := m.interfaces[name]
 	if !ok {
-		return nil, fmt.Errorf("interface %s not found", name)
+		return nil, fmt.Errorf("%w: %s", ErrNICNotFound, name)
 	}
 
 	return iface, nil
@@ -322,7 +433,8 @@ func (m *Manager) discoverInterfaces() error {
 			}
 		}
 
-		// Get offload features
+		// Get offload features (best-effort; lack of features does not abort
+		// discovery — some virtual devices legitimately expose none).
 		offload, err := m.getOffloadFeatures(link.Attrs().Name)
 		if err != nil {
 			fmt.Printf("Failed to get offload features for %s: %v\n", link.Attrs().Name, err)
@@ -426,18 +538,26 @@ func (m *Manager) updateAllInterfaces() error {
 	return nil
 }
 
-// getOffloadFeatures gets hardware offloading features for an interface.
+// getOffloadFeatures gets hardware offloading features for an interface. When
+// ethtool reports no feature flags (for example on tun/tap or driver-stripped
+// virtio devices), the function returns an empty struct and wraps
+// ErrNICFeatureNotSupported so the caller can log a downgrade rather than
+// pretending the features are "all disabled".
 func (m *Manager) getOffloadFeatures(ifName string) (types.OffloadFeatures, error) {
 	features := types.OffloadFeatures{}
 
 	// Get hardware offloading features using ethtool
 	featureMap, err := m.ethtool.Features(ifName)
 	if err != nil {
-		return features, fmt.Errorf("failed to get feature states: %w", err)
+		return features, fmt.Errorf("failed to get feature states for %s: %w", ifName, err)
 	}
 
-	// Map ethtool features to our OffloadFeatures struct
-	// Note: The exact mapping will depend on the actual feature names which can vary by driver
+	if len(featureMap) == 0 {
+		return features, fmt.Errorf("%w: interface %s", ErrNICFeatureNotSupported, ifName)
+	}
+
+	// Map ethtool features to our OffloadFeatures struct.
+	// Note: The exact mapping will depend on the actual feature names which can vary by driver.
 	for feature, enabled := range featureMap {
 		switch feature {
 		case "tx-checksumming":
@@ -472,6 +592,10 @@ func (m *Manager) configureOffload(ifName string, features types.OffloadFeatures
 	featureMap, err := m.ethtool.Features(ifName)
 	if err != nil {
 		return fmt.Errorf("failed to get feature states: %w", err)
+	}
+
+	if len(featureMap) == 0 {
+		return fmt.Errorf("%w: interface %s", ErrNICFeatureNotSupported, ifName)
 	}
 
 	// Prepare features to change

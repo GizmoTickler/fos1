@@ -100,6 +100,30 @@ The Network Interface Manager handles the configuration of physical network inte
 - Hardware offloading features
 - Interface statistics collection
 
+#### Implementation Status (Sprint 29 / Ticket 35)
+
+`pkg/hardware/nic/` now mirrors the ticket-26 pattern established by
+`pkg/hardware/offload/`:
+
+- **Linux real path (`manager_linux.go` via `//go:build linux`)** queries
+  `github.com/safchain/ethtool` for feature flags / driver name / counters
+  and `github.com/vishvananda/netlink` for link-level statistics, MTU, and
+  addresses. The `ethtoolClient` and `linkProvider` interfaces are the
+  mockable seams that unit tests inject.
+- **Explicit "unsupported" errors.** `GetStatistics` returns
+  `ErrNICStatisticsNotSupported` when neither netlink nor ethtool expose any
+  counter values, and `getOffloadFeatures` returns `ErrNICFeatureNotSupported`
+  when ethtool reports an empty feature map (for example on tun/tap and some
+  stripped virtio drivers). Callers can match with `errors.Is`.
+- **Non-Linux stub (`manager_stub.go` via `//go:build !linux`).** Every
+  public method returns `ErrNICUnsupportedPlatform` wrapped with the
+  operation name so macOS / BSD builds compile cleanly but do not silently
+  hide the fact that real reporting is only available on Linux.
+- **Unit tests (`manager_test.go`, Linux-only)** use the `ethtoolClient` /
+  `linkProvider` seams to cover the populated-stats happy path, the
+  unsupported-driver sentinel path, the ethtool-error propagation path, and
+  the feature-map mapping logic.
+
 ```go
 // Interface configuration through netlink
 type NICManager struct {
@@ -288,91 +312,56 @@ func (m *NICManager) configureOffload(ifName string, features OffloadFeatures) e
 
 ### Packet Capture System
 
-The Packet Capture System provides on-demand packet captures with filtering capabilities:
+The Packet Capture System provides on-demand packet captures with filtering capabilities.
+
+#### Implementation Status (Sprint 29 / Ticket 35)
+
+The current implementation in `pkg/hardware/capture/` is a **`tcpdump` shim**,
+not an eBPF-based capture pipeline. The manager shells out to the system
+`tcpdump` binary with `-i`, `-w`, `-Z root`, and the caller-supplied BPF
+filter, and records the process lifecycle as a capture "job".
+
+- **Linux real path (`manager_linux.go` via `//go:build linux`).**
+  `NewManager` calls `exec.LookPath("tcpdump")` at construction time. When the
+  binary is absent it returns the sentinel `ErrTCPDumpNotAvailable` wrapped
+  with the lookup error, so callers see a clean "capture unsupported on this
+  kernel/deployment" message instead of silently producing empty pcaps.
+- **Mockable exec seam.** The `captureExec` interface wraps `LookPath`,
+  process construction, and pcap packet-count — letting unit tests drive the
+  manager deterministically without spawning real tcpdump processes. A
+  parallel `captureProcess` interface wraps Start/Wait/Kill/Signal so tests
+  can simulate clean shutdown, kill-on-timeout, and error exits.
+- **Non-Linux stub (`manager_stub.go` via `//go:build !linux`).** Every
+  public method returns `ErrCaptureUnsupported` wrapped with session / interface
+  context. `ListCaptures` explicitly returns the sentinel rather than an empty
+  slice to avoid silently confusing "no captures" with "capture not available".
+- **Sentinels:** `ErrTCPDumpNotAvailable`, `ErrCaptureUnsupported`,
+  `ErrCaptureNotFound`. All are matchable with `errors.Is` from any platform.
+- **Unit tests (`manager_test.go`, Linux-only)** exercise the missing-tcpdump
+  path, the happy-path arg assembly, process start-failure propagation,
+  SIGINT-based stop, `ListCaptures`, `GetCapturePath`, and shutdown cleanup.
+
+**eBPF-based capture is a non-goal for this sprint.** The previously-documented
+`captureMap *ebpf.Map` architecture with per-session compiled BPF filters and
+in-process pcap writers remains a future direction and is not wired up today.
+Revisiting eBPF capture is tracked separately under the advanced observability
+roadmap.
 
 ```go
-// Packet capture manager
-type PacketCaptureManager struct {
-    captureMap  *ebpf.Map
-    captureDir  string
-    maxCaptures int
-    mu          sync.Mutex
-    activeCaps  map[string]*Capture
+// Simplified shape of the current (tcpdump-backed) manager.
+type Manager struct {
+    captures   map[string]*captureJob
+    capturesMu sync.RWMutex
+    captureDir string
+    exec       captureExec // mockable seam, wraps os/exec + tcpdump
+    binaryPath string      // resolved tcpdump path
 }
 
-// StartCapture starts a packet capture matching the filter
-func (m *PacketCaptureManager) StartCapture(req CaptureRequest) (*Capture, error) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-    
-    // Check if we've reached max captures
-    if len(m.activeCaps) >= m.maxCaptures {
-        return nil, errors.New("maximum number of concurrent captures reached")
-    }
-    
-    // Create capture ID
-    captureID := uuid.New().String()
-    
-    // Create capture file
-    captureFile := filepath.Join(m.captureDir, captureID+".pcap")
-    f, err := os.Create(captureFile)
-    if err != nil {
-        return nil, fmt.Errorf("failed to create capture file: %w", err)
-    }
-    
-    // Create pcap writer
-    writer, err := pcapgo.NewWriter(f)
-    if err != nil {
-        f.Close()
-        os.Remove(captureFile)
-        return nil, fmt.Errorf("failed to create pcap writer: %w", err)
-    }
-    
-    // Write pcap header
-    if err := writer.WriteFileHeader(65535, layers.LinkTypeEthernet); err != nil {
-        f.Close()
-        os.Remove(captureFile)
-        return nil, fmt.Errorf("failed to write pcap header: %w", err)
-    }
-    
-    // Convert filter to BPF filter program
-    filter, err := pcap.CompileBPFFilter(layers.LinkTypeEthernet, 65535, req.Filter)
-    if err != nil {
-        f.Close()
-        os.Remove(captureFile)
-        return nil, fmt.Errorf("invalid capture filter: %w", err)
-    }
-    
-    // Update capture map with filter program
-    key := captureID
-    if err := m.captureMap.Update(key, filter, ebpf.UpdateAny); err != nil {
-        f.Close()
-        os.Remove(captureFile)
-        return nil, fmt.Errorf("failed to update capture map: %w", err)
-    }
-    
-    // Create capture object
-    cap := &Capture{
-        ID:       captureID,
-        File:     f,
-        Writer:   writer,
-        Request:  req,
-        StartTime: time.Now(),
-    }
-    
-    // Store capture
-    m.activeCaps[captureID] = cap
-    
-    // Start background goroutine to enforce max duration
-    go func() {
-        timer := time.NewTimer(req.MaxDuration)
-        defer timer.Stop()
-        
-        <-timer.C
-        m.StopCapture(captureID)
-    }()
-    
-    return cap, nil
+// Simplified shape of the exec seam used by the real implementation and unit tests.
+type captureExec interface {
+    LookPath(name string) (string, error)
+    Command(ctx context.Context, name string, args ...string) captureProcess
+    CountPackets(file string) (int64, error)
 }
 ```
 
