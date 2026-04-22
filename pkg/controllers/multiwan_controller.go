@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"context"
 	"fmt"
 	"reflect"
@@ -15,8 +14,16 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
+	statuspkg "github.com/GizmoTickler/fos1/pkg/controllers/status"
 	"github.com/GizmoTickler/fos1/pkg/network/routing/multiwan"
 )
+
+// multiWANGVR is the GroupVersionResource for MultiWAN CRDs.
+var multiWANGVR = schema.GroupVersionResource{
+	Group:    "network.fos1.io",
+	Version:  "v1alpha1",
+	Resource: "multiwans",
+}
 
 const (
 	// MultiWANResyncPeriod is the resync period for MultiWAN informers
@@ -425,58 +432,47 @@ func (c *MultiWANController) handleMultiWANCreateOrUpdate(obj *unstructured.Unst
 	return nil
 }
 
-// updateMultiWANStatus updates the status of a MultiWAN CRD
+// updateMultiWANStatus updates the status of a MultiWAN CRD.
+//
+// Adopts the shared pkg/controllers/status.Writer helper (Sprint 30 /
+// Ticket 40): field-mapping stays local for readability, but the
+// retry-on-conflict + UpdateStatus plumbing is centralised. The Writer
+// re-fetches the latest object on conflict so two reconciles racing on
+// the same MultiWAN CR no longer silently lose one of the status updates.
 func (c *MultiWANController) updateMultiWANStatus(obj *unstructured.Unstructured) error {
-	// Get the namespace and name
-	namespace := obj.GetNamespace()
 	name := obj.GetName()
-	
-	// Get the MultiWAN status
+
+	// Snapshot the manager's status outside the retry loop — it is stable
+	// within a single reconcile pass and re-calling GetStatus on each
+	// retry could return drifted data that no longer corresponds to the
+	// just-applied config.
 	status, err := c.wanManager.GetStatus(name)
 	if err != nil {
 		return fmt.Errorf("failed to get MultiWAN status: %w", err)
 	}
-	
-	// Create a copy of the object
-	newObj := obj.DeepCopy()
-	
-	// Update active WANs
-	activeWANsUntyped := make([]interface{}, 0, len(status.ActiveWANs))
-	for _, wan := range status.ActiveWANs {
-		wanMap := map[string]interface{}{
-			"name":       wan.Name,
-			"state":      wan.State,
-			"rtt":        int64(wan.RTT),
-			"packetLoss": wan.PacketLoss,
+
+	writer := statuspkg.NewWriter(c.dynamicClient, multiWANGVR)
+	return writer.WriteStatus(context.Background(), obj.DeepCopy(), func(u *unstructured.Unstructured) error {
+		// active WANs
+		activeWANs := make([]interface{}, 0, len(status.ActiveWANs))
+		for _, wan := range status.ActiveWANs {
+			activeWANs = append(activeWANs, map[string]interface{}{
+				"name":       wan.Name,
+				"state":      wan.State,
+				"rtt":        int64(wan.RTT),
+				"packetLoss": wan.PacketLoss,
+			})
 		}
-		activeWANsUntyped = append(activeWANsUntyped, wanMap)
-	}
-	
-	if err := unstructured.SetNestedSlice(newObj.Object, activeWANsUntyped, "status", "activeWANs"); err != nil {
-		return fmt.Errorf("failed to set status.activeWANs: %w", err)
-	}
-	
-	// Update current primary
-	if err := unstructured.SetNestedField(newObj.Object, status.CurrentPrimary, "status", "currentPrimary"); err != nil {
-		return fmt.Errorf("failed to set status.currentPrimary: %w", err)
-	}
-	
-	// Update last state change
-	if err := unstructured.SetNestedField(newObj.Object, status.LastStateChange, "status", "lastStateChange"); err != nil {
-		return fmt.Errorf("failed to set status.lastStateChange: %w", err)
-	}
-	
-	// Update the object
-	gvr := schema.GroupVersionResource{
-		Group:    "network.fos1.io",
-		Version:  "v1alpha1",
-		Resource: "multiwans",
-	}
-	
-	_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update MultiWAN status: %w", err)
-	}
-	
-	return nil
+		if err := unstructured.SetNestedSlice(u.Object, activeWANs, "status", "activeWANs"); err != nil {
+			return fmt.Errorf("set status.activeWANs: %w", err)
+		}
+
+		if err := unstructured.SetNestedField(u.Object, status.CurrentPrimary, "status", "currentPrimary"); err != nil {
+			return fmt.Errorf("set status.currentPrimary: %w", err)
+		}
+		if err := unstructured.SetNestedField(u.Object, status.LastStateChange, "status", "lastStateChange"); err != nil {
+			return fmt.Errorf("set status.lastStateChange: %w", err)
+		}
+		return nil
+	})
 }
