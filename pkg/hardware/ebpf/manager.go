@@ -50,6 +50,13 @@ type loadedProgram struct {
 	maps        []*ebpf.Map
 	info        types.EBPFProgramInfo
 	attachments []string // Hooks this program is attached to
+
+	// ownedLoader is set when the program was loaded via the owned
+	// XDPLoader path. UnloadProgram closes the loader rather than
+	// closing the *ebpf.Program directly — the program handle is
+	// owned by the loader's collection and double-closing would leak
+	// map references or crash on older cilium/ebpf releases.
+	ownedLoader *XDPLoader
 }
 
 // NewManager creates a new eBPF Manager.
@@ -92,6 +99,12 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	// Close all programs and maps
 	m.programsMu.Lock()
 	for name, prog := range m.programs {
+		if prog.ownedLoader != nil {
+			if err := prog.ownedLoader.Close(); err != nil {
+				fmt.Printf("Failed to close owned loader for %s: %v\n", name, err)
+			}
+			continue
+		}
 		// Close maps
 		for _, m := range prog.maps {
 			if err := m.Close(); err != nil {
@@ -111,49 +124,111 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 // LoadProgram loads an eBPF program.
+//
+// Sprint 30 Ticket 38 dispatch:
+//
+//   - `Type == "xdp"` with empty `Code` loads the owned xdp_ddos_drop
+//     object from the embedded ELF via XDPLoader. This is the
+//     supported production path.
+//   - `Type == "xdp"` with non-empty `Code` loads the ELF from that
+//     file path (legacy path used by the compiler pipeline in
+//     compiler.go).
+//   - Any other program type returns ErrEBPFProgramTypeUnsupported.
+//     TC / sockops / cgroup loaders land in Sprint 30 Ticket 39.
 func (m *Manager) LoadProgram(programConfig types.EBPFProgram) error {
-	var prog *ebpf.Program
+	switch programConfig.Type {
+	case ProgramTypeXDP:
+		// supported — fall through to the load path below.
+	case ProgramTypeTCIngress, ProgramTypeTCEgress, ProgramTypeSockOps, ProgramTypeCGroup:
+		return fmt.Errorf("%w: %q (XDP is the only type implemented by the owned loader in v1; see Sprint 30 ticket 39)",
+			ErrEBPFProgramTypeUnsupported, programConfig.Type)
+	default:
+		return fmt.Errorf("%w: %q", ErrEBPFProgramTypeUnsupported, programConfig.Type)
+	}
+
+	if programConfig.Code == "" {
+		return m.loadOwnedXDP(programConfig)
+	}
+
+	return m.loadXDPFromFile(programConfig)
+}
+
+// loadOwnedXDP loads the embedded xdp_ddos_drop program via the owned
+// XDPLoader. Callers who want driver-native XDP or a custom program
+// must still go through the legacy Code path.
+func (m *Manager) loadOwnedXDP(programConfig types.EBPFProgram) error {
+	objectBytes, err := XDPDDoSDropObject()
+	if err != nil {
+		return fmt.Errorf("load owned XDP object: %w", err)
+	}
+	loader, err := NewXDPLoader(objectBytes)
+	if err != nil {
+		return fmt.Errorf("instantiate XDPLoader: %w", err)
+	}
+
+	prog := loader.Program()
+	if prog == nil {
+		loader.Close()
+		return fmt.Errorf("owned XDPLoader returned nil program (likely non-Linux stub)")
+	}
+
 	var maps []*ebpf.Map
-	var err error
+	if dm := loader.DenylistMap(); dm != nil {
+		maps = append(maps, dm)
+	}
 
-	// For simplicity, this implementation assumes the program code is already compiled to an ELF file
-	// In a real implementation, you might want to support loading from source code and compiling it
+	m.programsMu.Lock()
+	defer m.programsMu.Unlock()
 
-	// Load the program from an ELF file
+	m.programs[programConfig.Name] = &loadedProgram{
+		program: prog,
+		maps:    maps,
+		info: types.EBPFProgramInfo{
+			Name:      programConfig.Name,
+			Type:      programConfig.Type,
+			ID:        prog.FD(),
+			Interface: programConfig.Interface,
+			Attached:  false,
+		},
+		attachments: []string{},
+		ownedLoader: loader,
+	}
+	return nil
+}
+
+// loadXDPFromFile preserves the legacy behaviour of LoadProgram when
+// the caller supplies a file path via EBPFProgram.Code.
+func (m *Manager) loadXDPFromFile(programConfig types.EBPFProgram) error {
 	spec, err := ebpf.LoadCollectionSpec(programConfig.Code)
 	if err != nil {
 		return fmt.Errorf("failed to load collection spec: %w", err)
 	}
 
-	// Create a new collection
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
 		return fmt.Errorf("failed to create collection: %w", err)
 	}
 
-	// Find the main program in the collection
+	var prog *ebpf.Program
 	for name, program := range coll.Programs {
 		if name == "main" {
 			prog = program
 			break
 		}
 	}
-
 	if prog == nil {
 		return fmt.Errorf("failed to find main program in collection")
 	}
 
-	// Extract maps
-	for _, m := range coll.Maps {
-		maps = append(maps, m)
+	var maps []*ebpf.Map
+	for _, mp := range coll.Maps {
+		maps = append(maps, mp)
 	}
 
-	// Pin the program and maps to the BPF filesystem
 	if err := m.pinProgram(programConfig.Name, prog, maps); err != nil {
 		return fmt.Errorf("failed to pin program: %w", err)
 	}
 
-	// Store the program
 	m.programsMu.Lock()
 	defer m.programsMu.Unlock()
 
@@ -169,7 +244,6 @@ func (m *Manager) LoadProgram(programConfig types.EBPFProgram) error {
 		},
 		attachments: []string{},
 	}
-
 	return nil
 }
 
@@ -198,22 +272,33 @@ func (m *Manager) UnloadProgram(name string) error {
 		m.linksMu.Unlock()
 	}
 
-	// Close maps
-	for _, em := range prog.maps {
-		if err := em.Close(); err != nil {
-			fmt.Printf("Failed to close map: %v\n", err)
+	// Close via the owned loader when applicable — the loader owns
+	// both the program and the map handles in that path.
+	if prog.ownedLoader != nil {
+		if err := prog.ownedLoader.Close(); err != nil {
+			fmt.Printf("Failed to close owned loader for %s: %v\n", name, err)
 		}
-		// Unpin map
-		mapName := fmt.Sprintf("%s_%s", name, em.String())
-		mapPath := filepath.Join(m.pinPath, "maps", mapName)
-		if err := os.Remove(mapPath); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Failed to unpin map %s: %v\n", mapName, err)
+		prog.ownedLoader = nil
+		prog.program = nil
+		prog.maps = nil
+	} else {
+		// Close maps
+		for _, em := range prog.maps {
+			if err := em.Close(); err != nil {
+				fmt.Printf("Failed to close map: %v\n", err)
+			}
+			// Unpin map
+			mapName := fmt.Sprintf("%s_%s", name, em.String())
+			mapPath := filepath.Join(m.pinPath, "maps", mapName)
+			if err := os.Remove(mapPath); err != nil && !os.IsNotExist(err) {
+				fmt.Printf("Failed to unpin map %s: %v\n", mapName, err)
+			}
 		}
-	}
 
-	// Close program
-	if err := prog.program.Close(); err != nil {
-		fmt.Printf("Failed to close program %s: %v\n", name, err)
+		// Close program
+		if err := prog.program.Close(); err != nil {
+			fmt.Printf("Failed to close program %s: %v\n", name, err)
+		}
 	}
 
 	// Unpin program

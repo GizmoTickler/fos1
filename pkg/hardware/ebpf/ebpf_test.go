@@ -97,17 +97,44 @@ func TestProgramManager_IsAuthoritative(t *testing.T) {
 	assert.Empty(t, programs)
 }
 
-func TestProgramManager_LoadRequiresCode(t *testing.T) {
+func TestProgramManager_LoadXDPWithoutCodeUsesOwnedLoader(t *testing.T) {
 	mm := NewMapManager()
 	pm := NewProgramManager(mm, "")
 
-	// Loading a program with no code should fail
+	// Sprint 30 Ticket 38: LoadProgram with Type=xdp and empty Code
+	// dispatches to the owned XDPLoader, which loads the embedded
+	// xdp_ddos_drop ELF. In this unit-test environment we don't have
+	// the embedded object (or kernel support), so the call must fail
+	// loudly — but *not* with a placeholder success, and *not* with
+	// the old "no program code provided" stub string.
 	err := pm.LoadProgram(Program{
-		Name: "test-program",
-		Type: "xdp",
+		Name: "xdp_ddos_drop",
+		Type: ProgramTypeXDP,
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no program code provided")
+	// The error must come from the owned loader path — either the
+	// embedded object is missing (non-Linux / freshly-cloned tree) or
+	// the kernel/caps rejected the load. It must NOT be the legacy
+	// "no program code provided" string.
+	assert.NotContains(t, err.Error(), "no program code provided")
+}
+
+func TestProgramManager_LoadRejectsNonXDPTypes(t *testing.T) {
+	mm := NewMapManager()
+	pm := NewProgramManager(mm, "")
+
+	for _, typ := range []string{
+		ProgramTypeTCIngress,
+		ProgramTypeTCEgress,
+		ProgramTypeSockOps,
+		ProgramTypeCGroup,
+		"unknown-type",
+	} {
+		err := pm.LoadProgram(Program{Name: "prog-" + typ, Type: typ})
+		assert.Error(t, err, "expected %q to be rejected", typ)
+		assert.ErrorIs(t, err, ErrEBPFProgramTypeUnsupported,
+			"type %q must return ErrEBPFProgramTypeUnsupported", typ)
+	}
 }
 
 func TestProgramManager_GetNonexistentProgram(t *testing.T) {

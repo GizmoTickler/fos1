@@ -514,6 +514,109 @@ int xdp_main(struct xdp_md *ctx) {
 char _license[] SEC("license") = "GPL";
 ```
 
+## Compile and Load Pipeline (Sprint 30 Ticket 38)
+
+The owned compile/load path lands one XDP program — `xdp_ddos_drop` — end
+to end. This section describes how the source, object, embed, and
+loader fit together, and labels the program types that are explicitly
+out of scope for v1.
+
+### Source layout
+
+- `bpf/xdp_ddos_drop.c` — the single owned XDP source. Parses
+  Ethernet/IPv4 and drops packets whose source address is present in an
+  LPM-trie denylist map; passes everything else.
+- `bpf/headers/bpf_helpers.h` — pinned minimal subset of libbpf's
+  `bpf_helpers.h`. Pinning (rather than vendoring all of libbpf) keeps
+  the repository reproducible and avoids pulling a submodule.
+- `bpf/out/` — build output directory, `.gitignore`d. Produced by
+  `make bpf-objects`.
+- `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o` — the compiled ELF object
+  that Go embeds into the binary via `//go:embed`.
+
+### Build target
+
+`make bpf-objects` runs:
+
+```
+clang -O2 -g -target bpf -D__TARGET_ARCH_<arch> -I bpf/headers \
+  -Wall -Werror -c bpf/xdp_ddos_drop.c -o bpf/out/xdp_ddos_drop.o
+```
+
+The target pre-flights the clang binary with `clang -print-targets` and
+aborts with an actionable error if the BPF backend is missing. Apple's
+system `/usr/bin/clang` does not include the BPF backend; use
+`brew install llvm` and pass `BPF_CLANG=/opt/homebrew/opt/llvm/bin/clang`,
+or run the target on a Linux host with upstream clang.
+
+After `make bpf-objects` produces `bpf/out/xdp_ddos_drop.o`, the target
+copies it into `pkg/hardware/ebpf/bpf/` so `go build` picks up the new
+embed contents.
+
+A `go:generate` directive on `pkg/hardware/ebpf/xdp_loader_linux.go`
+provides the same hook for `go generate` flows:
+
+```
+//go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/xdp_ddos_drop.o pkg/hardware/ebpf/bpf/xdp_ddos_drop.o"
+```
+
+### Loader seam
+
+`pkg/hardware/ebpf/xdp_loader_linux.go` exposes three functions:
+
+- `XDPDDoSDropObject() ([]byte, error)` returns the embedded ELF bytes.
+  If the embed slot is empty (i.e. `make bpf-objects` has not been run),
+  it returns `ErrEBPFObjectMissing` so callers see an explicit,
+  actionable failure rather than a silent success.
+- `NewXDPLoader(objectBytes []byte) (*XDPLoader, error)` parses the ELF
+  via `ebpf.LoadCollectionSpecFromReader`, bumps `RLIMIT_MEMLOCK`,
+  validates that the process has CAP_BPF/CAP_NET_ADMIN or UID 0, and
+  instantiates the collection.
+- `XDPLoader.Attach(iface string) (link.Link, error)` resolves the
+  interface via `netlink.LinkByName` and calls `link.AttachXDP` with
+  `XDPGenericMode` so the attach succeeds on dummy interfaces used by
+  the integration test.
+
+The non-Linux build in `xdp_loader_stub.go` returns
+`ErrEBPFUnsupportedPlatform` from every method. `go build ./...`
+succeeds on macOS/Windows; the XDP surface is simply unusable there.
+
+### Program-manager dispatch
+
+`pkg/hardware/ebpf/program_manager.go`'s `LoadProgram` now dispatches
+on `Program.Type`:
+
+- `ProgramTypeXDP` with empty Code → load the owned embedded object via
+  `XDPLoader`.
+- `ProgramTypeXDP` with non-empty Code → legacy path (caller-supplied
+  ELF bytes, used by `compiler.go` and hand-compiled tests).
+- `ProgramTypeTCIngress`, `ProgramTypeTCEgress`, `ProgramTypeSockOps`,
+  `ProgramTypeCGroup`, or any unknown string → return
+  `ErrEBPFProgramTypeUnsupported`.
+
+Extending the owned path to TC ingress/egress is explicit non-goal for
+Ticket 38 and is tracked by Ticket 39.
+
+### Integration test
+
+`pkg/hardware/ebpf/xdp_loader_linux_test.go` runs only on Linux. It:
+
+1. Skips if the embedded object is missing (`ErrEBPFObjectMissing`).
+2. Skips if the process lacks UID 0 AND CAP_BPF/CAP_NET_ADMIN.
+3. Creates a `netlink.Dummy` interface named `fos1testxdp`.
+4. Loads the program, attaches it, asserts a non-nil link handle.
+5. Detaches and removes the interface in `t.Cleanup`.
+
+### Non-goals for v1
+
+- TC / sockops / cgroup loaders — Ticket 39 extends to TC.
+- Packet-level DDoS heuristics (the denylist is populated elsewhere).
+- BTF-based CO-RE vs. legacy compile — the current program is legacy
+  (explicit headers); CO-RE is a follow-up if kernel drift becomes an
+  operational problem.
+- User-space map population controller — a future ticket wires the
+  Suricata / threat-intel pipeline to `DenylistMap()`.
+
 ## Implementation Plan
 
 The eBPF implementation will be developed in phases:

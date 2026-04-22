@@ -89,6 +89,12 @@ type LoadedProgram struct {
 	Link      link.Link
 	Maps      []string
 	Attached  bool
+
+	// xdpLoader is set when the program was loaded via the owned XDP
+	// loader path (Type == ProgramTypeXDP with empty Code). It carries
+	// the backing *ebpf.Collection and map handles so UnloadProgram can
+	// release them deterministically. Nil for legacy Code-based loads.
+	xdpLoader *XDPLoader
 }
 
 // ProgramManager handles the lifecycle of eBPF programs.
@@ -116,7 +122,30 @@ func NewProgramManager(mapManager *MapManager, pinPath string) *ProgramManager {
 	}
 }
 
+// ProgramType is the string set recognised by LoadProgram.
+// These mirror the HookType constants but describe the program's shape
+// (XDP vs. TC vs. sockops etc.), not the attach point.
+const (
+	ProgramTypeXDP       = "xdp"
+	ProgramTypeTCIngress = "tc-ingress"
+	ProgramTypeTCEgress  = "tc-egress"
+	ProgramTypeSockOps   = "sockops"
+	ProgramTypeCGroup    = "cgroup"
+)
+
 // LoadProgram loads an eBPF program.
+//
+// Dispatch:
+//
+//   - `Type == "xdp"` with empty Code loads the owned xdp_ddos_drop
+//     object from the embedded ELF (see `bpf/xdp_ddos_drop.o`). This is
+//     the supported path for Sprint 30 ticket 38.
+//   - `Type == "xdp"` with non-empty Code loads the caller-supplied
+//     ELF bytes (legacy compile-and-pass path, used by older callers
+//     that hand-compile programs into [Program.Code]).
+//   - Any other program type returns [ErrEBPFProgramTypeUnsupported].
+//     Extending this set (TC / sockops / cgroup) is tracked by
+//     Sprint 30 ticket 39.
 func (p *ProgramManager) LoadProgram(program Program) error {
 	p.programsMu.Lock()
 	defer p.programsMu.Unlock()
@@ -126,45 +155,59 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 		return fmt.Errorf("program %s already exists", program.Name)
 	}
 
-	// Increase RLIMIT_MEMLOCK to allow BPF verifier to do more work
-	if err := rlimit.RemoveMemlock(); err != nil {
-		return fmt.Errorf("failed to remove memlock: %w", err)
+	switch program.Type {
+	case ProgramTypeXDP:
+		// fall through to load path below.
+	case ProgramTypeTCIngress, ProgramTypeTCEgress, ProgramTypeSockOps, ProgramTypeCGroup:
+		return fmt.Errorf("%w: %q (XDP is the only type implemented by the owned loader in v1; see Sprint 30 ticket 39)",
+			ErrEBPFProgramTypeUnsupported, program.Type)
+	default:
+		return fmt.Errorf("%w: %q", ErrEBPFProgramTypeUnsupported, program.Type)
 	}
 
 	var loadedProg *ebpf.Program
+	var ownedLoader *XDPLoader
 
-	// Check if we're loading from object file or code
 	if len(program.Code) > 0 {
-		// Load from code (via object file)
-		// This is a placeholder - in production you would use a more sophisticated
-		// approach to compile the code or use pre-compiled object files
+		// Legacy path: caller supplies raw ELF bytes. Used by the
+		// hardware compiler pipeline in pkg/hardware/ebpf/compiler.go
+		// and by tests that inject hand-compiled programs.
+		if err := rlimit.RemoveMemlock(); err != nil {
+			return fmt.Errorf("failed to remove memlock: %w", err)
+		}
 		objectPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s.o", program.Name))
 		if err := os.WriteFile(objectPath, program.Code, 0644); err != nil {
 			return fmt.Errorf("failed to write object file: %w", err)
 		}
 		defer os.Remove(objectPath)
 
-		// Load the object file
 		spec, err := ebpf.LoadCollectionSpec(objectPath)
 		if err != nil {
 			return fmt.Errorf("failed to load eBPF spec: %w", err)
 		}
 
-		// For simplicity, assume the main program is named "main"
-		// In a real implementation, you would need to know the section name
 		progSpec := spec.Programs["main"]
 		if progSpec == nil {
 			return fmt.Errorf("program main not found in object file")
 		}
 
-		// Load the program
 		loadedProg, err = ebpf.NewProgram(progSpec)
 		if err != nil {
 			return fmt.Errorf("failed to load eBPF program: %w", err)
 		}
 	} else {
-		// In a real implementation, we would have more ways to load programs
-		return fmt.Errorf("no program code provided")
+		// Owned path: load the embedded xdp_ddos_drop object via the
+		// dedicated XDPLoader. This is the supported production path.
+		objectBytes, err := XDPDDoSDropObject()
+		if err != nil {
+			return fmt.Errorf("load owned XDP object: %w", err)
+		}
+		loader, err := NewXDPLoader(objectBytes)
+		if err != nil {
+			return fmt.Errorf("instantiate XDPLoader: %w", err)
+		}
+		loadedProg = loader.Program()
+		ownedLoader = loader
 	}
 
 	// Create a loaded program object
@@ -176,6 +219,7 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 		InnerProg: loadedProg,
 		Maps:      program.Maps,
 		Attached:  false,
+		xdpLoader: ownedLoader,
 	}
 
 	// Store the program
@@ -212,8 +256,17 @@ func (p *ProgramManager) UnloadProgram(name string) error {
 		prog.Attached = false
 	}
 
-	// Close the program
-	if prog.InnerProg != nil {
+	// Close the program. When the program was loaded via the owned
+	// XDPLoader path, the *ebpf.Program handle is owned by the
+	// collection inside the loader, so we release via the loader to
+	// avoid a double-close.
+	if prog.xdpLoader != nil {
+		if err := prog.xdpLoader.Close(); err != nil {
+			return fmt.Errorf("failed to close owned XDP loader: %w", err)
+		}
+		prog.xdpLoader = nil
+		prog.InnerProg = nil
+	} else if prog.InnerProg != nil {
 		if err := prog.InnerProg.Close(); err != nil {
 			return fmt.Errorf("failed to close eBPF program: %w", err)
 		}
