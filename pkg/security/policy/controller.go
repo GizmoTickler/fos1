@@ -9,10 +9,22 @@ import (
 	"time"
 
 	"github.com/GizmoTickler/fos1/pkg/cilium"
+	statuspkg "github.com/GizmoTickler/fos1/pkg/controllers/status"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
+
+// filterPolicyGVR is the GroupVersionResource for the FilterPolicy CRD;
+// matches manifests/base/security/filter-policy-crds.yaml:6.
+var filterPolicyGVR = schema.GroupVersionResource{
+	Group:    "security.fos1.io",
+	Version:  "v1alpha1",
+	Resource: "filterpolicies",
+}
 
 // policyTranslator abstracts FilterPolicy → CiliumPolicy translation so the
 // controller can be unit-tested with a deliberately failing translator
@@ -24,8 +36,9 @@ type policyTranslator interface {
 // PolicyController manages the lifecycle of filtering policies.
 type PolicyController struct {
 	// Kubernetes clients
-	kubeClient   kubernetes.Interface
-	ciliumClient cilium.CiliumClient
+	kubeClient    kubernetes.Interface
+	ciliumClient  cilium.CiliumClient
+	dynamicClient dynamic.Interface
 
 	// Core components
 	resolver   *PolicyResolver
@@ -35,6 +48,14 @@ type PolicyController struct {
 
 	// Integration components
 	dpiManager *dpi.DPIManager
+
+	// statusWriter persists FilterPolicy.Status back to the CRD status
+	// subresource after each reconcile that mutates it. Wired when the
+	// controller is constructed with a non-nil dynamic client; otherwise
+	// status writes are best-effort to the in-memory cache only (the
+	// pre-Sprint-30 contract, kept so the existing unit tests — which do
+	// not seed a dynamic client — continue to pass unmodified).
+	statusWriter *statuspkg.Writer
 
 	// Internal state
 	policies        map[string]*FilterPolicy
@@ -58,6 +79,14 @@ type ControllerConfig struct {
 	DefaultPolicies        []string
 	DefaultPriority        int
 	Informers              *ControllerInformers
+
+	// DynamicClient, when non-nil, enables FilterPolicy.Status writeback to
+	// the CRD status subresource via the shared pkg/controllers/status.Writer
+	// (Sprint 30 / Ticket 40). Leave nil in tests or environments where the
+	// dynamic client is not available; reconciled status will still be
+	// recorded on the in-memory cache but will not survive controller
+	// restart.
+	DynamicClient dynamic.Interface
 }
 
 // ControllerInformers holds explicit informer wiring for policy resources.
@@ -94,9 +123,10 @@ func NewPolicyController(
 	ctx, cancel := context.WithCancel(context.Background())
 	logger := NewPolicyLogger(config.EnableDetailedLogging)
 
-	return &PolicyController{
+	controller := &PolicyController{
 		kubeClient:      kubeClient,
 		ciliumClient:    ciliumClient,
+		dynamicClient:   config.DynamicClient,
 		dpiManager:      dpiManager,
 		resolver:        NewPolicyResolver(logger),
 		translator:      NewCiliumPolicyTranslator(ciliumClient, logger),
@@ -110,7 +140,11 @@ func NewPolicyController(
 		ctx:             ctx,
 		cancel:          cancel,
 		config:          config,
-	}, nil
+	}
+	if config.DynamicClient != nil {
+		controller.statusWriter = statuspkg.NewWriter(config.DynamicClient, filterPolicyGVR)
+	}
+	return controller, nil
 }
 
 // Start starts the policy controller.
@@ -367,6 +401,13 @@ func (c *PolicyController) processPolicy(policy *FilterPolicy) {
 	now := time.Now()
 	key := policyKey(policy)
 
+	// Persist whatever status we land on at the end of the reconcile. A
+	// defer on the shared helper means every return branch — disabled,
+	// unchanged, applied, degraded, invalid — gets its final status
+	// written to the CRD status subresource without each branch having
+	// to remember to call persistStatus explicitly.
+	defer c.persistStatus(policy)
+
 	if !policyEnabled(policy) {
 		log.Printf("Policy %s is disabled, removing applied state", key)
 		if err := c.removePolicy(policy); err != nil {
@@ -477,6 +518,118 @@ func (c *PolicyController) processPolicy(policy *FilterPolicy) {
 	})
 
 	log.Printf("Successfully processed policy: %s (hash=%s, cilium-policies=%d)", key, newHash, len(applied))
+}
+
+// persistStatus writes policy.Status back to the FilterPolicy CRD status
+// subresource using the shared status.Writer. Nil-safe: when the controller
+// is constructed without a dynamic client (e.g. in existing unit tests)
+// the call is a no-op and the in-memory cache remains the only source of
+// truth.
+//
+// Failures are logged but not propagated — the reconcile contract is that
+// the in-memory cache reflects the latest decision; a transient API-server
+// hiccup should not re-enqueue the policy and risk an apply-storm.
+func (c *PolicyController) persistStatus(policy *FilterPolicy) {
+	if c.statusWriter == nil || policy == nil {
+		return
+	}
+	obj := filterPolicyToUnstructured(policy)
+	if obj == nil {
+		return
+	}
+	mutate := buildFilterPolicyStatusMutator(policy.Status)
+	if err := c.statusWriter.WriteStatus(c.ctx, obj, mutate); err != nil {
+		log.Printf("persist FilterPolicy status %s: %v", policyKey(policy), err)
+	}
+}
+
+// filterPolicyToUnstructured builds the minimal *unstructured.Unstructured
+// identity needed by status.Writer — only namespace, name, apiVersion, and
+// kind must be populated for the Writer's first UpdateStatus attempt. On a
+// conflict-driven retry the Writer will re-fetch the full object from the
+// API server, which is when the full spec becomes authoritative.
+//
+// Returns nil when the policy has no name (nothing to write against).
+func filterPolicyToUnstructured(policy *FilterPolicy) *unstructured.Unstructured {
+	name := policyObjectName(policy)
+	if name == "" {
+		return nil
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "security.fos1.io/v1alpha1",
+			"kind":       "FilterPolicy",
+			"metadata": map[string]interface{}{
+				"name":      name,
+				"namespace": policy.ObjectMeta.Namespace,
+			},
+		},
+	}
+}
+
+// buildFilterPolicyStatusMutator returns a status.Mutator that writes the
+// current FilterPolicyStatus snapshot onto the target unstructured object.
+// The mutator captures the status values by value so a retry after conflict
+// applies the same logical status — re-running processPolicy inside the
+// retry loop would violate status.Writer's idempotency contract.
+func buildFilterPolicyStatusMutator(statusSnapshot FilterPolicyStatus) statuspkg.Mutator {
+	return func(obj *unstructured.Unstructured) error {
+		if err := unstructured.SetNestedField(obj.Object, statusSnapshot.Applied, "status", "applied"); err != nil {
+			return fmt.Errorf("set status.applied: %w", err)
+		}
+		if statusSnapshot.LastAppliedHash != "" {
+			if err := unstructured.SetNestedField(obj.Object, statusSnapshot.LastAppliedHash, "status", "lastAppliedHash"); err != nil {
+				return fmt.Errorf("set status.lastAppliedHash: %w", err)
+			}
+		}
+		if !statusSnapshot.LastApplied.IsZero() {
+			if err := unstructured.SetNestedField(obj.Object, statusSnapshot.LastApplied.UTC().Format(time.RFC3339), "status", "lastApplied"); err != nil {
+				return fmt.Errorf("set status.lastApplied: %w", err)
+			}
+		}
+		if statusSnapshot.Error != "" {
+			if err := unstructured.SetNestedField(obj.Object, statusSnapshot.Error, "status", "error"); err != nil {
+				return fmt.Errorf("set status.error: %w", err)
+			}
+		}
+
+		// ciliumPolicies is a []string; convert to []interface{} for the
+		// unstructured helpers.
+		if len(statusSnapshot.CiliumPolicies) > 0 {
+			cps := make([]interface{}, len(statusSnapshot.CiliumPolicies))
+			for i, n := range statusSnapshot.CiliumPolicies {
+				cps[i] = n
+			}
+			if err := unstructured.SetNestedSlice(obj.Object, cps, "status", "ciliumPolicies"); err != nil {
+				return fmt.Errorf("set status.ciliumPolicies: %w", err)
+			}
+		}
+
+		// Conditions: serialise each PolicyCondition into a map with the
+		// timestamp rendered as RFC3339 so the CRD sees a stable
+		// representation.
+		if len(statusSnapshot.Conditions) > 0 {
+			conds := make([]interface{}, 0, len(statusSnapshot.Conditions))
+			for _, cond := range statusSnapshot.Conditions {
+				cm := map[string]interface{}{
+					"type":               cond.Type,
+					"status":             cond.Status,
+					"lastTransitionTime": cond.LastTransitionTime.UTC().Format(time.RFC3339),
+				}
+				if cond.Reason != "" {
+					cm["reason"] = cond.Reason
+				}
+				if cond.Message != "" {
+					cm["message"] = cond.Message
+				}
+				conds = append(conds, cm)
+			}
+			if err := unstructured.SetNestedSlice(obj.Object, conds, "status", "conditions"); err != nil {
+				return fmt.Errorf("set status.conditions: %w", err)
+			}
+		}
+		return nil
+	}
 }
 
 // markInvalid records an Invalid=True condition with Applied=False. No apply

@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -15,6 +14,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
+	statuspkg "github.com/GizmoTickler/fos1/pkg/controllers/status"
 	"github.com/GizmoTickler/fos1/pkg/network/nat"
 )
 
@@ -554,67 +554,73 @@ func (c *NATController) updateNATPolicyStatusInvalid(obj *unstructured.Unstructu
 	return c.writeStatusToCRD(obj, status)
 }
 
-// writeStatusToCRD writes a Status struct to the CRD status subresource
-func (c *NATController) writeStatusToCRD(obj *unstructured.Unstructured, status *nat.Status) error {
-	namespace := obj.GetNamespace()
+// writeStatusToCRD writes a Status struct to the CRD status subresource.
+//
+// Field-mapping lives in natStatusMutator; the retry-on-conflict +
+// UpdateStatus plumbing is delegated to the shared
+// pkg/controllers/status.Writer helper introduced in Sprint 30 / Ticket 40.
+// A DeepCopy of obj is passed to the Writer so the caller's informer-cache
+// object is not mutated in the success-on-first-try path.
+func (c *NATController) writeStatusToCRD(obj *unstructured.Unstructured, natStatus *nat.Status) error {
+	writer := statuspkg.NewWriter(c.dynamicClient, natPolicyGVR)
+	return writer.WriteStatus(context.Background(), obj.DeepCopy(), natStatusMutator(natStatus))
+}
 
-	newObj := obj.DeepCopy()
-
-	// Set observedGeneration
-	if err := unstructured.SetNestedField(newObj.Object, status.ObservedGeneration, "status", "observedGeneration"); err != nil {
-		return fmt.Errorf("failed to set status.observedGeneration: %w", err)
-	}
-
-	// Set activeConnections
-	if err := unstructured.SetNestedField(newObj.Object, status.ActiveConnections, "status", "activeConnections"); err != nil {
-		return fmt.Errorf("failed to set status.activeConnections: %w", err)
-	}
-
-	// Set lastAppliedTime
-	if !status.LastAppliedTime.IsZero() {
-		if err := unstructured.SetNestedField(newObj.Object, status.LastAppliedTime.Format(time.RFC3339), "status", "lastAppliedTime"); err != nil {
-			return fmt.Errorf("failed to set status.lastAppliedTime: %w", err)
+// natStatusMutator returns a status.Mutator that writes every NAT status
+// field onto the target unstructured object. Extracted so the mapping is
+// visible in one place and so status.Writer can re-run it verbatim after a
+// conflict-driven re-fetch on retry.
+func natStatusMutator(natStatus *nat.Status) statuspkg.Mutator {
+	return func(obj *unstructured.Unstructured) error {
+		// observedGeneration
+		if err := unstructured.SetNestedField(obj.Object, natStatus.ObservedGeneration, "status", "observedGeneration"); err != nil {
+			return fmt.Errorf("failed to set status.observedGeneration: %w", err)
 		}
-	}
 
-	// Set lastAppliedHash
-	if status.LastAppliedHash != "" {
-		if err := unstructured.SetNestedField(newObj.Object, status.LastAppliedHash, "status", "lastAppliedHash"); err != nil {
-			return fmt.Errorf("failed to set status.lastAppliedHash: %w", err)
+		// activeConnections
+		if err := unstructured.SetNestedField(obj.Object, natStatus.ActiveConnections, "status", "activeConnections"); err != nil {
+			return fmt.Errorf("failed to set status.activeConnections: %w", err)
 		}
-	}
 
-	// Set metrics
-	metrics := map[string]interface{}{
-		"packets":      status.Metrics.Packets,
-		"bytes":        status.Metrics.Bytes,
-		"translations": status.Metrics.Translations,
-	}
-	if err := unstructured.SetNestedMap(newObj.Object, metrics, "status", "metrics"); err != nil {
-		return fmt.Errorf("failed to set status.metrics: %w", err)
-	}
-
-	// Set conditions
-	conditions := make([]interface{}, 0, len(status.Conditions))
-	for _, condition := range status.Conditions {
-		conditionMap := map[string]interface{}{
-			"type":               condition.Type,
-			"status":             condition.Status,
-			"lastTransitionTime": condition.LastTransitionTime.Format(time.RFC3339),
-			"reason":             condition.Reason,
-			"message":            condition.Message,
+		// lastAppliedTime
+		if !natStatus.LastAppliedTime.IsZero() {
+			if err := unstructured.SetNestedField(obj.Object, natStatus.LastAppliedTime.Format(time.RFC3339), "status", "lastAppliedTime"); err != nil {
+				return fmt.Errorf("failed to set status.lastAppliedTime: %w", err)
+			}
 		}
-		conditions = append(conditions, conditionMap)
-	}
-	if err := unstructured.SetNestedSlice(newObj.Object, conditions, "status", "conditions"); err != nil {
-		return fmt.Errorf("failed to set status.conditions: %w", err)
-	}
 
-	// Update the CRD status subresource
-	_, err := c.dynamicClient.Resource(natPolicyGVR).Namespace(namespace).UpdateStatus(context.Background(), newObj, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to update NATPolicy status: %w", err)
-	}
+		// lastAppliedHash
+		if natStatus.LastAppliedHash != "" {
+			if err := unstructured.SetNestedField(obj.Object, natStatus.LastAppliedHash, "status", "lastAppliedHash"); err != nil {
+				return fmt.Errorf("failed to set status.lastAppliedHash: %w", err)
+			}
+		}
 
-	return nil
+		// metrics
+		metrics := map[string]interface{}{
+			"packets":      natStatus.Metrics.Packets,
+			"bytes":        natStatus.Metrics.Bytes,
+			"translations": natStatus.Metrics.Translations,
+		}
+		if err := unstructured.SetNestedMap(obj.Object, metrics, "status", "metrics"); err != nil {
+			return fmt.Errorf("failed to set status.metrics: %w", err)
+		}
+
+		// conditions
+		conditions := make([]interface{}, 0, len(natStatus.Conditions))
+		for _, condition := range natStatus.Conditions {
+			conditionMap := map[string]interface{}{
+				"type":               condition.Type,
+				"status":             condition.Status,
+				"lastTransitionTime": condition.LastTransitionTime.Format(time.RFC3339),
+				"reason":             condition.Reason,
+				"message":            condition.Message,
+			}
+			conditions = append(conditions, conditionMap)
+		}
+		if err := unstructured.SetNestedSlice(obj.Object, conditions, "status", "conditions"); err != nil {
+			return fmt.Errorf("failed to set status.conditions: %w", err)
+		}
+		return nil
+	}
 }
