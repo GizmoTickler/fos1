@@ -124,7 +124,7 @@ Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps. F
 | **FirewallRule CRD** | Non-goal per ADR-0001 | Schema-only with no Go types; CRD manifest and controller removed in sprint 29 ticket 33. `FilterPolicy` is the authoritative policy surface. |
 | **Policy Enforcement (FilterPolicy)** | ✅ Complete | `pkg/security/policy/controller.go` translates FilterPolicy → CiliumNetworkPolicy with spec-hash idempotency and Applied/Degraded/Invalid/Removed conditions (sprint 29 ticket 33). |
 | **SAML/RADIUS/Certificate Auth** | Removed (non-goal) | Stubs removed 2026-04-21 per Sprint 29 Ticket 34; auth is scoped to local/LDAP/OAuth |
-| **Threat Intelligence** | Framework defined but no data sources |
+| **Threat Intelligence** | ✅ v0 (sprint 30 ticket 44) | URLhaus CSV ingestion via `ThreatFeed` CRD → CiliumPolicy translator with last-seen TTL; MISP and STIX are non-goals |
 
 ---
 
@@ -506,11 +506,11 @@ Still open for Sprint 30:
 
 ### ❌ Doesn't Work (Major implementation needed — Sprint 30 scope)
 
-1. **eBPF Program Compilation/Loading** - No LLVM/Clang integration, no BPF bytecode attached (Sprint 30 Tickets 38-39)
-2. **REST / gRPC API** - No external management surface (Sprint 30 Ticket 41)
+1. **eBPF Program Compilation/Loading** - XDP compile + load landed in Sprint 30 Ticket 38; TC/QoS shaping (Ticket 39) and broader program types remain future work
+2. **REST / gRPC API** - Read-only REST v0 landed in Sprint 30 Ticket 41; write paths, watch streams, and other resource families remain future work
 3. **QoS Enforcement** - Types and controllers exist but no real rate limiting (Sprint 30 Ticket 45)
-4. **Threat Intelligence** - Framework only; no feed ingestion (Sprint 30 Ticket 44)
-5. **Performance Baseline** - No benchmarks (Sprint 30 Ticket 43)
+4. **Threat Intelligence** - v0 URLhaus CSV ingestion shipped in Sprint 30 Ticket 44 (`ThreatFeed` CRD + Cilium policy translator with last-seen TTL); MISP/STIX/reputation remain future work
+5. **Performance Baseline** - NAT policy apply baseline landed in Sprint 30 Ticket 43; broader hot-path coverage remains future work
 6. **HA / Clustering** - Single-node posture (later-sprint target)
 
 ### Non-goals (explicit per ADR-0001 / Sprint 29)

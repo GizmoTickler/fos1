@@ -1,0 +1,103 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: threatfeeds.security.fos1.io
+spec:
+  group: security.fos1.io
+  names:
+    kind: ThreatFeed
+    listKind: ThreatFeedList
+    plural: threatfeeds
+    singular: threatfeed
+    shortNames:
+      - tfeed
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Format
+          type: string
+          jsonPath: .spec.format
+        - name: Enabled
+          type: boolean
+          jsonPath: .spec.enabled
+        - name: Entries
+          type: integer
+          jsonPath: .status.entryCount
+        - name: Active
+          type: integer
+          jsonPath: .status.activeIndicators
+        - name: LastFetch
+          type: date
+          jsonPath: .status.lastFetchTime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - url
+                - format
+                - refreshInterval
+                - maxAge
+              properties:
+                url:
+                  type: string
+                  description: Feed source endpoint.
+                format:
+                  type: string
+                  description: Feed format. v0 supports "urlhaus-csv" only.
+                  enum:
+                    - urlhaus-csv
+                refreshInterval:
+                  type: string
+                  description: Go duration between successive fetches (e.g. "15m").
+                maxAge:
+                  type: string
+                  description: Go duration after which an unseen indicator is expired.
+                enabled:
+                  type: boolean
+                  default: true
+            status:
+              type: object
+              properties:
+                lastFetchTime:
+                  type: string
+                  format: date-time
+                lastFetchError:
+                  type: string
+                entryCount:
+                  type: integer
+                  format: int32
+                activeIndicators:
+                  type: integer
+                  format: int32
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

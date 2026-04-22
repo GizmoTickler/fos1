@@ -308,3 +308,95 @@ func (in *AuthConfigList) DeepCopyInto(out *AuthConfigList) {
 		}
 	}
 }
+
+// --- ThreatFeed ---
+
+// DeepCopyObject implements runtime.Object.
+func (in *ThreatFeed) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+// DeepCopy creates a deep copy of ThreatFeed.
+func (in *ThreatFeed) DeepCopy() *ThreatFeed {
+	if in == nil {
+		return nil
+	}
+	out := new(ThreatFeed)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto copies all properties into another ThreatFeed.
+func (in *ThreatFeed) DeepCopyInto(out *ThreatFeed) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Spec = in.Spec
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+// DeepCopy creates a deep copy of ThreatFeedStatus.
+func (in *ThreatFeedStatus) DeepCopy() *ThreatFeedStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ThreatFeedStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto copies all properties into another ThreatFeedStatus.
+func (in *ThreatFeedStatus) DeepCopyInto(out *ThreatFeedStatus) {
+	*out = *in
+	in.LastFetchTime.DeepCopyInto(&out.LastFetchTime)
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]ThreatFeedCondition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+// DeepCopyInto copies all properties into another ThreatFeedCondition.
+func (in *ThreatFeedCondition) DeepCopyInto(out *ThreatFeedCondition) {
+	*out = *in
+	in.LastTransitionTime.DeepCopyInto(&out.LastTransitionTime)
+}
+
+// --- ThreatFeedList ---
+
+// DeepCopyObject implements runtime.Object.
+func (in *ThreatFeedList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+// DeepCopy creates a deep copy of ThreatFeedList.
+func (in *ThreatFeedList) DeepCopy() *ThreatFeedList {
+	if in == nil {
+		return nil
+	}
+	out := new(ThreatFeedList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto copies all properties into another ThreatFeedList.
+func (in *ThreatFeedList) DeepCopyInto(out *ThreatFeedList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]ThreatFeed, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}

@@ -1,8 +1,103 @@
 # Threat Intelligence System Design
 
+> **Implementation status (Sprint 30 / Ticket 44):** v0 is shipped. The
+> `ThreatFeed` CRD (cluster-scoped, `security.fos1.io/v1alpha1`) drives a
+> polling controller in `pkg/security/threatintel/` that fetches abuse.ch
+> URLhaus CSV, translates each URL indicator into a Cilium `toFQDNs` deny
+> policy (or `toCIDR` for IP literals), and expires the applied policy once
+> the indicator has not been seen in a successful fetch newer than
+> `spec.maxAge`.
+>
+> **v0 scope:** URLhaus CSV ingestion only, polling-based, one feed per CR.
+> **Non-goals for v0:** MISP, STIX/TAXII, confidence scoring, feed
+> authentication, ETag/If-Modified-Since caching, and the rich indicator
+> database / reputation engine described below. Those remain design-stage
+> aspirations and will land in later sprints.
+
 ## Overview
 
 This document outlines the design for the Threat Intelligence System, a key security component in our Kubernetes-based router/firewall architecture. The system aggregates, processes, and distributes threat intelligence to enable proactive defense against known threats and malicious activities.
+
+## v0 Implementation (Sprint 30 / Ticket 44)
+
+The first working slice ships a deliberately narrow pipeline. The CRD, the
+fetcher, the translator, and the controller are concrete and tested; the
+broader multi-source / reputation / distribution framework described in the
+rest of this document remains aspirational.
+
+### CRD
+
+```
+apiVersion: security.fos1.io/v1alpha1
+kind: ThreatFeed
+metadata:
+  name: urlhaus
+spec:
+  url: https://urlhaus.abuse.ch/downloads/csv/
+  format: urlhaus-csv      # only supported format in v0
+  refreshInterval: 15m
+  maxAge: 24h              # indicator TTL after last-seen
+  enabled: true
+status:
+  lastFetchTime: ...
+  lastFetchError: ""
+  entryCount: 1342          # rows parsed (post-filter)
+  activeIndicators: 1341    # unique domains currently enforced
+  conditions: [...]
+```
+
+### Runtime pipeline
+
+1. Controller lists ThreatFeed CRs (`pkg/security/threatintel/controller.go`).
+2. For each enabled feed, if `now >= nextFetch`, run
+   `Manager.Refresh(ctx)`.
+3. `URLhausFetcher.Fetch` HTTPs the feed, drops comments, and parses the
+   CSV. `url_status="offline"` and empty URLs are filtered out.
+4. `Translator.Translate` converts each Indicator into a Cilium
+   `CiliumPolicy` whose single rule is a deny on `toFQDNs` (domain) or
+   `toCIDR` (IP literal). Policy names are stable
+   (`fos1-threatintel-<feed>-<hash>`) so repeated fetches are idempotent.
+5. The Manager applies newly-seen indicators and refreshes the last-seen
+   time for ones it already tracks.
+6. Expiry: on every Refresh (and on off-cycle ExpireStale calls), any
+   indicator whose LastSeen is older than `spec.maxAge` has its Cilium
+   policy deleted and is removed from the in-memory active set.
+7. Status is written back via the `status` subresource — entry count,
+   active indicator count, last-fetch time/error, and `Ready` /
+   `FetchSucceeded` conditions.
+
+### Deduplication and TTL semantics
+
+- Duplicate URLs inside a single fetch collapse to one policy per unique
+  host (after lower-casing and port stripping).
+- Across fetches, an indicator still present in the feed is "refreshed"
+  (LastSeen moves forward, no re-apply needed).
+- `maxAge` measures time since last successful fetch included the
+  indicator, **not** time since creation. A feed that keeps an indicator
+  published keeps the policy in place indefinitely.
+- A failed fetch does not mutate active indicator state; transient upstream
+  failures never cause enforcement to disappear on their own. `maxAge`
+  expiry continues to run off-cycle so truly stale entries eventually drop.
+
+### CI harness
+
+The hermetic proof (`scripts/harness-threatintel.sh`) runs the build-tagged
+`TestHarness_EndToEnd` test behind `-tags=harness`. It boots an in-process
+HTTP server that serves a canned URLhaus CSV, drives a full controller
+reconcile, asserts the expected Cilium policies are applied, advances a
+synthetic clock past `maxAge`, and asserts the same set of policies is
+deleted on the next reconcile. An in-cluster analogue
+(`manifests/examples/security/threatfeed-urlhaus.yaml`) deploys an nginx
+pod that serves the same CSV from a ConfigMap.
+
+### Explicit non-goals for v0
+
+- MISP integration
+- STIX/TAXII ingestion
+- Confidence scoring and reputation models
+- Feed authentication (Basic/Bearer/Secret-ref)
+- ETag / `If-Modified-Since` caching
+- The full Indicator / Reputation / Distribution framework described below
 
 ## Design Goals
 
