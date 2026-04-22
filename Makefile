@@ -78,6 +78,55 @@ verify-mainline:
 	$(GO) test ./...
 	$(GO) build ./...
 
+# eBPF compile pipeline (Sprint 30 Ticket 38).
+#
+# Compiles the owned BPF C sources in bpf/ into ELF objects under
+# bpf/out/. The object is then copied into pkg/hardware/ebpf/bpf/ so
+# //go:embed picks it up on the next `go build`.
+#
+# Requires an LLVM-based clang with a bpf target. Apple's bundled
+# /usr/bin/clang does NOT include the bpf backend: run this target on
+# Linux, or install the Homebrew `llvm` formula and point BPF_CLANG at
+# /opt/homebrew/opt/llvm/bin/clang.
+BPF_CLANG ?= clang
+BPF_SRC_DIR := bpf
+BPF_OUT_DIR := bpf/out
+BPF_HEADERS := bpf/headers
+BPF_EMBED_DIR := pkg/hardware/ebpf/bpf
+BPF_ARCH ?= $(shell uname -m | sed -e 's/x86_64/x86/' -e 's/aarch64/arm64/')
+BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(BPF_ARCH) -I $(BPF_HEADERS) -Wall -Werror
+
+BPF_SOURCES := $(wildcard $(BPF_SRC_DIR)/*.c)
+BPF_OBJECTS := $(patsubst $(BPF_SRC_DIR)/%.c,$(BPF_OUT_DIR)/%.o,$(BPF_SOURCES))
+
+.PHONY: bpf-objects
+bpf-objects: bpf-check-clang $(BPF_OBJECTS)
+	@mkdir -p $(BPF_EMBED_DIR)
+	@for obj in $(BPF_OBJECTS); do \
+		cp "$$obj" $(BPF_EMBED_DIR)/; \
+		echo "Embedded $$(basename $$obj) -> $(BPF_EMBED_DIR)/"; \
+	done
+
+$(BPF_OUT_DIR)/%.o: $(BPF_SRC_DIR)/%.c | $(BPF_OUT_DIR)
+	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
+
+$(BPF_OUT_DIR):
+	mkdir -p $(BPF_OUT_DIR)
+
+.PHONY: bpf-check-clang
+bpf-check-clang:
+	@if ! $(BPF_CLANG) -print-targets 2>/dev/null | grep -q "^ *bpf "; then \
+		echo "ERROR: $(BPF_CLANG) does not support the 'bpf' target."; \
+		echo "       Install LLVM (brew install llvm) or run on a Linux host with upstream clang,"; \
+		echo "       then set BPF_CLANG to point at the BPF-capable binary."; \
+		echo "       Example: make bpf-objects BPF_CLANG=/opt/homebrew/opt/llvm/bin/clang"; \
+		exit 1; \
+	fi
+
+.PHONY: bpf-clean
+bpf-clean:
+	rm -rf $(BPF_OUT_DIR)
+
 # Lint targets
 .PHONY: lint
 lint: lint-go lint-yaml

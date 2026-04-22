@@ -125,6 +125,45 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   Existing clusters that had `FirewallRule` CRs applied must migrate them
   to `FilterPolicy` before upgrading.
 
+## Ticket 38 — eBPF XDP Compile and Load Pipeline
+
+### Caveats
+
+- Only XDP is implemented in the owned compile/load path. TC, sockops,
+  and cgroup program types go through `ErrEBPFProgramTypeUnsupported`
+  and are explicit non-goals until Sprint 30 Ticket 39 extends to TC.
+- The compiled ELF (`pkg/hardware/ebpf/bpf/xdp_ddos_drop.o`) is
+  committed to the repository so `go build` works on machines without
+  a BPF-capable clang. This means a contributor who edits
+  `bpf/xdp_ddos_drop.c` MUST re-run `make bpf-objects` on a Linux (or
+  Homebrew-llvm) host and commit the regenerated object. CI does not
+  currently diff the committed ELF against a fresh recompile.
+- Apple's bundled `/usr/bin/clang` does NOT ship the BPF backend; the
+  Makefile target fails fast with an actionable error when run against
+  a clang that lacks `bpf` in `-print-targets`. `make verify-mainline`
+  does NOT invoke `make bpf-objects`, so macOS CI runners can still go
+  green without an LLVM install.
+- The embedded object is validated by ELF magic (`0x7f 'E' 'L' 'F'`)
+  before the loader runs. An empty or placeholder file yields
+  `ErrEBPFObjectMissing`, which the program-manager dispatch surfaces
+  to callers — but there is no cryptographic/BTF integrity check on
+  the committed bytes.
+- `link.XDPGenericMode` is used for attachment so the Linux
+  integration test can drive a `netlink.Dummy` interface without a
+  driver-native XDP path. Production deployments on NICs that support
+  native XDP should select the mode explicitly when this loader moves
+  behind a CRD-driven controller; right now the flag is hard-coded.
+- Capability detection uses a raw `unix.Capget` syscall against
+  `LINUX_CAPABILITY_VERSION_3`. Older kernels (pre-5.8) do not know
+  `CAP_BPF` and will only admit `CAP_NET_ADMIN`; the helper falls back
+  correctly, but operators running pre-5.8 kernels should understand
+  that the privilege-split refactor that `CAP_BPF` enables is not
+  available to them.
+- The integration test creates a dummy interface named `fos1testxdp`
+  and tears it down via `t.Cleanup`. If the test is killed mid-run,
+  the interface may linger and block the next attempt; the helper
+  pre-cleans any pre-existing link with the same name.
+
 ## Notes for Review
 
 - Anything listed here should be treated as a deliberate tradeoff, not a hidden bug.

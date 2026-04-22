@@ -87,7 +87,7 @@ Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps. F
 
 | Component | Files | Lines | Status | Critical Gaps |
 |-----------|-------|-------|--------|---------------|
-| **eBPF Framework** | `pkg/network/ebpf/` | 650 | Placeholder | Map structure exists, but no BPF compilation/loading |
+| **eBPF Framework** | `pkg/network/ebpf/`, `pkg/hardware/ebpf/`, `bpf/` | 650 + owned XDP | XDP compile + load verified on Linux (Sprint 30 Ticket 38) | `bpf/xdp_ddos_drop.c` compiles via `make bpf-objects`, is embedded through `//go:embed`, and loads via `github.com/cilium/ebpf`. TC / sockops / cgroup loaders remain non-goals until Sprint 30 Ticket 39; other program types return `ErrEBPFProgramTypeUnsupported`. |
 
 #### ❌ Not Implemented
 

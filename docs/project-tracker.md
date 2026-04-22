@@ -18,6 +18,8 @@ Current verified status:
   - Ticket 36: reconciliation-style coverage raised on thin packages — `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1%.
   - Ticket 37: post-Sprint-29 status truth-up (this update).
 - Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps: eBPF compile+load, shared CRD status writeback helper, read-only REST API, minimum-privilege RBAC, performance baseline, threat-intelligence ingestion v0, and QoS enforcement via Cilium Bandwidth Manager. See `docs/design/implementation_backlog.md` §"Sprint 30: Critical-Path Production Gaps".
+- Sprint 30 progress:
+  - Ticket 38: owned XDP compile + load pipeline landed. `bpf/xdp_ddos_drop.c` compiles via `make bpf-objects` into an ELF committed at `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o`, embedded through `//go:embed`, loaded via `github.com/cilium/ebpf`, and attached to a `netlink.Dummy` interface in a Linux-only integration test that skips without root/CAP_BPF. Non-XDP program types now return `ErrEBPFProgramTypeUnsupported` from `pkg/hardware/ebpf/program_manager.go`. TC / sockops / cgroup loaders remain non-goals until Ticket 39.
 - For the current implementation snapshot and next workstreams, use [Status.md](../Status.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
 ## Phase 1: Environment Setup & Documentation Structure (Weeks 1-2)

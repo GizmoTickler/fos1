@@ -199,6 +199,16 @@ The eBPF Program Manager is responsible for loading, updating, and managing eBPF
 - Manages eBPF maps for program configuration and state
 - Performs atomic program updates for zero-downtime changes
 
+> **Implementation status (Sprint 30 Ticket 38):** The owned XDP compile
+> + load pipeline is live. `bpf/xdp_ddos_drop.c` compiles via
+> `make bpf-objects` into a committed ELF, is embedded with
+> `//go:embed`, and is loaded by `pkg/hardware/ebpf/xdp_loader_linux.go`
+> through `github.com/cilium/ebpf`. `LoadProgram` in
+> `pkg/hardware/ebpf/program_manager.go` dispatches XDP to this path and
+> returns `ErrEBPFProgramTypeUnsupported` for TC / sockops / cgroup
+> until Ticket 39 extends the pipeline to TC. See
+> [`docs/design/ebpf-implementation.md` §"Compile and Load Pipeline"](./ebpf-implementation.md#compile-and-load-pipeline-sprint-30-ticket-38).
+
 ```go
 // eBPF program manager
 type BPFProgramManager struct {
