@@ -1,0 +1,127 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "fos1 Management API",
+    "version": "0.1.0",
+    "description": "Read-only REST management API v0 for the fos1 Kubernetes router/firewall. Authentication is mTLS client certificates whose Subject CN must appear in the server allowlist."
+  },
+  "servers": [
+    {
+      "url": "https://fos1-api-server.security.svc.cluster.local:8443",
+      "description": "Default in-cluster endpoint."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "mtls": {
+        "type": "mutualTLS",
+        "description": "Client certificate signed by the cluster CA; Subject CN in the allowlist."
+      }
+    },
+    "schemas": {
+      "Status": {
+        "type": "object",
+        "required": ["kind", "status", "code", "reason", "message"],
+        "properties": {
+          "kind":    { "type": "string", "enum": ["Status"] },
+          "status":  { "type": "string", "enum": ["Failure"] },
+          "code":    { "type": "integer", "format": "int32" },
+          "reason":  { "type": "string" },
+          "message": { "type": "string" },
+          "subject": { "type": "string" }
+        }
+      },
+      "FilterPolicy": {
+        "type": "object",
+        "description": "A FilterPolicy CR as defined at pkg/security/policy/types.go. The wire schema mirrors the CRD.",
+        "properties": {
+          "apiVersion": { "type": "string" },
+          "kind":       { "type": "string" },
+          "metadata":   { "type": "object" },
+          "spec":       { "type": "object" },
+          "status":     { "type": "object" }
+        }
+      },
+      "FilterPolicyList": {
+        "type": "object",
+        "properties": {
+          "apiVersion": { "type": "string", "enum": ["fos1.io/v1"] },
+          "kind":       { "type": "string", "enum": ["FilterPolicyList"] },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "resourceVersion": { "type": "string" },
+              "continue":        { "type": "string" }
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/FilterPolicy" }
+          }
+        }
+      }
+    }
+  },
+  "security": [{ "mtls": [] }],
+  "paths": {
+    "/v1/filter-policies": {
+      "get": {
+        "summary": "List FilterPolicy objects.",
+        "parameters": [
+          { "name": "namespace", "in": "query", "schema": { "type": "string" }, "description": "Restrict the list to a namespace." },
+          { "name": "limit",     "in": "query", "schema": { "type": "integer", "maximum": 500 }, "description": "Maximum items per page (default 100, max 500)." },
+          { "name": "continue",  "in": "query", "schema": { "type": "string" }, "description": "Opaque continuation token from a previous response." }
+        ],
+        "responses": {
+          "200": {
+            "description": "A list of FilterPolicy objects.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicyList" } }
+            }
+          },
+          "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      }
+    },
+    "/v1/filter-policies/{namespace}/{name}": {
+      "get": {
+        "summary": "Get a single FilterPolicy object.",
+        "parameters": [
+          { "name": "namespace", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "name",      "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The FilterPolicy object.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicy" } }
+            }
+          },
+          "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "404": { "description": "Not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Liveness probe.",
+        "security": [],
+        "responses": {
+          "200": { "description": "Process is alive.", "content": { "text/plain": { "schema": { "type": "string" } } } }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Readiness probe. 200 when the informer cache is synced.",
+        "security": [],
+        "responses": {
+          "200": { "description": "Ready to serve traffic.", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "503": { "description": "Informer cache not yet synced.", "content": { "text/plain": { "schema": { "type": "string" } } } }
+        }
+      }
+    }
+  }
+}

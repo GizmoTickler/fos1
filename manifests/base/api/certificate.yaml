@@ -1,0 +1,41 @@
+---
+# Issuer for the API-server trust domain. In production this should be a
+# ClusterIssuer (or an Issuer referencing a cluster-wide CA) — the concrete
+# implementation is overridden per-environment in manifests/overlays/*.
+# The in-tree Issuer here provides a default for kubeconform validation and
+# for development clusters bootstrapped via scripts/.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: fos1-api-server-ca
+  namespace: security
+spec:
+  ca:
+    secretName: fos1-api-server-ca-key-pair
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fos1-api-server-tls
+  namespace: security
+spec:
+  secretName: fos1-api-server-tls
+  duration: 2160h   # 90d
+  renewBefore: 360h # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  commonName: fos1-api-server
+  dnsNames:
+    - fos1-api-server
+    - fos1-api-server.security
+    - fos1-api-server.security.svc
+    - fos1-api-server.security.svc.cluster.local
+  issuerRef:
+    name: fos1-api-server-ca
+    kind: Issuer
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment

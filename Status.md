@@ -396,14 +396,23 @@ Still open for Sprint 30:
 
 **Impact:** High-performance packet processing unavailable. Framework manages program state, but no BPF bytecode is produced or attached. Sprint 30 Ticket 38 targets one owned XDP program; Ticket 39 targets one TC-attached QoS classifier.
 
-### 2. Management API ❌ (Sprint 30 Ticket 41)
+### 2. Management API ⚠️ (Sprint 30 Ticket 41 — read-only v0 landed)
+
+**What's Shipped (Sprint 30 / Ticket 41):**
+- `cmd/api-server/` binary exposes `/v1/filter-policies` (list + get) over HTTPS with mTLS.
+- `/healthz`, `/readyz`, and `/openapi.json` ship alongside.
+- mTLS model: `tls.RequireAndVerifyClientCert` + a ConfigMap-backed Subject-CN allowlist. Trust anchor is the cert-manager-issued CA bundle mounted at `/etc/fos1/api/ca.crt`.
+- Base manifests live at `manifests/base/api/` (Deployment, Service, RBAC, cert-manager Certificate/Issuer). RBAC is tight — `get,list,watch` on `filterpolicies.security.fos1.io` only.
+- End-to-end test `pkg/api.TestMTLSEndToEnd` runs a real TLS listener and asserts unauthorized subjects get 403, authorized subjects get 200, and clients without a cert fail the handshake.
 
 **What's Missing:**
-- No REST API exposed
-- No gRPC API server
-- No web UI backend
+- Write verbs (POST/PUT/PATCH/DELETE) — explicit non-goal for v0.
+- Watch / streaming endpoints.
+- Resource families beyond FilterPolicy (NAT, routing, DPI, zones).
+- OAuth / OIDC / SPIFFE — v0 is mTLS only.
+- No gRPC API server; no web UI backend.
 
-**Impact:** Can only manage via Kubernetes API. Sprint 30 Ticket 41 targets a read-only REST v0 under `cmd/api-server/` with mTLS, `/healthz`, `/readyz`, and a minimal OpenAPI spec.
+**Impact:** Operators can now script against the API instead of raw `kubectl` for FilterPolicy. Additional surfaces and write verbs are follow-up tickets.
 
 ### 3. HA / Clustering ❌ (not yet scoped)
 

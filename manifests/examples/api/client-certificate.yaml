@@ -1,0 +1,47 @@
+---
+# Example: issue a client certificate under the same CA the API server
+# trusts, then curl the FilterPolicy list endpoint.
+#
+# Prerequisites:
+#   - manifests/base/api is applied (the Issuer fos1-api-server-ca exists).
+#   - The Subject CN of the Certificate below (example-operator) is in the
+#     allowlist ConfigMap referenced by the Deployment.
+#
+# Once the Certificate is Ready, the Secret `example-operator-client-tls`
+# carries a PEM keypair + the issuing CA bundle. See the shell snippet at
+# the bottom of this file for a curl invocation that uses those bytes.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: example-operator-client
+  namespace: security
+spec:
+  secretName: example-operator-client-tls
+  duration: 168h  # 7d
+  renewBefore: 24h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  commonName: example-operator
+  issuerRef:
+    name: fos1-api-server-ca
+    kind: Issuer
+  usages:
+    - client auth
+    - digital signature
+    - key encipherment
+# ---
+# Extract + use the certificate locally:
+#
+#   kubectl -n security get secret example-operator-client-tls \
+#     -o jsonpath='{.data.tls\.crt}' | base64 -d > client.crt
+#   kubectl -n security get secret example-operator-client-tls \
+#     -o jsonpath='{.data.tls\.key}' | base64 -d > client.key
+#   kubectl -n security get secret example-operator-client-tls \
+#     -o jsonpath='{.data.ca\.crt}'  | base64 -d > ca.crt
+#
+#   curl --cacert ca.crt --cert client.crt --key client.key \
+#        https://fos1-api-server.security.svc.cluster.local:8443/v1/filter-policies
+#
+# If the Subject CN (example-operator) is NOT in the allowlist ConfigMap
+# the server will answer 403 with a JSON Status body explaining the denial.

@@ -1,0 +1,50 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fos1-api-server
+  namespace: security
+---
+# The v0 API is strictly read-only and scoped to the FilterPolicy resource
+# family. The ClusterRole grants only the verbs the server actually uses
+# (get, list, watch). Adding write verbs here is a deliberate follow-up
+# ticket that requires sign-off.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fos1-api-server
+rules:
+  - apiGroups:
+      - security.fos1.io
+    resources:
+      - filterpolicies
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fos1-api-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fos1-api-server
+subjects:
+  - kind: ServiceAccount
+    name: fos1-api-server
+    namespace: security
+---
+# Default (empty) allowlist ConfigMap. Operators override this with their
+# own list of authorized client-cert Subject CNs, one per line. Lines
+# starting with '#' are ignored.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fos1-api-server-allowlist
+  namespace: security
+data:
+  allowlist: |
+    # Add one client-cert Subject CN per line. The v0 server denies every
+    # request from a subject not listed here with HTTP 403.

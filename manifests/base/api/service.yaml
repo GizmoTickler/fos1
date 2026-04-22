@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fos1-api-server
+  namespace: security
+  labels:
+    app: fos1-api-server
+    component: api
+spec:
+  type: ClusterIP
+  selector:
+    app: fos1-api-server
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP
