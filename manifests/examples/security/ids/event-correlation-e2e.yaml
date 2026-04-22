@@ -1,0 +1,46 @@
+# Deterministic end-to-end proof manifest for the event correlator runtime.
+# This EventCorrelation is consumed by scripts/ci/prove-event-correlation-e2e.sh.
+#
+# Contract asserted by the proof:
+#   - spec.source.type=file so a deterministic canary event can be injected
+#     into a host-mounted source file inside the correlator pod.
+#   - spec.sink.type=file so the correlated output is readable back from
+#     the same pod via kubectl exec.
+#   - A single rule with threshold=1 that matches exclusively on the canary
+#     id so the round-trip does not depend on any non-deterministic field
+#     in the injected JSON line.
+apiVersion: security.fos1.io/v1alpha1
+kind: EventCorrelation
+metadata:
+  name: correlation-e2e
+  namespace: security
+spec:
+  enabled: true
+  source:
+    type: file
+    path: /var/run/fos1/events/e2e-events.jsonl
+    format: jsonl
+  sink:
+    type: file
+    path: /var/log/correlator/e2e-correlated.json
+    format: json
+  rules:
+    - name: canary-round-trip
+      description: "Sprint 29 Ticket 29 canary: match a single known correlation id"
+      conditions:
+        - field: canary_id
+          operator: equals
+          value: "SPRINT29-TICKET29-CANARY"
+      threshold: 1
+      timeWindow: 1m
+      severity: low
+      action: log
+  maxEventsInMemory: 1000
+  maxEventAge: 10m
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi

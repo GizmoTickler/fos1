@@ -41,18 +41,21 @@ The controller status contract is intentionally limited:
 
 Focused tests under `pkg/security/ids/correlation/` verify the generated ConfigMap, Deployment, Service, and the Disabled -> Pending -> Running status transitions.
 
-### Runtime dependencies not proven end to end
+### Runtime behavior proven end to end
 
-The controller does **not** prove that event correlation is functionally processing events. That still depends on the runtime image and surrounding cluster plumbing:
+The repository-owned correlator runtime image now has a deterministic round-trip proof gated by the Kind bootstrap harness:
 
-- the repo-owned image build output must contain a working `/usr/bin/event-correlator` binary that understands the generated `config.json` format and command-line flags
-- the runtime must expose working `/health` and `/ready` HTTP endpoints on port `8080`
-- the runtime must have the referenced source file available when `spec.source.type=file`
-- the runtime must honor the minimal owned sink contract:
-  - `spec.sink.type=file` writes JSON output to the configured path
-  - `spec.sink.type=stdout` writes JSON output to stdout
+- [scripts/ci/prove-event-correlation-e2e.sh](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-event-correlation-e2e.sh) applies [manifests/examples/security/ids/event-correlation-e2e.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/examples/security/ids/event-correlation-e2e.yaml), waits for the reconciled Deployment to become ready, injects a single canary JSON line carrying `canary_id="SPRINT29-TICKET29-CANARY"` into the configured `spec.source.path` via `kubectl exec`, polls the configured `spec.sink.path` for the correlated record emitted by the rule, and asserts that `GET http://127.0.0.1:8080/ready` returns HTTP 200
+- the workflow step `Prove event correlation end-to-end` in [.github/workflows/test-bootstrap.yml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/.github/workflows/test-bootstrap.yml) runs the script after the Prometheus, Suricata-log, and Elasticsearch retention proofs, using the locally built `fos1-local/event-correlator:ci` image
 
-Because those behaviors are downstream of the controller, a reconciled ConfigMap, Deployment, or Service is not treated as proof that events are being correlated. Only Deployment readiness advances controller status to `Running`.
+The proof exercises the end-to-end contract that earlier doc revisions treated as unverified:
+
+- the `build/event-correlator/Dockerfile` output contains a `/usr/bin/event-correlator` binary that consumes the controller-generated `config.json`
+- the runtime honors `spec.source.type=file` with a `jsonl` format by tailing the file and processing appended lines
+- the runtime honors `spec.sink.type=file` by writing correlated-event JSON records the proof script can read back
+- `/ready` on port `8080` returns HTTP 200 once the file source and sink have been initialized
+
+The proof intentionally exercises a single canary event and a threshold-1 rule so the round-trip does not depend on any non-deterministic field beyond `canary_id`. Multi-rule, multi-event, and non-canary traffic correlation are out of scope for this harness.
 
 ## Other Repository-Owned Observability Surfaces
 
@@ -199,6 +202,6 @@ When reading observability-related status in this repository:
 
 The following items remain outside the verified contract covered here and define the next implementation dependencies:
 
-- end-to-end validation that the event correlator image consumes live security events; this repository does not prove live security-event ingestion into the correlator end to end
-- proof that correlated events are exported to a durable sink or observability backend
+- live security-event ingestion into the correlator beyond the deterministic canary proof; the Kind harness only exercises a single controlled event through the file source and file sink, not production Suricata or Zeek traffic
+- proof that correlated events are exported to a durable sink or observability backend beyond the owned file sink contract
 - broader observability-stack verification for alerting, dashboards, optional operator add-ons, and long-term storage behavior
