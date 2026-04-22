@@ -499,7 +499,7 @@ All CRD definitions are **complete and well-structured**:
 7. **No API Server** - Limited external management
 8. **No HA/Clustering** - Single point of failure
 9. **No Performance Testing** - Unknown scalability limits
-10. **No Security Hardening** - Needs RBAC, TLS, secrets management
+10. **Partial Security Hardening** - RBAC minimum-privilege baseline complete (Sprint 30 / Ticket 42); TLS and secrets management still open
 
 **Estimated Effort to Production:**
 - **6-10 months** of full-time development
@@ -579,7 +579,12 @@ All CRD definitions are **complete and well-structured**:
 - Unknown connection tracking limits
 
 ### 5. Security Posture (Medium Risk) ⚠️
-- No RBAC implementation
+- RBAC minimum-privilege baseline implemented (Sprint 30 / Ticket 42):
+  every ClusterRoleBinding targets a controller-scoped ClusterRole;
+  `scripts/ci/prove-no-cluster-admin.sh` blocks any new `cluster-admin`
+  binding without an explicit `fos1.io/rbac-exception` annotation.
+  See `docs/design/rbac-baseline.md` for the per-controller verb/resource
+  table.
 - No TLS for internal communication
 - Secrets management not implemented
 - No security audit performed
