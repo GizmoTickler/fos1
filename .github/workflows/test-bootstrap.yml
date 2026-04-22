@@ -6,8 +6,49 @@ on:
     paths:
       - 'manifests/**'
       - '.github/workflows/test-bootstrap.yml'
+      - 'tools/bench/**'
+      - 'scripts/ci/run-bench.sh'
+      - 'docs/performance/**'
+      - 'pkg/network/nat/**'
 
 jobs:
+  perf-baseline:
+    # Sprint 30 / Ticket 43. Non-blocking performance baseline.
+    # Runs the NAT policy apply benchmark, uploads the raw output and
+    # the summary as artifacts, and prints a warning (not a failure)
+    # on >20% median ns/op regression vs the active baseline file in
+    # docs/performance/. The job is configured with continue-on-error
+    # so a noisy runner never blocks merges; the scripts exit code
+    # tracks real `go test` failures, not regressions.
+    name: Performance baseline (NAT apply)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Run NAT apply bench
+        run: scripts/ci/run-bench.sh
+        env:
+          BENCH_COUNT: '10'
+          BENCH_OUT: bench-output.txt
+          BENCH_SUMMARY: bench-summary.md
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nat-apply-bench
+          path: |
+            bench-output.txt
+            bench-summary.md
+          if-no-files-found: warn
+
   bootstrap-test:
     name: Bootstrap Test
     runs-on: ubuntu-latest
