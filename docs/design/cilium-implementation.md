@@ -1,5 +1,7 @@
 # Cilium Implementation Design
 
+> **Status note (Sprint 29 Ticket 33):** Sections below that reference the `FirewallRule` CRD and the "Firewall Controller" component describe an earlier design that has been superseded by the `FilterPolicy` → `CiliumNetworkPolicy` translator in `pkg/security/policy/controller.go`. `FirewallRule` / `FirewallZone` CRDs, the `pkg/security/firewall/` package, and `pkg/cilium/controllers/firewall_controller.go` were removed per ADR-0001. See `docs/design/policy-based-filtering.md` §"Cilium-First Enforcement (sprint 29 ticket 33)" for the shipping design. This document is retained for historical architectural reference.
+
 ## Overview
 
 This document outlines the comprehensive design for Cilium integration within our Kubernetes-based router/firewall system. Cilium serves as the foundation of our networking architecture, providing high-performance packet processing through eBPF, unified policy enforcement, and integration with security components.

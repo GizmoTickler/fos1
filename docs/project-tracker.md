@@ -4,10 +4,20 @@
 This document is the original phase-by-phase tracker and is now primarily a historical record of how the repository was bootstrapped.
 
 Current verified status:
-- The repository is no longer design-only; tickets 1-20 in [docs/implementation-plan.md](docs/implementation-plan.md) are complete on `origin/main`.
-- Fresh verification on 2026-04-18 completed with `go test ./...` and `go build ./...`.
-- The observability manifests now encode a single-node durability baseline, including PVC-backed Prometheus/Grafana/Alertmanager state and Elasticsearch `14d` retention for `fos1-security-*` and `fos1-logs-*`, but that is still manifest-level ownership rather than live-cluster proof.
-- Sprint 29 ticket 33: `FilterPolicy` → `CiliumNetworkPolicy` translator is now wired end-to-end with idempotent, statusful reconciliation matching the NAT controller pattern. `FirewallRule` CRD, nftables-based translator/zone manager, and `pkg/security/firewall` package were removed per ADR-0001. Filter policy enforcement is the Cilium-first authoritative surface.
+- The repository is no longer design-only; tickets 1-37 in [docs/implementation-plan.md](docs/implementation-plan.md) are complete on `origin/main`. Sprint 29 (tickets 29-37) is fully merged.
+- Fresh verification on 2026-04-22 completed with `make verify-mainline` (`go test ./...` 37/37 packages pass, `go build ./...` green).
+- The observability manifests encode a single-node durability baseline, including PVC-backed Prometheus/Grafana/Alertmanager state and Elasticsearch `14d` retention for `fos1-security-*` and `fos1-logs-*`. The Kind harness now additionally proves accelerated ILM rollover + delete against a `fos1-ci-accelerated` policy (Sprint 29 Ticket 30). The production `14d` wall-clock envelope remains a manifest-level target.
+- Sprint 29 closures:
+  - Ticket 29: event-correlator runtime end-to-end proof via `scripts/ci/prove-event-correlation-e2e.sh` (canary → file source → correlator → file sink + `/ready` HTTP 200).
+  - Ticket 30: accelerated ILM rollover + delete proof via `scripts/ci/prove-es-retention-rollover.sh`.
+  - Ticket 31: natural-traffic DPI proof via `scripts/ci/prove-dpi-natural-traffic.sh` — Suricata sid `9000001` drives eve.json → Elasticsearch → Prometheus `sum(dpi_events_total)` advance.
+  - Ticket 32: PromQL validator at `tools/prometheus-query-validator/` runs in the Kind harness and fails CI on any non-allowlisted empty/error expression in owned dashboards/alert rules.
+  - Ticket 33: `FilterPolicy` → `CiliumNetworkPolicy` translator wired end-to-end with idempotent, statusful reconciliation matching the NAT controller pattern. `FirewallRule` CRD, nftables-based translator/zone manager, and `pkg/security/firewall/` package were removed per ADR-0001.
+  - Ticket 34: SAML, RADIUS, and certificate auth provider stubs removed per ADR-0001. Auth surface is scoped to local/LDAP/OAuth.
+  - Ticket 35: real NIC + capture capability reporting on Linux via ethtool/tcpdump shims; explicit `ErrNICStatisticsNotSupported`, `ErrTCPDumpNotAvailable`, and `ErrNICUnsupportedPlatform` sentinels for unsupported paths. eBPF-based capture labelled non-goal.
+  - Ticket 36: reconciliation-style coverage raised on thin packages — `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1%.
+  - Ticket 37: post-Sprint-29 status truth-up (this update).
+- Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps: eBPF compile+load, shared CRD status writeback helper, read-only REST API, minimum-privilege RBAC, performance baseline, threat-intelligence ingestion v0, and QoS enforcement via Cilium Bandwidth Manager. See `docs/design/implementation_backlog.md` §"Sprint 30: Critical-Path Production Gaps".
 - For the current implementation snapshot and next workstreams, use [Status.md](../Status.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
 ## Phase 1: Environment Setup & Documentation Structure (Weeks 1-2)
@@ -389,16 +399,21 @@ Current verified status:
 - [x] DNS Integration for NTP (verified by tests)
 - [x] WireGuard VPN Controller (verified by tests)
 - [x] Certificate Management with cert-manager (partial - no unit tests for certificates package)
-- [x] Suricata IDS/IPS (verified by tests)
+- [x] Suricata IDS/IPS (verified by tests, natural-traffic DPI proof via sid `9000001` per Sprint 29 Ticket 31)
 - [x] Zeek Network Analysis (verified by tests)
-- [x] Security Event Correlation (complete with E2E proof - controller tested under `pkg/security/ids/correlation/`; runtime round-trip proven by `scripts/ci/prove-event-correlation-e2e.sh` in the Kind bootstrap harness)
-- [x] Authentication System with Multiple Providers (verified by tests)
+- [x] Security Event Correlation (complete with E2E proof - controller tested under `pkg/security/ids/correlation/`; runtime round-trip proven by `scripts/ci/prove-event-correlation-e2e.sh` in the Kind bootstrap harness per Sprint 29 Ticket 29)
+- [x] Authentication System with Multiple Providers (local, LDAP, OAuth verified by tests; SAML/RADIUS/cert removed as non-goals per Sprint 29 Ticket 34)
 - [x] FRRouting for Dynamic Routing (verified by tests)
 - [x] Advanced NAT Configuration (verified by tests)
 - [x] Policy-Based Routing (verified by tests)
-- [x] QoS Implementation (partial - QoS manager requires tc/ip commands, no unit tests)
-- [x] Traffic Monitoring (partial - traffic package has no unit tests)
-- [ ] Prometheus and Grafana Integration (not deployed)
+- [x] FilterPolicy → Cilium enforcement (Sprint 29 Ticket 33; spec-hash idempotency, Applied/Degraded/Invalid/Removed conditions; `pkg/security/policy` 51.1% coverage)
+- [x] NIC and Packet Capture Capability Reporting (Sprint 29 Ticket 35; real ethtool + tcpdump on Linux with explicit unsupported sentinels off-Linux)
+- [x] Traffic Monitoring (Sprint 29 Ticket 36; `pkg/traffic` at 51.4% coverage)
+- [x] WAN Manager (Sprint 29 Ticket 36; `pkg/hardware/wan` at 57.6% coverage)
+- [x] eBPF Framework Tests (Sprint 29 Ticket 36; `pkg/network/ebpf` at 93.2% coverage)
+- [ ] QoS Enforcement (stub; Sprint 30 Ticket 45 targets Cilium Bandwidth Manager)
+- [ ] eBPF Program Compilation + Loading (framework only; Sprint 30 Tickets 38-39 target XDP + TC)
+- [x] Prometheus and Grafana Integration (manifests + owned pod-annotation scrape baseline proved in Kind; dashboards/alert rules validated against live series per Sprint 29 Ticket 32; full operator stack remains target-architecture)
 
 ### Milestones Completed
 - [x] Milestone 1: Repository Structure
