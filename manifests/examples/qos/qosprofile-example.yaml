@@ -1,0 +1,47 @@
+---
+# Example QoSProfile that rate-limits "noisy" pods to 10 Mbps egress.
+#
+# Enforced by Cilium's Bandwidth Manager (enabled in
+# manifests/base/cilium/cilium.yaml via --enable-bandwidth-manager=true).
+# The FOS1 QoS controller reads this CR, matches pods carrying the
+# `app: noisy` label, and patches each one with the standard
+# `kubernetes.io/egress-bandwidth` annotation. Cilium then installs an
+# eBPF rate limiter on each matching pod's veth.
+#
+# v1 scope (Sprint 30 / Ticket 45):
+#   - Egress rate limiting per pod via Bandwidth Manager.
+#   - Optional ingress rate limiting (forward-compatible; Cilium may
+#     not yet enforce ingress depending on kernel/version — see
+#     docs/design/qos.md).
+#
+# Out of scope for this profile (see Ticket 39):
+#   - Classful HTB shaping
+#   - DSCP-aware classification
+#   - Per-VLAN QoS tagging
+#
+# Apply with:
+#   kubectl apply -f manifests/examples/qos/qosprofile-example.yaml
+#
+# Verify:
+#   kubectl get pod -l app=noisy -o jsonpath='{.items[*].metadata.annotations}'
+#   # expect kubernetes.io/egress-bandwidth=10M
+apiVersion: network.fos1.io/v1alpha1
+kind: QoSProfile
+metadata:
+  name: noisy-egress-limit
+  namespace: default
+spec:
+  # Label selector identifying the pods this profile applies to. Matches
+  # any pod in the same namespace whose labels include `app: noisy`.
+  podSelector:
+    matchLabels:
+      app: noisy
+
+  # Egress rate in the format Cilium's Bandwidth Manager expects. SI
+  # suffixes are accepted: "10M" (10 Mbit/s), "100k", "1G".
+  egressBandwidth: "10M"
+
+  # Ingress rate is optional and forward-compatible — Cilium's Bandwidth
+  # Manager currently enforces egress only, but setting this here means
+  # no CRD change is required when ingress enforcement lands.
+  # ingressBandwidth: "5M"
