@@ -369,7 +369,7 @@ Other packages retain their pre-sprint coverage; aggregate coverage across the r
 
 1. **Test Coverage** - 60+ test files across 37 verified packages; aggregate coverage still uneven. Four packages raised to 50%+ in Sprint 29 Ticket 36; others remain thinner.
 2. **Placeholder Code** - TODO/FIXME comments still present in non-critical paths; Sprint 29 closed `<type> provider not implemented` strings (Ticket 34) and the FilterPolicy log-only reconcile path (Ticket 33).
-3. **Incomplete Implementations** - eBPF compile+load is the largest remaining stub; QoS enforcement is stubbed pending Sprint 30 Ticket 45.
+3. **Incomplete Implementations** - eBPF compile+load is the largest remaining stub. Per-pod QoS enforcement (egress) landed in Sprint 30 Ticket 45 via Cilium Bandwidth Manager; classful/uplink TC shaping remains Ticket 39.
 4. **Consistency** - Documentation inconsistent across packages; status-sensitive docs are truth-upped at end of each sprint (tickets 20, 27, 37).
 5. **Error Messages** - Sprint 29 Tickets 33-35 added explicit, typed sentinel errors (`ErrNICStatisticsNotSupported`, `ErrTCPDumpNotAvailable`, `ErrNICUnsupportedPlatform`, etc.); other packages still have generic errors.
 
@@ -508,7 +508,7 @@ Still open for Sprint 30:
 
 1. **eBPF Program Compilation/Loading** - XDP compile + load landed in Sprint 30 Ticket 38; TC/QoS shaping (Ticket 39) and broader program types remain future work
 2. **REST / gRPC API** - Read-only REST v0 landed in Sprint 30 Ticket 41; write paths, watch streams, and other resource families remain future work
-3. **QoS Enforcement** - Types and controllers exist but no real rate limiting (Sprint 30 Ticket 45)
+3. **QoS Enforcement** - Per-pod egress rate limiting via Cilium Bandwidth Manager landed in Sprint 30 Ticket 45 (`QoSProfile` CR → `kubernetes.io/egress-bandwidth` annotation). Classful/uplink TC shaping remains Ticket 39 territory.
 4. **Threat Intelligence** - v0 URLhaus CSV ingestion shipped in Sprint 30 Ticket 44 (`ThreatFeed` CRD + Cilium policy translator with last-seen TTL); MISP/STIX/reputation remain future work
 5. **Performance Baseline** - NAT policy apply baseline landed in Sprint 30 Ticket 43; broader hot-path coverage remains future work
 6. **HA / Clustering** - Single-node posture (later-sprint target)
@@ -541,7 +541,7 @@ Still open for Sprint 30:
 | WireGuard VPN | ✅ Detailed | ✅ Complete | Real CRD-to-interface reconciliation |
 | Authentication | ✅ Detailed | ✅ Complete (scoped) | Local, LDAP, OAuth wired; SAML/RADIUS/cert removed as non-goals (2026-04-21) |
 | Certificates | ✅ Detailed | ✅ Complete | None |
-| QoS/Traffic Shaping | ✅ Detailed | ❌ Stub | No TC integration |
+| QoS/Traffic Shaping | ✅ Detailed | ✅ Complete (per-pod egress) | Cilium Bandwidth Manager backend per Sprint 30 Ticket 45. `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation. Classful/uplink TC shaping remains Ticket 39 territory. See `docs/design/qos.md`. |
 | Hardware Offload | ✅ Detailed | ⚠️ Partial | No driver integration |
 
 ---
@@ -565,7 +565,7 @@ Still open for Sprint 30:
 11. **No HA/Clustering** - Single point of failure; not scoped in Sprint 30
 12. **No Performance Baseline** - Scalability unknown (Sprint 30 Ticket 43)
 13. **Internal TLS + Secrets Management** - Still open; Sprint 30 Ticket 41 ships mTLS only for the REST API server
-14. **QoS Enforcement Stubbed** - (Sprint 30 Ticket 45 via Cilium Bandwidth Manager)
+14. ~~QoS Enforcement Stubbed~~ - **Resolved (per-pod egress):** `QoSProfile` CR → pod annotation → Cilium Bandwidth Manager enforces via BPF TBF per Sprint 30 Ticket 45. Classful/uplink TC shaping remains Ticket 39 territory.
 
 **Estimated Effort to Production:**
 - **4-7 months** of full-time development (reduced from 6-10 months as Sprint 29 closed out auth/firewall/nic/observability-proof-depth and narrowed the residual gap to eBPF + API + RBAC + performance + HA)

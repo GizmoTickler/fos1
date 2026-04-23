@@ -12,13 +12,14 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 	"github.com/GizmoTickler/fos1/pkg/network/routing"
 	"github.com/GizmoTickler/fos1/pkg/network/routing/frr"
 	"github.com/GizmoTickler/fos1/pkg/network/routing/multiwan"
 	"github.com/GizmoTickler/fos1/pkg/network/routing/policy"
 	"github.com/GizmoTickler/fos1/pkg/network/routing/protocols"
-	"github.com/GizmoTickler/fos1/pkg/security/qos"
 	"github.com/GizmoTickler/fos1/pkg/traffic"
 )
 
@@ -40,9 +41,15 @@ type RoutingController struct {
 }
 
 // NewRoutingController creates a new routing controller
+//
+// The kubeClient parameter is required by the QoS sub-controller, which
+// (post Sprint 30 / Ticket 45) patches pod annotations via the standard
+// kubernetes client. Pass nil only in code paths that don't exercise
+// NewQoSController; otherwise reconcile will error out.
 func NewRoutingController(
 	dynamicClient dynamic.Interface,
 	ciliumClient cilium.CiliumClient,
+	kubeClient kubernetes.Interface,
 ) (*RoutingController, error) {
 	if ciliumClient == nil {
 		return nil, fmt.Errorf("cilium client is required for routing controller")
@@ -106,14 +113,12 @@ func NewRoutingController(
 	// Create traffic manager
 	trafficManager := traffic.NewManager(trafficClassifier, bandwidthAllocator, 30*time.Second)
 
-	// Create QoS manager
-	qosManager := qos.NewQoSManager()
-
-	// Create QoS controller
+	// Create QoS controller (Cilium Bandwidth Manager backend — Sprint 30
+	// / Ticket 45). No tc-backed QoS manager is constructed any more; pod
+	// annotations are patched directly via the kubernetes clientset.
 	qosController := NewQoSController(
 		dynamicClient,
-		qosManager,
-		trafficManager,
+		kubeClient,
 	)
 
 	// Create traffic monitor

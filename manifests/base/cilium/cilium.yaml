@@ -35,6 +35,12 @@ spec:
           # eBPF and Interface Integration
           - "--enable-bgp=true"
           - "--bpf-lb-mode=dsr"
+          # Bandwidth Manager backs the FOS1 QoSProfile translator
+          # (Sprint 30 / Ticket 45). Cilium watches pod
+          # kubernetes.io/egress-bandwidth annotations the QoS controller
+          # writes and installs a BPF TBF rate limiter on each pod's
+          # veth. Do not flip this to false without also updating
+          # pkg/controllers/qos_controller.go. See docs/design/qos.md.
           - "--enable-bandwidth-manager=true"
           - "--enable-envoy-config=true"
           - "--enable-clustermesh=false"
@@ -156,6 +162,8 @@ data:
   install-iptables-rules: "true"
   auto-direct-node-routes: "false"
   kube-proxy-replacement: "strict"
+  # Must stay "true" to back the QoSProfile CR translator (Sprint 30
+  # Ticket 45); see docs/design/qos.md.
   enable-bandwidth-manager: "true"
   enable-bgp: "true"
   bgp-announce-pods: "true"
