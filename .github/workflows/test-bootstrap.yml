@@ -10,17 +10,25 @@ on:
       - 'tools/bench/**'
       - 'docs/performance/**'
       - 'pkg/network/nat/**'
+      - 'pkg/security/dpi/**'
+      - 'pkg/security/policy/**'
+      - 'pkg/security/threatintel/**'
 
 jobs:
   perf-baseline:
-    # Sprint 30 / Ticket 43. Non-blocking performance baseline.
-    # Runs the NAT policy apply benchmark, uploads the raw output and
-    # the summary as artifacts, and prints a warning (not a failure)
-    # on >20% median ns/op regression vs the active baseline file in
+    # Sprint 30 / Ticket 43 and Sprint 31 / Ticket 54. Non-blocking
+    # performance baseline covering four hot paths: NAT apply, DPI
+    # event → Cilium policy, FilterPolicy translate, and threat-intel
+    # translate. The benchmark wrapper runs `go test -bench=.
+    # ./tools/bench/...`, which picks up every *_bench_test.go file in
+    # the package, so new benchmarks land here automatically without a
+    # workflow edit. It uploads the raw output and the summary as
+    # artifacts, and prints a warning (not a failure) on >20% median
+    # ns/op regression vs the active baseline file in
     # docs/performance/. The job is configured with continue-on-error
-    # so a noisy runner never blocks merges; the scripts exit code
+    # so a noisy runner never blocks merges; the script exit code
     # tracks real `go test` failures, not regressions.
-    name: Performance baseline (NAT apply)
+    name: Performance baseline (four hot paths)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -32,7 +40,7 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Run NAT apply bench
+      - name: Run hot-path benches
         run: scripts/ci/run-bench.sh
         env:
           BENCH_COUNT: '10'
@@ -43,7 +51,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nat-apply-bench
+          name: hot-path-bench
           path: |
             bench-output.txt
             bench-summary.md

@@ -2,6 +2,17 @@
 # run-bench.sh — run the FOS1 performance benchmark harness and
 # compare median ns/op against the active baseline.
 #
+# The harness covers four hot paths:
+#   - NAT policy apply          (tools/bench/nat_apply_bench_test.go)
+#   - DPI event → Cilium policy (tools/bench/dpi_policy_bench_test.go)
+#   - FilterPolicy translate    (tools/bench/filterpolicy_translate_bench_test.go)
+#   - Threat-intel translate    (tools/bench/threatintel_translate_bench_test.go)
+#
+# All four are run in the same `go test -bench=. ./tools/bench/...`
+# invocation below, and the regression-detection awk block pulls the
+# active baseline row for every benchmark in the baseline table,
+# regardless of prefix.
+#
 # v0 behaviour: never exits non-zero because of a regression. It may
 # still exit non-zero if `go test` itself fails (compile error,
 # panic, etc.). CI is expected to run this step with
@@ -31,7 +42,7 @@ REGRESSION_THRESHOLD_PCT="${REGRESSION_THRESHOLD_PCT:-20}"
 # create new files; CI always compares against the most recent one.
 BASELINE_FILE="$(ls -1 docs/performance/baseline-*.md 2>/dev/null | sort | tail -n 1 || true)"
 
-echo "==> running NAT apply benchmarks"
+echo "==> running FOS1 hot-path benchmarks (NAT / DPI / FilterPolicy / ThreatIntel)"
 echo "    count=$BENCH_COUNT"
 echo "    raw output -> $BENCH_OUT"
 echo "    summary    -> $BENCH_SUMMARY"
@@ -99,13 +110,19 @@ awk -F '\t' '
 
 # Pull baseline ns/op per benchmark from the latest baseline file.
 # The baseline table uses pipe-delimited markdown; values have comma
-# separators. Extract the first `NATApply_*` token and the last
-# integer (with commas) on each row.
+# separators. Extract benchmark names wrapped in backticks in the
+# first data cell and the integer ns/op value from the rightmost
+# numeric cell. This matches every benchmark family recorded in the
+# baseline (NATApply_*, DPIEvent_*, FilterPolicyTranslate_*,
+# ThreatIntelTranslate_*, and any future additions) without requiring
+# a per-family allowlist in this script.
 baselines_file="$(mktemp)"
 if [[ -n "$BASELINE_FILE" && -f "$BASELINE_FILE" ]]; then
   awk '
-    /^\| *`NATApply_/ {
-      # col 1 is empty, col 2 is the benchmark name cell.
+    # Match any baseline-table row whose first data cell is a
+    # backticked benchmark name. Rows without backticks (headers,
+    # separators) are skipped implicitly.
+    /^\| *`[A-Za-z_][A-Za-z0-9_]*` *\|/ {
       split($0, cells, "|")
       name = cells[2]
       val  = cells[3]
@@ -146,7 +163,7 @@ awk -v thresh="$REGRESSION_THRESHOLD_PCT" '
 
 # Compose the Markdown summary.
 {
-  echo "# NAT Apply Bench Run"
+  echo "# FOS1 Hot-Path Bench Run"
   echo
   echo "- Baseline file: \`${BASELINE_FILE:-<none>}\`"
   echo "- Iterations per benchmark (count): \`$BENCH_COUNT\`"
