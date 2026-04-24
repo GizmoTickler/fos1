@@ -254,6 +254,32 @@ What is explicitly NOT proven by the accelerated CI path:
 
 Timing caveat: the accelerated proof depends on ILM actually evaluating the policy on each poll tick. The baseline `elasticsearch.yml` sets `indices.lifecycle.poll_interval=10m`, which the CI script overrides via the transient cluster settings API for the duration of the run and then restores. If that override is removed or the cluster rejects it, the proof will legitimately fail rather than silently pass, and ordering of `override_ilm_poll_interval` before `install_accelerated_policy` matters: lower the poll interval first, then install the policy, then write documents and force rollover. That ordering needs a live Kind validation before the first merge to confirm timing budgets hold on the GitHub Actions runner.
 
+## RBAC No-Cluster-Admin CI Gate (Sprint 30 / Ticket 42)
+
+### Implemented and verified in code
+
+Sprint 30 Ticket 42 introduces [`scripts/ci/prove-no-cluster-admin.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-no-cluster-admin.sh) as a CI gate wired into `.github/workflows/validate-manifests.yml`. The script walks every `ClusterRoleBinding` across `manifests/` and `test-manifests/` and fails if any binding targets `roleRef.name: cluster-admin` without an explicit `metadata.annotations.fos1.io/rbac-exception` value. The annotation is the only mechanism that keeps the gate green; no wildcards, no exceptions outside the annotation.
+
+This CI proof is observability-adjacent in the sense that it makes the repository's RBAC posture legible: a reader can trust that every ServiceAccount is bound to a named, scoped ClusterRole. The authoritative per-controller verb/resource table lives at [`docs/design/rbac-baseline.md`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/docs/design/rbac-baseline.md).
+
+What this gate does NOT prove:
+- that ClusterRoles themselves are minimal (the script only blocks `cluster-admin` binding; it does not re-audit per-role verb/resource minimality)
+- that exception annotations are scoped correctly — the annotation is a free-text reason field
+- that RBAC is actually enforced at runtime against an API server; that is a cluster-level policy concern outside this repo
+
+## Performance Baseline CI Job (Sprint 30 / Ticket 43)
+
+### Implemented and verified in code
+
+Sprint 30 Ticket 43 adds a non-blocking performance baseline harness. [`tools/bench/nat_apply_bench_test.go`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/nat_apply_bench_test.go) uses `go test -bench` to measure `pkg/network/nat.Manager.ApplyNATPolicy` against an in-process fake `cilium.Client` (no Kubernetes API, no real Cilium). The [`scripts/ci/run-bench.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/run-bench.sh) harness runs the bench in CI, compares results against [`docs/performance/baseline-2026-04.md`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/docs/performance/baseline-2026-04.md), and prints warnings (non-failing) for regressions beyond a configurable threshold.
+
+The baseline file records ops/s, p50/p95/p99 latency, memory allocation per op, machine details, and git commit. Regressions flagged in CI output are explicitly warnings in v0; a future ticket can promote the gate to blocking once the signal is understood on the real CI runner.
+
+What this bench does NOT prove:
+- throughput under real Cilium policy apply (the harness uses a fake client to isolate the hot path)
+- performance of any other hot path — DPI event → Cilium policy, routing sync, DHCP control socket, DNS zone update all remain unbenchmarked in Sprint 30
+- p99 tail behavior under contention — the bench runs single-goroutine by design
+
 ## Operational Reading Guide
 
 When reading observability-related status in this repository:

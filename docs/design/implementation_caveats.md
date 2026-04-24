@@ -104,12 +104,12 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 ## Ticket 33 — FilterPolicy Cilium Enforcement
 
 ### Caveats
-- The controller mutates FilterPolicy.Status in the in-memory cache but does
-  not yet persist those conditions via a CRD status subresource update. This
-  matches the previous behavior of the stub controller; callers relying on
-  server-observable conditions should lift the NAT controller's
-  `writeStatusToCRD` pattern (see `pkg/controllers/nat_controller.go:558`)
-  into this controller as a follow-up.
+- ~~The controller mutates FilterPolicy.Status in the in-memory cache but does
+  not yet persist those conditions via a CRD status subresource update.~~
+  **Closed by Sprint 30 Ticket 40.** The shared
+  `pkg/controllers/status.Writer` helper now persists FilterPolicy
+  conditions via the `/status` subresource with retry-on-conflict. Adopted
+  by FilterPolicy, NAT, and MultiWAN controllers.
 - Spec-hash idempotency is computed from a canonical JSON projection of the
   spec. Fields added to `FilterPolicySpec` in the future must be included
   in `canonicalizeSpec()` or the hash will not reflect real changes.
@@ -163,6 +163,148 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   and tears it down via `t.Cleanup`. If the test is killed mid-run,
   the interface may linger and block the next attempt; the helper
   pre-cleans any pre-existing link with the same name.
+
+## Ticket 39 — eBPF TC QoS Shaping + Qdisc Bootstrap
+
+### Caveats
+
+- The TC loader at `pkg/hardware/ebpf/tc_loader_linux.go` attaches via
+  `link.AttachTCX`, which requires kernel ≥ 6.6. On older kernels the loader
+  returns an error with an actionable message; there is no TC BPF legacy
+  attach fallback. Operators on pre-6.6 kernels should either upgrade the
+  kernel or leave the TC loader unused until a legacy-attach path is added.
+- The clsact qdisc bootstrap is idempotent via a "get-or-create" pattern, but
+  if another component (e.g. a Cilium-managed clsact) has already taken
+  ownership of the qdisc, our loader does not attempt to arbitrate. First
+  writer wins. A future CRD-driven controller should serialize clsact
+  ownership per netdev.
+- The per-ifindex priority map (`tc_priority_map`) is exposed as
+  infrastructure: the TC program reads it at classify time, and user-space
+  must populate it before the first packet hits the attach point. Today no
+  CRD-driven controller consumes this map; a future VLAN-shaper controller
+  is the natural consumer.
+- Only the TC ingress/egress classifier landed; full classful HTB / HFSC
+  shaping is out of scope. Combine Ticket 39 with Ticket 45 (Bandwidth
+  Manager) for per-pod egress enforcement plus per-uplink classification.
+- The committed ELF (`pkg/hardware/ebpf/bpf/tc_qos_shape.o`) mirrors the
+  Ticket 38 pattern: contributors who edit `bpf/tc_qos_shape.c` must
+  re-run `make bpf-objects` on a BPF-capable clang host and commit the
+  regenerated object. CI does not currently diff committed ELF against a
+  fresh recompile.
+
+## Ticket 40 — Shared CRD Status Writeback Helper
+
+### Caveats
+
+- The helper at `pkg/controllers/status/writer.go` retries on conflict with
+  a bounded retry budget. If a caller writes status faster than the
+  conflict-retry budget can drain, some updates will be dropped. In
+  practice reconcile loops self-throttle, so this has not been observed.
+- The helper is type-erased via an interface seam rather than generics; the
+  per-CRD adapter functions that construct the typed patch live in each
+  controller package (`nat_controller.go`, `policy/controller.go`,
+  `multiwan_controller.go`). Adopting the helper in a new controller
+  requires authoring that adapter.
+- The helper uses `Patch` with `types.MergePatchType` on the `/status`
+  subresource. Array-typed fields (e.g. `Conditions`) must be fully rewritten
+  on each update rather than mutated in place; this matches controller-runtime
+  convention but is worth calling out when auditing a new adopter.
+
+## Ticket 41 — Read-Only REST API v0
+
+### Caveats
+
+- `/v1/filter-policies` is read-only in v0. Write verbs
+  (POST / PUT / PATCH / DELETE), watch/streaming endpoints, and resource
+  families beyond FilterPolicy are explicit follow-up tickets, not bugs.
+- Authentication is **mTLS only** — the API server enforces
+  `tls.RequireAndVerifyClientCert` and checks the peer's Subject-CN against
+  a ConfigMap-backed allowlist. OAuth / OIDC / SPIFFE are not wired.
+- Trust anchor is the cert-manager-issued CA bundle mounted at
+  `/etc/fos1/api/ca.crt`. Rotating the CA requires updating the mounted
+  ConfigMap; the server does not watch the ConfigMap for live reload in v0.
+- The OpenAPI spec at `/openapi.json` is hand-authored, not generated.
+  Schema drift between the CRD and the OpenAPI response is possible; a
+  future ticket should generate it from `pkg/apis/`.
+
+## Ticket 42 — RBAC Minimum-Privilege Baseline
+
+### Caveats
+
+- `scripts/ci/prove-no-cluster-admin.sh` walks both `manifests/` and
+  `test-manifests/`. If a downstream consumer renders additional manifests
+  into a path outside those two trees, the gate does not see them.
+- The `fos1.io/rbac-exception` annotation is free-text. Operators should
+  audit the annotation value in code review; the CI gate only enforces
+  presence, not content.
+- Per-role minimality is documented in `docs/design/rbac-baseline.md` but
+  not enforced by a separate CI check today. The "no cluster-admin" gate is
+  the only machine-checked property; verb/resource minimality is a review
+  expectation.
+- Vendor-shipped ClusterRoles (e.g. Cilium's) are kept at vendor defaults
+  rather than trimmed. This is an explicit choice; see `rbac-baseline.md`
+  §Vendor Baselines for rationale.
+
+## Ticket 43 — NAT Policy Apply Performance Baseline
+
+### Caveats
+
+- The bench harness at `tools/bench/nat_apply_bench_test.go` uses an
+  in-process fake `cilium.Client`. It does not exercise the real
+  Kubernetes API, real Cilium policy generation, or real network stack.
+  The numbers measure `pkg/network/nat.Manager.ApplyNATPolicy` CPU cost,
+  not end-to-end latency.
+- The baseline at `docs/performance/baseline-2026-04.md` was measured on
+  an Apple M3 Pro developer laptop, not a dedicated CI runner. Numbers are
+  directionally reliable for regression detection but should not be
+  compared across machines or OS builds.
+- CI regression detection is a **warning, not a failure** in v0. Once the
+  signal is understood on the real CI runner, a future ticket can promote
+  the gate to blocking.
+- Only NAT policy apply is baselined. Other hot paths (DPI event → Cilium
+  policy, routing sync, DHCP control socket, DNS zone update) are explicit
+  follow-up tickets.
+
+## Ticket 44 — URLhaus Threat-Intel v0
+
+### Caveats
+
+- Only the URLhaus CSV feed is ingested in v0. MISP and STIX/TAXII are
+  non-goals today and would require ADR-0001 to be revisited.
+- The feed fetcher assumes HTTPS. Feed credentials / HTTP basic auth are
+  not wired; upstream authenticated feeds are out of scope.
+- The translator emits Cilium deny policies with a last-seen TTL; entries
+  are expired when the feed no longer mentions them past the TTL window.
+  If the upstream feed is temporarily unavailable, the controller holds the
+  last-known entry set rather than failing closed. Operators who need
+  fail-closed behavior should layer a FilterPolicy default-deny on top.
+- `ThreatFeed.Status` records last-fetch time, entry count, and expiry
+  state. The controller does not emit Kubernetes `Events` on feed errors
+  in v0; observability relies on controller logs.
+
+## Ticket 45 — QoS Enforcement via Cilium Bandwidth Manager
+
+### Caveats
+
+- Bandwidth Manager enforces **egress only** — there is no ingress rate
+  limiting in v0. The BPF TBF runs on the pod netdev's egress path.
+  Ingress enforcement is a Sprint 31 candidate and will need a different
+  backend (TC, XDP, or a Cilium roadmap feature).
+- `QoSProfile.Spec.podSelector` uses label selectors; pods that drift out
+  of the selector scope have the annotation removed via
+  `kubernetes.io/egress-bandwidth`. Pods must be recreated or their
+  admission hook must re-run for the annotation change to be picked up by
+  Cilium — the annotation is read at admission time, not reconciled in
+  place.
+- Only `kubernetes.io/egress-bandwidth` (and optionally
+  `kubernetes.io/ingress-bandwidth` for forward compatibility) is written.
+  Classful HTB / HFSC shaping, DSCP-aware classification, and VLAN-scoped
+  per-uplink priority marking live on the Ticket 39 TC loader
+  infrastructure and are not consumed by this controller in v1.
+- The bandwidth value must use a Cilium-understood unit suffix (e.g.
+  `"10M"`). Validation happens at reconcile time; a malformed value sets
+  the `QoSProfile.Status.Conditions` Invalid condition rather than
+  crashing the reconciler.
 
 ## Notes for Review
 
