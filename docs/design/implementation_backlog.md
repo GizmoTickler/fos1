@@ -1052,22 +1052,255 @@ Acceptance:
 - no status claim unsupported by a landed test, manifest, or harness step
 - remaining gaps for Sprint 31+ explicitly enumerated
 
-## Sprint 31 (placeholder): Post-Sprint-30 Production Hardening
+## Sprint 31: Post-Sprint-30 Production Hardening
 
-Candidate scope only. Sprint 31 ticket definitions are out of scope for Ticket 46; they will be finalized in a separate planning session after this truth-up closes.
+Sprint 31 opens after Ticket 46 closed Sprint 30 with `make verify-mainline` green (42/42 packages pass) and production readiness at ~75-80%. Scope targets the remaining critical-path blockers for production posture.
 
-Candidate gaps, distilled from the post-Sprint-30 state of `Status.md` §Critical Gaps and from caveats flagged during Sprint 30 execution:
+Fresh baseline before this sprint:
+- `main` at `7979c41` (Ticket 46 merge commit)
+- `make verify-mainline` passes
+- All Sprint 29 and Sprint 30 caveats captured in `docs/design/implementation_caveats.md`
 
-- **HA / clustering** — the current posture is single-node for Elasticsearch, Prometheus, Grafana, Alertmanager; controllers run as single replicas with no leader election or state replication. This is the single largest residual production blocker after Sprint 30.
-- **Write-path API** — Ticket 41 shipped read-only `/v1/filter-policies`. Write verbs (POST/PUT/PATCH/DELETE), watch/streaming endpoints, and additional resource families (NAT, routing, DPI, zones) remain future work.
-- **Broader eBPF program types** — Sprint 30 Tickets 38-39 landed XDP + TC loaders. `sockops` and `cgroup` program types still return `ErrEBPFProgramTypeUnsupported` from `pkg/hardware/ebpf/program_manager.go`.
-- **More threat feeds** — Ticket 44 shipped URLhaus CSV. MISP, STIX/TAXII, and IP-reputation feeds are candidates; MISP/STIX are currently non-goals and would need ADR revisiting.
-- **Performance optimization beyond one hot path** — Ticket 43 baselined NAT policy apply only. DPI event → Cilium policy, routing sync, DHCP control socket, and DNS zone update remain unbenchmarked.
-- **Internal TLS + secrets management for non-API components** — Ticket 41 introduced mTLS for the REST API only. Inter-controller service TLS and a documented secrets model remain open.
-- **Ingress rate limiting** — Ticket 45 shipped per-pod egress rate limiting via Cilium Bandwidth Manager. Ingress enforcement and classful/VLAN-scoped shaping on top of the Ticket-39 TC loader remain open.
-- **VLAN-scoped TC shaper controller** — Ticket 39 landed the TC loader + clsact bootstrap + per-ifindex priority map as infrastructure. A CRD-driven controller that drives those maps from `QoSProfile` or a new `TrafficShaper` surface is still to be scoped.
+Critical path (draft):
+- 47 -> 49 -> (48, 50, 51, 52, 53 in parallel) -> 54 -> 55
 
 Working rules for Sprint 31: same as prior sprints (no placeholder success paths, idempotent reconciliation, statusful conditions, tests updated with behavior changes, docs updated after behavior is verified).
+
+### P0
+
+#### Ticket 47: HA / Controller Leader Election Baseline
+Status:
+- open
+
+Scope:
+- every custom controller currently runs single-replica; there is no leader election or failover story
+- adopt `sigs.k8s.io/controller-runtime/pkg/leaderelection` or `k8s.io/client-go/tools/leaderelection` (prefer controller-runtime since most controllers already use its manager)
+- wire leader election into every controller main (`cmd/*-controller/main.go`, `cmd/dpi-manager/main.go`, `cmd/api-server/main.go`) with the same lease namespace and a per-controller lease name
+- bump every controller Deployment to `replicas: 2`; add anti-affinity so the two replicas land on different nodes in a Kind cluster with 2+ nodes; fall back gracefully on 1-node clusters
+- add a CI harness step that kills the active leader and asserts the standby takes over within the lease duration
+
+Primary areas:
+- `cmd/*/main.go` (all controller entrypoints)
+- `manifests/base/*/deployment.yaml` (all controller deployments)
+- `manifests/base/*/rbac.yaml` (grant `coordination.k8s.io/leases` permissions to the ServiceAccount where missing)
+- new: `scripts/ci/prove-leader-failover.sh`
+- `docs/design/high-availability.md` (new)
+
+Acceptance:
+- every owned controller participates in leader election
+- a killed leader is replaced by the standby within a documented RTO (target: ≤ 30s under the default lease config)
+- CI harness proves one failover cycle in Kind
+- `Status.md` HA row moves from "Single point of failure" to "Leader election with hot standby; RTO ≤ 30s"
+
+### Ticket 48: Write-Path REST API (POST / PUT / DELETE For FilterPolicy)
+Status:
+- open
+
+Scope:
+- extend `cmd/api-server/` and `pkg/api/` beyond the Ticket 41 read-only v0
+- add `POST /v1/filter-policies/{ns}` (create), `PUT /v1/filter-policies/{ns}/{name}` (replace), `PATCH /v1/filter-policies/{ns}/{name}` (merge / strategic-merge), `DELETE /v1/filter-policies/{ns}/{name}`
+- enforce the Subject-CN allowlist on every write verb with the same semantics as read verbs
+- add admission-style validation on the handler before calling `client.Create` / `Update` / `Delete` — reject invalid specs with 422 and a machine-readable body
+- update the OpenAPI spec (hand-authored; Ticket 41 caveat)
+- add a `watch=true` query parameter to list returning `Transfer-Encoding: chunked` JSON-lines stream (optional; defer to Sprint 32 if scope pressure)
+
+Primary areas:
+- `pkg/api/filterpolicy_handler.go`
+- `pkg/api/server.go` (route registration)
+- `pkg/api/testdata/openapi.json`
+- `pkg/api/filterpolicy_handler_test.go`
+- `docs/design/api-server.md`
+
+Acceptance:
+- create/update/delete round-trip proven via `pkg/api.TestMTLSEndToEnd`-style test
+- invalid specs rejected with 422 + body carrying the validation error
+- OpenAPI spec describes every verb including error shapes
+- `Status.md` API row flips from "read-only v0" to "CRUD v1 for FilterPolicy"
+
+### Ticket 49: Inter-Controller TLS And Secrets Management Baseline
+Status:
+- open
+
+Scope:
+- Ticket 41 wired mTLS for the REST API only. Every other controller-to-controller and controller-to-exporter path is unencrypted.
+- define the internal TLS trust anchor: one cluster-wide `ClusterIssuer` named `fos1-internal-ca`, derived from cert-manager, signing per-service `Certificate` objects scoped to `<service>.<namespace>.svc`
+- mint per-controller server certificates for every controller that exposes a port (including the DPI `:8080/metrics`, NTP `:9559/metrics`, API server `:8443`, and the threatintel, correlator, and filter-policy controllers' health/metrics endpoints)
+- wire every controller to load its server cert from a mounted Secret and reload on renewal (use the Ticket 15 SecretWatcher pattern)
+- document the secrets model: what lives in a Secret, what the rotation story is, what happens on a compromised key
+
+Primary areas:
+- `pkg/security/certificates/` (new issuer + certificate helpers)
+- `cmd/*/main.go` (every controller main loads a server cert)
+- `manifests/base/*/certificate.yaml` (new per-controller Certificates)
+- `manifests/base/*/deployment.yaml` (mount the Secret, point config at the mount)
+- `docs/design/internal-tls-secrets.md` (new)
+
+Acceptance:
+- every owned controller exposes its HTTP endpoints over TLS
+- server certs rotate via cert-manager with a test harness verifying rotation-triggered reload
+- `Status.md` §Critical Gaps removes "internal TLS missing" and replaces with "internal TLS baseline via `fos1-internal-ca`"
+
+### P1
+
+### Ticket 50: Delete Residual `nftables` Go Imports
+Status:
+- open
+
+Scope:
+- `pkg/network/nat/kernel.go` and `pkg/deprecated/nat/nat66.go` still import `github.com/google/nftables` (flagged by the Ticket 46 agent as out of scope for that truth-up)
+- delete the kernel-native NAT paths or gate them behind explicit `//go:build !cilium` tags and never build them in default configurations
+- remove the `github.com/google/nftables` dependency from `go.mod` if no longer referenced
+- confirm `pkg/network/nat/manager.go` (Cilium-first) remains the sole active NAT path
+
+Primary areas:
+- `pkg/network/nat/kernel.go`
+- `pkg/deprecated/nat/`
+- `go.mod` / `go.sum`
+- `docs/design/implementation_caveats.md`
+
+Acceptance:
+- `grep -rn github.com/google/nftables pkg/` returns nothing
+- `go mod tidy` removes the dependency
+- `Status.md` §Non-goals confirms nftables is fully removed (not just non-goal)
+
+### Ticket 51: eBPF sockops + cgroup Program Types
+Status:
+- open
+
+Scope:
+- Sprint 30 Ticket 38 and 39 landed XDP and TC loaders. `pkg/hardware/ebpf/program_manager.go` returns `ErrEBPFProgramTypeUnsupported` for sockops and cgroup types.
+- write one simple owned sockops program (e.g. redirect connections within a cgroup for perf) under `bpf/sockops_redirect.c`
+- write one simple owned cgroup program (e.g. egress connection counter per cgroup) under `bpf/cgroup_egress_counter.c`
+- extend `pkg/hardware/ebpf/` with `sockops_loader_linux.go` + `cgroup_loader_linux.go` and matching stubs
+- extend `program_manager.go` dispatch so all four program types (XDP / TC / sockops / cgroup) route to real loaders on Linux
+- Linux-only integration tests that skip on missing caps
+
+Primary areas:
+- `bpf/sockops_redirect.c`
+- `bpf/cgroup_egress_counter.c`
+- `pkg/hardware/ebpf/`
+- `Makefile` bpf-objects target
+- `docs/design/ebpf-implementation.md`
+
+Acceptance:
+- `make bpf-objects` produces all four `.o` files
+- sockops + cgroup integration tests pass on Linux with `CAP_BPF`/`CAP_NET_ADMIN`
+- `Status.md` eBPF row updates to "XDP + TC + sockops + cgroup compile + load verified on Linux"
+
+### Ticket 52: VLAN-Scoped TC Shaper Controller
+Status:
+- open
+
+Scope:
+- Ticket 39 shipped `pkg/hardware/ebpf/tc_loader_linux.go` with `SetPriority`/`ClearPriority` exposing the per-ifindex priority map as infrastructure. No CRD consumes it.
+- introduce a new `TrafficShaper` CRD (or extend `QoSProfile` with a `shaping` block) that drives the TC loader for VLAN-scoped or uplink egress shaping
+- idempotent, statusful reconciliation using the Ticket 40 `pkg/controllers/status.Writer[T]` helper
+- compose with Ticket 45's Cilium Bandwidth Manager: pod egress caps come from QoSProfile, uplink/VLAN shaping comes from TrafficShaper
+
+Primary areas:
+- `pkg/apis/network/v1alpha1/trafficshaper_types.go` (new)
+- `pkg/controllers/trafficshaper_controller.go` (new)
+- `pkg/security/qos/traffic_shaper.go` (new; consumes `TCLoader`)
+- `manifests/base/trafficshaper/` (new)
+- `manifests/examples/qos/trafficshaper-example.yaml`
+- `docs/design/qos.md` (extend)
+
+Acceptance:
+- one `TrafficShaper` CR produces a real `AttachIngress`/`AttachEgress` + priority-map population on a target interface
+- status reflects Applied/Degraded/Invalid/Removed
+- tests cover add/update/delete transitions with a fake TCLoader
+- `Status.md` QoS row expands to describe VLAN-scoped shaping beyond per-pod egress
+
+### Ticket 53: MISP Threat-Intelligence Feed (Second Feed Type)
+Status:
+- open
+
+Scope:
+- Sprint 30 Ticket 44 landed URLhaus CSV ingestion. Extend `pkg/security/threatintel/` with a MISP feed type.
+- authenticate against a MISP endpoint using an API key loaded from a Kubernetes Secret
+- parse MISP's JSON event schema (domain/IP/URL indicators), translate into the same `Indicator` shape the URLhaus feed produces
+- `ThreatFeed.Spec.Format` accepts `"misp-json"` alongside `"urlhaus-csv"`; same `Spec.URL` + new `Spec.AuthSecretRef`
+- harness step that serves a canned MISP JSON response from a test pod
+
+Primary areas:
+- `pkg/security/threatintel/misp.go` (new)
+- `pkg/security/threatintel/misp_test.go`
+- `pkg/apis/security/v1alpha1/threatfeed_types.go` (extend spec with `AuthSecretRef`)
+- `manifests/examples/security/threatfeed-misp.yaml`
+- `docs/design/threat-intelligence-system.md`
+
+Acceptance:
+- one `ThreatFeed` with `format: misp-json` round-trips fetch + translate + apply against a canned server
+- API key loaded from Secret; missing Secret produces a clear `Invalid` condition
+- `Status.md` threat-intel row updates to "URLhaus CSV + MISP JSON"
+
+### Ticket 54: Performance Baseline Coverage Expansion
+Status:
+- open
+
+Scope:
+- Ticket 43 baselined NAT policy apply only. Extend `tools/bench/` with three additional hot paths:
+  - DPI event → Cilium policy creation (`pkg/security/dpi/policy_pipeline.go`)
+  - FilterPolicy translate (`pkg/security/policy/translator.go`)
+  - Threat-intel indicator → CiliumPolicy (`pkg/security/threatintel/translator.go`)
+- each gets its own `*_bench_test.go` with ops/s + alloc counters
+- update `docs/performance/baseline-2026-MM.md` with the new baselines
+- keep the CI regression gate non-blocking per Ticket 43 envelope
+
+Primary areas:
+- `tools/bench/`
+- `docs/performance/`
+- `scripts/ci/run-bench.sh` (extend to run all four harnesses)
+
+Acceptance:
+- four benchmarks run repeatably in CI
+- baseline file covers all four paths with real numbers, machine specs, commit SHA
+- `Status.md` §Performance row updates with the expanded coverage
+
+### P2
+
+### Ticket 55: Post-Sprint-31 Truth-Up
+Status:
+- open
+
+Scope:
+- same pattern as Tickets 37 and 46
+- reconcile every status claim in `Status.md`, `docs/project-tracker.md`, `docs/implementation-plan.md`, `docs/observability-architecture.md`, `docs/design/implementation_caveats.md` against Sprint 31 landed artifacts
+- update production-readiness % and effort-to-production
+- open a Sprint 32 placeholder
+
+Primary areas:
+- `Status.md`
+- `docs/project-tracker.md`
+- `docs/implementation-plan.md`
+- `docs/observability-architecture.md`
+- `docs/design/implementation_caveats.md`
+- `docs/design/implementation_backlog.md`
+
+Acceptance:
+- every claim traceable to a landed artifact
+- Sprint 32 placeholder opens with candidate scope
+
+## Suggested Parallel Ownership (Sprint 31)
+
+Engineer A:
+- ticket 47 first (HA / leader election — foundational; touches every controller main). Large, no direct dependents.
+
+Engineer B:
+- ticket 49 first (internal TLS / secrets baseline — touches every controller Deployment and cert-manager surface). Run sequentially after 47 merges to avoid controller-main merge conflicts.
+
+Engineer C:
+- ticket 48 (write-path REST API) first. Self-contained extension of Ticket 41.
+
+Engineer D:
+- tickets 50 first (nftables cleanup; quick), then 51 (sockops + cgroup eBPF; extends Ticket 38/39 pattern).
+
+Engineer E:
+- tickets 52 (VLAN-scoped TC shaper) and 53 (MISP feed) in parallel; both are additive new surfaces.
+
+Shared stabilization:
+- ticket 54 runs alongside the above once the bench harness in Ticket 43 is warm.
+- ticket 55 lands last, after 47-54 are merged.
 
 ## Architect Review Questions
 
