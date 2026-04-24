@@ -85,12 +85,46 @@ struct __sk_buff {
 #define TC_ACT_PIPE     3
 
 /* Map-type IDs (subset). */
-#define BPF_MAP_TYPE_HASH     1
-#define BPF_MAP_TYPE_ARRAY    2
-#define BPF_MAP_TYPE_LPM_TRIE 11
+#define BPF_MAP_TYPE_HASH          1
+#define BPF_MAP_TYPE_ARRAY         2
+#define BPF_MAP_TYPE_PERCPU_ARRAY  6
+#define BPF_MAP_TYPE_LPM_TRIE     11
 
 /* Map flags. */
 #define BPF_F_NO_PREALLOC (1U << 0)
+
+/* Minimal subset of `struct bpf_sock_ops` — see include/uapi/linux/bpf.h.
+ * The sockops callback only reads `op` for Sprint 31 Ticket 51, so we
+ * stop at that field. The upstream struct continues with family,
+ * remote_ip4, local_ip4, and many more fields; extend here if a future
+ * sockops program needs them.
+ */
+struct bpf_sock_ops {
+    __u32 op;
+    union {
+        __u32 args[4];
+        __u32 reply;
+        __u32 replylong[4];
+    };
+    __u32 family;
+    __u32 remote_ip4;
+    __u32 local_ip4;
+    __u32 remote_ip6[4];
+    __u32 local_ip6[4];
+    __u32 remote_port;
+    __u32 local_port;
+};
+
+/* bpf_sock_ops op codes (subset). Mirrors `enum` values in
+ * include/uapi/linux/bpf.h. We only need the active-established callback
+ * for the v0 counter; add more here as new consumers arrive.
+ */
+#define BPF_SOCK_OPS_VOID                     0
+#define BPF_SOCK_OPS_TIMEOUT_INIT             1
+#define BPF_SOCK_OPS_RWND_INIT                2
+#define BPF_SOCK_OPS_TCP_CONNECT_CB           3
+#define BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB    4
+#define BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB   5
 
 /* Ethernet header — matches linux/if_ether.h. */
 #define ETH_P_IP 0x0800

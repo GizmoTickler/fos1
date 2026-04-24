@@ -10,6 +10,10 @@ Currently embedded:
 - `xdp_ddos_drop.o` — XDP denylist drop (Sprint 30 Ticket 38).
 - `tc_qos_shape.o` — TC classifier that marks `skb->priority` per
   interface (Sprint 30 Ticket 39).
+- `sockops_redirect.o` — cgroup sockops program that counts active
+  established TCP callbacks (Sprint 31 Ticket 51).
+- `cgroup_egress_counter.o` — cgroup_skb/egress program that counts
+  outbound bytes + packets per cgroup attachment (Sprint 31 Ticket 51).
 
 ## Regenerating
 

@@ -103,14 +103,28 @@ type LoadedProgram struct {
 	// through InnerProg.Close, to avoid a double-close. Nil for legacy
 	// Code-based loads and for XDP programs.
 	tcLoader *TCLoader
+
+	// sockOpsLoader is set when the program was loaded via the owned
+	// sockops loader path (Type == ProgramTypeSockOps with empty
+	// Code). Same ownership contract as xdp/tcLoader. Nil for legacy
+	// Code-based loads and for non-sockops programs. Sprint 31
+	// ticket 51.
+	sockOpsLoader *SockOpsLoader
+
+	// cgroupLoader is set when the program was loaded via the owned
+	// cgroup loader path (Type == ProgramTypeCGroup with empty Code).
+	// Same ownership contract as xdp/tcLoader. Nil for legacy
+	// Code-based loads and for non-cgroup programs. Sprint 31
+	// ticket 51.
+	cgroupLoader *CGroupLoader
 }
 
 // ProgramManager handles the lifecycle of eBPF programs.
 type ProgramManager struct {
-	programs     map[string]*LoadedProgram
-	programsMu   sync.RWMutex
-	mapManager   *MapManager
-	pinPath      string
+	programs   map[string]*LoadedProgram
+	programsMu sync.RWMutex
+	mapManager *MapManager
+	pinPath    string
 }
 
 // NewProgramManager creates a new ProgramManager.
@@ -153,12 +167,20 @@ const (
 //     ingress vs. egress split selects which of the two SEC()s in the
 //     object gets bound to InnerProg — the other stays live inside the
 //     loader's *ebpf.Collection until Close. Sprint 30 ticket 39.
-//   - `Type == "xdp" | "tc-ingress" | "tc-egress"` with non-empty Code
-//     loads the caller-supplied ELF bytes (legacy compile-and-pass
-//     path, used by older callers that hand-compile programs into
-//     [Program.Code]).
-//   - Sockops / cgroup program types still return
-//     [ErrEBPFProgramTypeUnsupported]; those loaders are future work.
+//   - `Type == "sockops"` with empty Code loads the owned
+//     sockops_redirect object (see `bpf/sockops_redirect.o`). Sprint 31
+//     ticket 51. The program must be attached to a cgroup v2 path;
+//     [AttachProgram] with hook "sockops" uses `/sys/fs/cgroup` by
+//     default — per-scope cgroup paths need a controller that talks to
+//     the loader directly.
+//   - `Type == "cgroup"` with empty Code loads the owned
+//     cgroup_egress_counter object (see `bpf/cgroup_egress_counter.o`).
+//     Sprint 31 ticket 51.
+//   - `Type == "xdp" | "tc-ingress" | "tc-egress" | "sockops" |
+//     "cgroup"` with non-empty Code loads the caller-supplied ELF
+//     bytes (legacy compile-and-pass path, used by older callers that
+//     hand-compile programs into [Program.Code]).
+//   - Any other program type returns [ErrEBPFProgramTypeUnsupported].
 func (p *ProgramManager) LoadProgram(program Program) error {
 	p.programsMu.Lock()
 	defer p.programsMu.Unlock()
@@ -169,11 +191,9 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 	}
 
 	switch program.Type {
-	case ProgramTypeXDP, ProgramTypeTCIngress, ProgramTypeTCEgress:
+	case ProgramTypeXDP, ProgramTypeTCIngress, ProgramTypeTCEgress,
+		ProgramTypeSockOps, ProgramTypeCGroup:
 		// fall through to load path below.
-	case ProgramTypeSockOps, ProgramTypeCGroup:
-		return fmt.Errorf("%w: %q (XDP and TC are implemented by the owned loader; sockops / cgroup are future work)",
-			ErrEBPFProgramTypeUnsupported, program.Type)
 	default:
 		return fmt.Errorf("%w: %q", ErrEBPFProgramTypeUnsupported, program.Type)
 	}
@@ -181,6 +201,8 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 	var loadedProg *ebpf.Program
 	var ownedXDP *XDPLoader
 	var ownedTC *TCLoader
+	var ownedSockOps *SockOpsLoader
+	var ownedCGroup *CGroupLoader
 
 	if len(program.Code) > 0 {
 		// Legacy path: caller supplies raw ELF bytes. Used by the
@@ -241,20 +263,44 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 				loadedProg = loader.EgressProgram()
 			}
 			ownedTC = loader
+		case ProgramTypeSockOps:
+			objectBytes, err := SockOpsRedirectObject()
+			if err != nil {
+				return fmt.Errorf("load owned sockops object: %w", err)
+			}
+			loader, err := NewSockOpsLoader(objectBytes)
+			if err != nil {
+				return fmt.Errorf("instantiate SockOpsLoader: %w", err)
+			}
+			loadedProg = loader.Program()
+			ownedSockOps = loader
+		case ProgramTypeCGroup:
+			objectBytes, err := CGroupEgressCounterObject()
+			if err != nil {
+				return fmt.Errorf("load owned cgroup object: %w", err)
+			}
+			loader, err := NewCGroupLoader(objectBytes)
+			if err != nil {
+				return fmt.Errorf("instantiate CGroupLoader: %w", err)
+			}
+			loadedProg = loader.EgressProgram()
+			ownedCGroup = loader
 		}
 	}
 
 	// Create a loaded program object
 	loaded := &LoadedProgram{
-		Name:      program.Name,
-		Type:      program.Type,
-		Interface: program.Interface,
-		Priority:  program.Priority,
-		InnerProg: loadedProg,
-		Maps:      program.Maps,
-		Attached:  false,
-		xdpLoader: ownedXDP,
-		tcLoader:  ownedTC,
+		Name:          program.Name,
+		Type:          program.Type,
+		Interface:     program.Interface,
+		Priority:      program.Priority,
+		InnerProg:     loadedProg,
+		Maps:          program.Maps,
+		Attached:      false,
+		xdpLoader:     ownedXDP,
+		tcLoader:      ownedTC,
+		sockOpsLoader: ownedSockOps,
+		cgroupLoader:  ownedCGroup,
 	}
 
 	// Store the program
@@ -292,10 +338,10 @@ func (p *ProgramManager) UnloadProgram(name string) error {
 	}
 
 	// Close the program. When the program was loaded via one of the
-	// owned loaders (XDP or TC) the *ebpf.Program handle is owned by
-	// the collection inside the loader, so we release via the loader
-	// to avoid a double-close. Legacy Code-based loads own InnerProg
-	// directly.
+	// owned loaders (XDP, TC, sockops, cgroup) the *ebpf.Program handle
+	// is owned by the collection inside the loader, so we release via
+	// the loader to avoid a double-close. Legacy Code-based loads own
+	// InnerProg directly.
 	switch {
 	case prog.xdpLoader != nil:
 		if err := prog.xdpLoader.Close(); err != nil {
@@ -308,6 +354,18 @@ func (p *ProgramManager) UnloadProgram(name string) error {
 			return fmt.Errorf("failed to close owned TC loader: %w", err)
 		}
 		prog.tcLoader = nil
+		prog.InnerProg = nil
+	case prog.sockOpsLoader != nil:
+		if err := prog.sockOpsLoader.Close(); err != nil {
+			return fmt.Errorf("failed to close owned sockops loader: %w", err)
+		}
+		prog.sockOpsLoader = nil
+		prog.InnerProg = nil
+	case prog.cgroupLoader != nil:
+		if err := prog.cgroupLoader.Close(); err != nil {
+			return fmt.Errorf("failed to close owned cgroup loader: %w", err)
+		}
+		prog.cgroupLoader = nil
 		prog.InnerProg = nil
 	case prog.InnerProg != nil:
 		if err := prog.InnerProg.Close(); err != nil {
@@ -388,24 +446,24 @@ func (p *ProgramManager) AttachProgram(programName string, hookName string) erro
 			return fmt.Errorf("failed to attach TC egress program: %w", err)
 		}
 	case HookTypeSockOps:
-		// Attach socket operations program
-		// Note: This is a simplified implementation
-		l, err = link.AttachCgroup(link.CgroupOptions{
-			Path:    "/sys/fs/cgroup",
-			Attach:  ebpf.AttachCGroupSockOps,
-			Program: prog.InnerProg,
-		})
+		// Prefer the owned loader's attach path (cgroup-path checks +
+		// error wrapping happen in one place). Legacy Code-based loads
+		// fall through to a direct link.AttachCgroup call so existing
+		// callers keep working. The helper lives in the Linux-only
+		// file so `link.AttachCgroup` is never referenced from the
+		// shared dispatch code; the non-Linux stub returns
+		// ErrEBPFUnsupportedPlatform.
+		l, err = attachSockOpsProgram(prog)
 		if err != nil {
 			return fmt.Errorf("failed to attach sockops program: %w", err)
 		}
 	case HookTypeCGroup:
-		// Attach cgroup program
-		// Note: This is a simplified implementation
-		l, err = link.AttachCgroup(link.CgroupOptions{
-			Path:    "/sys/fs/cgroup",
-			Attach:  ebpf.AttachCGroupDevice,
-			Program: prog.InnerProg,
-		})
+		// Same prefer-owned-loader pattern as sockops. The owned
+		// loader attaches to the INET egress hook by default (the v0
+		// cgroup_egress_counter program is cgroup_skb/egress); the
+		// legacy path preserves the pre-Sprint-31 behaviour of
+		// attaching to AttachCGroupDevice.
+		l, err = attachCGroupProgram(prog)
 		if err != nil {
 			return fmt.Errorf("failed to attach cgroup program: %w", err)
 		}

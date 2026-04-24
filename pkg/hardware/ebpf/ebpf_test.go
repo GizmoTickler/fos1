@@ -120,23 +120,45 @@ func TestProgramManager_LoadXDPWithoutCodeUsesOwnedLoader(t *testing.T) {
 }
 
 // TestProgramManager_LoadRejectsUnsupportedTypes asserts that the
-// program-manager dispatch still returns ErrEBPFProgramTypeUnsupported
-// for program types without an owned loader. Sprint 30 / Ticket 39
-// added TC ingress/egress support, so this test covers the remaining
-// unsupported shapes (sockops, cgroup, and anything unrecognised).
+// program-manager dispatch returns ErrEBPFProgramTypeUnsupported for
+// program types without an owned loader. Sprint 30 tickets 38/39 added
+// XDP + TC; Sprint 31 ticket 51 added sockops + cgroup. What remains
+// unsupported here is anything else (sk_msg, sk_lookup, etc.) — we
+// cover it via the catch-all "unknown-type" case.
 func TestProgramManager_LoadRejectsUnsupportedTypes(t *testing.T) {
 	mm := NewMapManager()
 	pm := NewProgramManager(mm, "")
 
 	for _, typ := range []string{
-		ProgramTypeSockOps,
-		ProgramTypeCGroup,
 		"unknown-type",
+		"sk_msg",
+		"sk_lookup",
 	} {
 		err := pm.LoadProgram(Program{Name: "prog-" + typ, Type: typ})
 		assert.Error(t, err, "expected %q to be rejected", typ)
 		assert.ErrorIs(t, err, ErrEBPFProgramTypeUnsupported,
 			"type %q must return ErrEBPFProgramTypeUnsupported", typ)
+	}
+}
+
+// TestProgramManager_LoadSockOpsAndCGroupUseOwnedLoaders mirrors the
+// XDP/TC-side coverage: a LoadProgram call with a sockops or cgroup
+// type and no caller-supplied Code must flow through the owned
+// loader. On hosts without the embedded BPF object or without BPF
+// privileges the call fails, but the error must NOT be
+// ErrEBPFProgramTypeUnsupported — that would signal we regressed the
+// dispatch and stopped wiring the new loaders through. Sprint 31
+// ticket 51.
+func TestProgramManager_LoadSockOpsAndCGroupUseOwnedLoaders(t *testing.T) {
+	mm := NewMapManager()
+	pm := NewProgramManager(mm, "")
+
+	for _, typ := range []string{ProgramTypeSockOps, ProgramTypeCGroup} {
+		err := pm.LoadProgram(Program{Name: "owned-" + typ, Type: typ})
+		assert.Error(t, err, "expected %q to fail without a BPF-capable environment", typ)
+		assert.NotErrorIs(t, err, ErrEBPFProgramTypeUnsupported,
+			"type %q must route through the owned loader, not the unsupported-type bail-out", typ)
+		assert.NotContains(t, err.Error(), "no program code provided")
 	}
 }
 

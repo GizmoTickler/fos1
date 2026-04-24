@@ -514,13 +514,18 @@ int xdp_main(struct xdp_md *ctx) {
 char _license[] SEC("license") = "GPL";
 ```
 
-## Compile and Load Pipeline (Sprint 30 Tickets 38 / 39)
+## Compile and Load Pipeline (Sprint 30 Tickets 38 / 39, Sprint 31 Ticket 51)
 
-The owned compile/load path lands two programs end to end:
+The owned compile/load path lands four programs end to end:
 
-- `xdp_ddos_drop` — XDP denylist drop (Ticket 38).
+- `xdp_ddos_drop` — XDP denylist drop (Sprint 30 Ticket 38).
 - `tc_qos_shape` — TC classifier that marks `skb->priority` per
-  interface for classful shaping (Ticket 39).
+  interface for classful shaping (Sprint 30 Ticket 39).
+- `sockops_redirect` — cgroup sockops program that counts active
+  established TCP callbacks (Sprint 31 Ticket 51).
+- `cgroup_egress_counter` — cgroup_skb/egress program that counts
+  outbound bytes + packets per cgroup attachment (Sprint 31
+  Ticket 51).
 
 This section describes how the sources, objects, embeds, and loaders
 fit together, and labels the program types that are explicitly out of
@@ -536,17 +541,29 @@ scope.
   ifindex up in a `BPF_MAP_TYPE_HASH` map (`qos_iface_priority`) and,
   on a hit, stamp the configured priority onto `skb->priority`. Never
   drops.
+- `bpf/sockops_redirect.c` — owned sockops source (Ticket 51). One
+  `SEC("sockops")` program that increments a per-CPU counter when the
+  kernel delivers `BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB`. Always returns
+  0 — informational in v0, never vetoes state transitions.
+- `bpf/cgroup_egress_counter.c` — owned cgroup_skb source
+  (Ticket 51). One `SEC("cgroup_skb/egress")` program that adds
+  `skb->len` to a per-CPU bytes counter (key 0) and increments a
+  packet counter (key 1). Always returns 1 (allow).
 - `bpf/headers/bpf_helpers.h` — pinned minimal subset of libbpf's
   `bpf_helpers.h`. Pinning (rather than vendoring all of libbpf) keeps
   the repository reproducible and avoids pulling a submodule.
 - `bpf/headers/vmlinux_minimal.h` — pinned UAPI subset. Ticket 39
   extended this with a minimal `struct __sk_buff` (up to and including
   `priority`, `ifindex`, `data`, `data_end`) and the `TC_ACT_*` return
-  codes used by classifier programs.
+  codes used by classifier programs. Ticket 51 added
+  `BPF_MAP_TYPE_PERCPU_ARRAY`, a minimal `struct bpf_sock_ops` (just
+  `op` + the union fields), and the `BPF_SOCK_OPS_*` callback op codes
+  used by the sockops program.
 - `bpf/out/` — build output directory, `.gitignore`d. Produced by
   `make bpf-objects`.
-- `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o` and `tc_qos_shape.o` — the
-  compiled ELF objects that Go embeds into the binary via `//go:embed`.
+- `pkg/hardware/ebpf/bpf/{xdp_ddos_drop,tc_qos_shape,sockops_redirect,cgroup_egress_counter}.o`
+  — the compiled ELF objects that Go embeds into the binary via
+  `//go:embed`.
 
 ### Build target
 
@@ -574,6 +591,8 @@ embed contents.
 ```
 //go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/xdp_ddos_drop.o pkg/hardware/ebpf/bpf/xdp_ddos_drop.o"
 //go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/tc_qos_shape.o pkg/hardware/ebpf/bpf/tc_qos_shape.o"
+//go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/sockops_redirect.o pkg/hardware/ebpf/bpf/sockops_redirect.o"
+//go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/cgroup_egress_counter.o pkg/hardware/ebpf/bpf/cgroup_egress_counter.o"
 ```
 
 ### Loader seam
@@ -631,6 +650,75 @@ The non-Linux build in `tc_loader_stub.go` returns
 `ErrEBPFUnsupportedPlatform` from every method; darwin `go build`
 still succeeds.
 
+### SockOps loader seam (Ticket 51)
+
+`pkg/hardware/ebpf/sockops_loader_linux.go` mirrors the XDP / TC
+seams:
+
+- `SockOpsRedirectObject() ([]byte, error)` returns the embedded
+  sockops ELF, or `ErrEBPFObjectMissing` when `make bpf-objects` has
+  not been run.
+- `NewSockOpsLoader(objectBytes) (*SockOpsLoader, error)` parses the
+  ELF, bumps `RLIMIT_MEMLOCK`, validates capabilities, and asserts
+  that `sockops_redirect` plus the `sockops_established_count` map
+  are present in the collection. The program's type is verified to
+  be `ebpf.SockOps` — a future source edit that moved the program to
+  a different section fails loudly here rather than silently loading
+  the wrong type.
+- `SockOpsLoader.CounterMap() *ebpf.Map` exposes the per-CPU counter
+  so user-space consumers can read across all CPUs.
+- `SockOpsLoader.AttachToCGroup(path) / DetachFromCGroup(link)` attach
+  and release the program against a cgroup v2 path via
+  `link.AttachCgroup` with `ebpf.AttachCGroupSockOps`. Missing paths
+  surface as `ErrCGroupPathNotFound` so operators see "fix your
+  cgroup mount" rather than a generic open-file error.
+
+**Kernel requirements:** sockops cgroup attach has been in the kernel
+since v4.13; the modern `BPF_LINK_CREATE`-backed `link.AttachCgroup`
+used here is available on v5.7+. The integration test skips with
+`t.Skip` on `EINVAL` / `ENOTSUP` from restricted environments.
+
+**cgroup v2 mount requirement:** sockops attach **requires a unified
+cgroup v2 hierarchy**. On hybrid v1/v2 systems the unified mount is
+typically at `/sys/fs/cgroup/unified`; on pure-v2 modern distros it is
+at `/sys/fs/cgroup`. The integration test probes both paths via
+`unix.Statfs` against `CGROUP2_SUPER_MAGIC` (0x63677270) and skips
+cleanly when neither is available.
+
+The non-Linux build in `sockops_loader_stub.go` returns
+`ErrEBPFUnsupportedPlatform` from every method.
+
+### CGroup loader seam (Ticket 51)
+
+`pkg/hardware/ebpf/cgroup_loader_linux.go` mirrors the sockops seam:
+
+- `CGroupEgressCounterObject() ([]byte, error)` returns the embedded
+  cgroup_skb ELF, or `ErrEBPFObjectMissing` when `make bpf-objects`
+  has not been run.
+- `NewCGroupLoader(objectBytes) (*CGroupLoader, error)` parses the
+  ELF, bumps `RLIMIT_MEMLOCK`, validates capabilities, and asserts
+  that `cgroup_egress_counter` plus the `cgroup_egress_stats` map
+  are present. The program's type is verified to be
+  `ebpf.CGroupSKB`.
+- `CGroupLoader.StatsMap() *ebpf.Map` exposes the per-CPU stats map.
+  Key 0 holds cumulative bytes; key 1 holds cumulative packet count.
+  Readers sum across all CPUs.
+- `CGroupLoader.AttachEgress(path) / AttachIngress(path) /
+  Detach(link)` attach and release the program via
+  `link.AttachCgroup` with `ebpf.AttachCGroupInetEgress` or
+  `ebpf.AttachCGroupInetIngress`. The v0 program is
+  `cgroup_skb/egress` so `AttachIngress` will load successfully but
+  never increment counters — it is exposed for API symmetry with the
+  TC loader and to make the follow-up work (adding an ingress-side
+  program) purely source-level.
+
+**cgroup v2 mount requirement:** same as sockops — a unified cgroup
+v2 hierarchy is required; the integration test probes for it and
+skips when absent.
+
+The non-Linux build in `cgroup_loader_stub.go` returns
+`ErrEBPFUnsupportedPlatform` from every method.
+
 ### Program-manager dispatch
 
 `pkg/hardware/ebpf/program_manager.go`'s `LoadProgram` dispatches on
@@ -642,16 +730,36 @@ still succeeds.
   load the owned embedded TC object via `TCLoader`; `InnerProg` is
   bound to the ingress or egress section as requested, the other
   section stays live inside the collection until `Close`.
-- Any of the three above with non-empty Code → legacy path (caller-
-  supplied ELF bytes, used by `compiler.go` and hand-compiled tests).
-- `ProgramTypeSockOps`, `ProgramTypeCGroup`, or any unknown string →
-  return `ErrEBPFProgramTypeUnsupported`.
+- `ProgramTypeSockOps` with empty Code → load the owned embedded
+  sockops object via `SockOpsLoader`.
+- `ProgramTypeCGroup` with empty Code → load the owned embedded
+  cgroup_skb object via `CGroupLoader`.
+- Any of the five above with non-empty Code → legacy path
+  (caller-supplied ELF bytes, used by `compiler.go` and hand-compiled
+  tests).
+- Any other string (sk_msg, sk_lookup, lirc, etc.) → return
+  `ErrEBPFProgramTypeUnsupported`.
 
-`AttachProgram` routes TC hook types through the shared
-`attachTCProgram` helper, which prefers the owned loader's attach
-path (with clsact bootstrap and map wiring in one place) and falls
-back to a raw `link.AttachTCX` call (still with best-effort clsact
-bootstrap) for legacy Code-based loads.
+`AttachProgram` routes each hook type through a per-hook helper:
+
+- `HookTypeXDP` still uses `link.AttachXDP` inline.
+- `HookTypeTCIngress` / `HookTypeTCEgress` route through
+  `attachTCProgram`, which prefers the owned TC loader's attach path
+  (with clsact bootstrap and map wiring in one place) and falls back
+  to a raw `link.AttachTCX` call (still with best-effort clsact
+  bootstrap) for legacy Code-based loads.
+- `HookTypeSockOps` routes through `attachSockOpsProgram`, which
+  prefers `SockOpsLoader.AttachToCGroup` (cgroup-path validation
+  included) and falls back to a raw `link.AttachCgroup` call with
+  `AttachCGroupSockOps` for legacy Code-based loads. The default
+  cgroup path is `/sys/fs/cgroup`.
+- `HookTypeCGroup` routes through `attachCGroupProgram`, which
+  prefers `CGroupLoader.AttachEgress` for owned loads. For legacy
+  Code-based loads it preserves the pre-Sprint-31 behaviour of
+  attaching to `AttachCGroupDevice` — changing the attach type for
+  legacy callers would break anyone who set `InnerProg` to a
+  device-type program. Controllers that want a different cgroup
+  attach point should call the loader directly.
 
 ### Composition with the Cilium Bandwidth Manager path (Ticket 45)
 
@@ -690,9 +798,38 @@ for TC:
 4. A separate `TestEnsureClsactQdisc_Idempotent` asserts the clsact
    bootstrap tolerates `EEXIST`.
 
+### Integration tests (Ticket 51)
+
+`pkg/hardware/ebpf/sockops_loader_linux_test.go` covers the sockops
+path:
+
+1. Skips on missing embedded object, missing caps, or missing cgroup
+   v2 mount (detected via `unix.Statfs` against `CGROUP2_SUPER_MAGIC`).
+2. Loads the program, attaches it to the probed cgroup v2 root,
+   asserts a non-nil link handle, and detaches.
+3. A separate `TestSockOpsLoader_AttachToCGroup_PathNotFound` asserts
+   the loader returns `ErrCGroupPathNotFound` for a missing path
+   without touching the kernel.
+
+`pkg/hardware/ebpf/cgroup_loader_linux_test.go` follows the same
+pattern for cgroup_skb/egress.
+
 ### Non-goals for v1
 
-- sockops / cgroup loaders — future tickets.
+- sk_msg / sk_lookup / lirc / other program types — Sprint 32+.
+  `ProgramTypeSockOps` and `ProgramTypeCGroup` land in Sprint 31
+  Ticket 51; everything else still returns
+  `ErrEBPFProgramTypeUnsupported`.
+- Actual sockops perf-redirect behaviour — v0 only counts events
+  (`BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB`). A sockhash-backed
+  socket-to-socket redirect is explicitly out of scope and is a
+  Sprint 32+ follow-up.
+- Per-cgroup / per-workload scoping — the v0 `AttachProgram` path
+  attaches to `/sys/fs/cgroup` (the unified v2 root). Controllers
+  that need a sub-path should call the loader directly.
+- Cgroup egress filtering with drop — `cgroup_egress_counter` is a
+  pure accounting primitive that always returns 1 (allow); a
+  filtering companion is a source-level follow-up.
 - Classful HTB shaping attached automatically by the controller — the
   TC loader exposes the priority-marking primitive; a future ticket
   wires it to a VLAN shaper CR alongside the existing tc-binary-backed
