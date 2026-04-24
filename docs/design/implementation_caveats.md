@@ -101,6 +101,16 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 ### Caveats
 - `providerConstructors` map has no concurrent-write guard; safe during init, but `RegisterProviderConstructor` is exported.
 
+## Sprint 31 Ticket 50 — Residual nftables NAT Imports Removed
+
+### Status
+- `pkg/network/nat/kernel.go` deleted (dead `KernelNATManager`, no active callers).
+- `pkg/deprecated/nat/` deleted (dead `NAT66Manager`, no active callers).
+- Active NAT path remains `pkg/network/nat/manager.go` (Cilium-first, ADR-0001).
+
+### Residual
+- `pkg/security/firewall/kernel.go` still imports `github.com/google/nftables` and remains the only production implementation of the `FirewallManager` interface consumed by `pkg/security/policy/{translator,zone_manager}.go`. Ticket 46 incorrectly reported it was gone; it is live interface code, not residual dead code, so removal is out of scope for Ticket 50 and requires a separate Cilium-backed `FirewallManager` implementation before it can be deleted. Until then, `github.com/google/nftables` remains in `go.mod`.
+
 ## Notes for Review
 
 - Anything listed here should be treated as a deliberate tradeoff, not a hidden bug.

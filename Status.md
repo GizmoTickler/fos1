@@ -92,7 +92,7 @@ Verified on 2026-04-18:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **nftables Firewall** | Stub | Interface definitions only, no rule generation |
+| **nftables Firewall** | Non-goal per ADR-0001 | NAT-side nftables code (`pkg/network/nat/kernel.go`, `pkg/deprecated/nat/`) removed in Sprint 31 Ticket 50. Firewall-side `pkg/security/firewall/kernel.go` remains as the only `FirewallManager` backend pending a Cilium-backed replacement. |
 | **Policy Enforcement** | Stub | Type definitions without actual enforcement |
 | **SAML/RADIUS/Certificate Auth** | Stubs only |
 | **Threat Intelligence** | Framework defined but no data sources |
