@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
@@ -210,6 +212,150 @@ func TestController_DeletedFeedShutsDownManager(t *testing.T) {
 
 	if len(cc.Deleted) != 1 {
 		t.Errorf("expected 1 Cilium delete on feed removal, got %d", len(cc.Deleted))
+	}
+}
+
+func TestController_MISPFormatRequiresAuthSecretRef(t *testing.T) {
+	store := NewInMemoryFeedStore()
+	cc := &recordingCilium{}
+	ctrl := NewController(store, cc)
+	ctrl.Secrets = NewInMemorySecretReader()
+
+	store.Put(securityv1alpha1.ThreatFeed{
+		ObjectMeta: metav1.ObjectMeta{Name: "misp-missing-ref"},
+		Spec: securityv1alpha1.ThreatFeedSpec{
+			URL:             "https://misp.example.com",
+			Format:          securityv1alpha1.ThreatFeedFormatMISPJSON,
+			RefreshInterval: metav1.Duration{Duration: time.Minute},
+			MaxAge:          metav1.Duration{Duration: time.Hour},
+			Enabled:         true,
+		},
+	})
+
+	if err := ctrl.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	feed, _ := store.Get("misp-missing-ref")
+	if feed.Status.LastFetchError == "" {
+		t.Error("expected error indicating authSecretRef required")
+	}
+	if !strings.Contains(feed.Status.LastFetchError, "authSecretRef") {
+		t.Errorf("expected authSecretRef error, got %q", feed.Status.LastFetchError)
+	}
+}
+
+func TestController_MISPFormatMissingSecret(t *testing.T) {
+	store := NewInMemoryFeedStore()
+	cc := &recordingCilium{}
+	ctrl := NewController(store, cc)
+	ctrl.Secrets = NewInMemorySecretReader()
+
+	store.Put(securityv1alpha1.ThreatFeed{
+		ObjectMeta: metav1.ObjectMeta{Name: "misp-missing-secret"},
+		Spec: securityv1alpha1.ThreatFeedSpec{
+			URL:             "https://misp.example.com",
+			Format:          securityv1alpha1.ThreatFeedFormatMISPJSON,
+			AuthSecretRef:   &corev1.SecretReference{Name: "misp-creds", Namespace: "security"},
+			RefreshInterval: metav1.Duration{Duration: time.Minute},
+			MaxAge:          metav1.Duration{Duration: time.Hour},
+			Enabled:         true,
+		},
+	})
+
+	if err := ctrl.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	feed, _ := store.Get("misp-missing-secret")
+	if feed.Status.LastFetchError == "" || !strings.Contains(feed.Status.LastFetchError, "not found") {
+		t.Errorf("expected not-found error, got %q", feed.Status.LastFetchError)
+	}
+}
+
+func TestController_MISPFormatMissingAPIKeyField(t *testing.T) {
+	store := NewInMemoryFeedStore()
+	cc := &recordingCilium{}
+	secrets := NewInMemorySecretReader()
+	// Secret exists but lacks the apiKey data key.
+	secrets.Put("security", "misp-creds", map[string][]byte{"other": []byte("nope")})
+
+	ctrl := NewController(store, cc)
+	ctrl.Secrets = secrets
+
+	store.Put(securityv1alpha1.ThreatFeed{
+		ObjectMeta: metav1.ObjectMeta{Name: "misp-bad-secret"},
+		Spec: securityv1alpha1.ThreatFeedSpec{
+			URL:             "https://misp.example.com",
+			Format:          securityv1alpha1.ThreatFeedFormatMISPJSON,
+			AuthSecretRef:   &corev1.SecretReference{Name: "misp-creds", Namespace: "security"},
+			RefreshInterval: metav1.Duration{Duration: time.Minute},
+			MaxAge:          metav1.Duration{Duration: time.Hour},
+			Enabled:         true,
+		},
+	})
+
+	if err := ctrl.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	feed, _ := store.Get("misp-bad-secret")
+	if feed.Status.LastFetchError == "" || !strings.Contains(feed.Status.LastFetchError, securityv1alpha1.ThreatFeedAuthSecretAPIKey) {
+		t.Errorf("expected missing-apiKey error, got %q", feed.Status.LastFetchError)
+	}
+}
+
+// TestController_MISPEndToEnd drives the full MISP pipeline: ThreatFeed with
+// format=misp-json + AuthSecretRef → secret resolved → fetcher calls the
+// canned server (with the correct Authorization header) → Cilium policies
+// applied.
+func TestController_MISPEndToEnd(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"response":[{"Event":{"id":"1","info":"e2e","Attribute":[
+			{"type":"url","value":"http://misp-e2e.example/drop"},
+			{"type":"ip-dst","value":"203.0.113.77"}
+		]}}]}`))
+	}))
+	defer srv.Close()
+
+	store := NewInMemoryFeedStore()
+	cc := &recordingCilium{}
+	secrets := NewInMemorySecretReader()
+	secrets.Put("security", "misp-creds", map[string][]byte{
+		securityv1alpha1.ThreatFeedAuthSecretAPIKey: []byte("e2e-key"),
+	})
+
+	ctrl := NewController(store, cc)
+	ctrl.Secrets = secrets
+	ctrl.DefaultSecretNamespace = "security"
+
+	store.Put(securityv1alpha1.ThreatFeed{
+		ObjectMeta: metav1.ObjectMeta{Name: "misp-e2e"},
+		Spec: securityv1alpha1.ThreatFeedSpec{
+			URL:             srv.URL,
+			Format:          securityv1alpha1.ThreatFeedFormatMISPJSON,
+			AuthSecretRef:   &corev1.SecretReference{Name: "misp-creds"},
+			RefreshInterval: metav1.Duration{Duration: 50 * time.Millisecond},
+			MaxAge:          metav1.Duration{Duration: 10 * time.Minute},
+			Enabled:         true,
+		},
+	})
+
+	if err := ctrl.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if gotAuth != "e2e-key" {
+		t.Errorf("expected server to receive Authorization=e2e-key, got %q", gotAuth)
+	}
+	if got := len(cc.Applied); got != 2 {
+		t.Fatalf("expected 2 Cilium policies applied, got %d (names=%v)", got, cc.AppliedNames())
+	}
+	feed, _ := store.Get("misp-e2e")
+	if feed.Status.EntryCount != 2 {
+		t.Errorf("expected EntryCount=2, got %d", feed.Status.EntryCount)
+	}
+	if feed.Status.LastFetchError != "" {
+		t.Errorf("expected empty LastFetchError, got %q", feed.Status.LastFetchError)
 	}
 }
 

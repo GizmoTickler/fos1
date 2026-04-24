@@ -1,9 +1,10 @@
 //go:build harness
 
-// Package threatintel harness test — this is the Sprint-30 Ticket-44
-// CI harness. It boots a local HTTP server (the "test pod" equivalent of an
-// in-cluster nginx), stands up an in-memory ThreatFeed store, runs the
-// controller reconcile cycle, and asserts the end-to-end fetch -> translate
+// Package threatintel harness test — originally the Sprint-30 Ticket-44
+// URLhaus harness, extended in Sprint 31 Ticket 53 with a sibling MISP path.
+// Both boot a local HTTP server (the "test pod" equivalent of an in-cluster
+// nginx/MISP stub), stand up an in-memory ThreatFeed store, run the
+// controller reconcile cycle, and assert the end-to-end fetch -> translate
 // -> apply -> expire pipeline operates against the canned feed.
 //
 // Run with:
@@ -11,7 +12,8 @@
 //	go test -tags=harness ./pkg/security/threatintel/... -run Harness -v
 //
 // The test is behind a build tag so it never runs in the default verify
-// path; the scripts/harness-threatintel.sh wrapper is the canonical invoker.
+// path; the scripts/harness-threatintel*.sh wrappers are the canonical
+// invokers.
 package threatintel
 
 import (
@@ -24,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
@@ -130,4 +133,91 @@ func TestHarness_EndToEnd(t *testing.T) {
 	}
 
 	fmt.Printf("HARNESS OK: TTL expiry removed %d policies: %v\n", len(deleted), deleted)
+}
+
+const harnessMISPJSON = `{
+  "response": [
+    {
+      "Event": {
+        "id": "9001",
+        "info": "harness misp event",
+        "timestamp": "1713720000",
+        "Attribute": [
+          { "type": "url", "value": "http://harness-misp.example/drop.exe" },
+          { "type": "domain", "value": "harness-misp-c2.example" },
+          { "type": "ip-dst", "value": "203.0.113.200" }
+        ]
+      }
+    }
+  ]
+}`
+
+// TestHarness_MISPEndToEnd is the MISP analogue of TestHarness_EndToEnd. It
+// proves the full fetch → translate → apply pipeline against a canned
+// MISP-shaped JSON response served from an in-process httptest.Server,
+// including API-key auth loaded from an in-memory Secret reader.
+func TestHarness_MISPEndToEnd(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(harnessMISPJSON))
+	}))
+	defer srv.Close()
+
+	store := NewInMemoryFeedStore()
+	cc := &recordingCilium{}
+	secrets := NewInMemorySecretReader()
+	secrets.Put("security", "misp-harness-creds", map[string][]byte{
+		securityv1alpha1.ThreatFeedAuthSecretAPIKey: []byte("harness-api-key"),
+	})
+
+	ctrl := NewController(store, cc)
+	ctrl.TickInterval = 10 * time.Millisecond
+	ctrl.Secrets = secrets
+	ctrl.DefaultSecretNamespace = "security"
+
+	feed := securityv1alpha1.ThreatFeed{
+		ObjectMeta: metav1.ObjectMeta{Name: "misp-harness"},
+		Spec: securityv1alpha1.ThreatFeedSpec{
+			URL:             srv.URL,
+			Format:          securityv1alpha1.ThreatFeedFormatMISPJSON,
+			AuthSecretRef:   &corev1.SecretReference{Name: "misp-harness-creds"},
+			RefreshInterval: metav1.Duration{Duration: 50 * time.Millisecond},
+			MaxAge:          metav1.Duration{Duration: 5 * time.Minute},
+			Enabled:         true,
+		},
+	}
+	store.Put(feed)
+
+	if err := ctrl.Reconcile(context.Background()); err != nil {
+		t.Fatalf("harness/misp: reconcile: %v", err)
+	}
+
+	if gotAuth != "harness-api-key" {
+		t.Errorf("harness/misp: expected Authorization=harness-api-key, got %q", gotAuth)
+	}
+
+	applied := cc.AppliedNames()
+	if len(applied) != 3 {
+		t.Fatalf("harness/misp: expected 3 policies applied, got %d: %v", len(applied), applied)
+	}
+	for _, name := range applied {
+		if !strings.HasPrefix(name, "fos1-threatintel-misp-harness-") {
+			t.Errorf("harness/misp: policy %q missing expected prefix", name)
+		}
+	}
+
+	cur, _ := store.Get("misp-harness")
+	if cur.Status.EntryCount != 3 {
+		t.Errorf("harness/misp: expected EntryCount=3, got %d", cur.Status.EntryCount)
+	}
+	if cur.Status.ActiveIndicators != 3 {
+		t.Errorf("harness/misp: expected ActiveIndicators=3, got %d", cur.Status.ActiveIndicators)
+	}
+	if cur.Status.LastFetchError != "" {
+		t.Errorf("harness/misp: expected empty LastFetchError, got %q", cur.Status.LastFetchError)
+	}
+
+	fmt.Printf("HARNESS MISP OK: applied %d policies: %v\n", len(applied), applied)
 }

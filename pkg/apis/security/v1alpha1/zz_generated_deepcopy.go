@@ -334,8 +334,18 @@ func (in *ThreatFeed) DeepCopyInto(out *ThreatFeed) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
 	in.Status.DeepCopyInto(&out.Status)
+}
+
+// DeepCopyInto copies all properties into another ThreatFeedSpec. Required
+// once AuthSecretRef became a pointer (Sprint 31 / Ticket 53).
+func (in *ThreatFeedSpec) DeepCopyInto(out *ThreatFeedSpec) {
+	*out = *in
+	if in.AuthSecretRef != nil {
+		cp := *in.AuthSecretRef
+		out.AuthSecretRef = &cp
+	}
 }
 
 // DeepCopy creates a deep copy of ThreatFeedStatus.

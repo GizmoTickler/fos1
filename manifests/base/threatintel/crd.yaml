@@ -56,9 +56,28 @@ spec:
                   description: Feed source endpoint.
                 format:
                   type: string
-                  description: Feed format. v0 supports "urlhaus-csv" only.
+                  description: >-
+                    Feed format. v0 shipped "urlhaus-csv"; Sprint 31 Ticket 53
+                    adds "misp-json" behind an API-key Secret referenced via
+                    authSecretRef.
                   enum:
                     - urlhaus-csv
+                    - misp-json
+                authSecretRef:
+                  type: object
+                  description: >-
+                    Reference to a Kubernetes Secret providing credentials for
+                    authenticated feed formats. Required for format=misp-json;
+                    the controller reads the `apiKey` data key and injects it
+                    into the HTTP Authorization header. Ignored for
+                    format=urlhaus-csv.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required:
+                    - name
                 refreshInterval:
                   type: string
                   description: Go duration between successive fetches (e.g. "15m").

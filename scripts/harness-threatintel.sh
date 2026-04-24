@@ -20,7 +20,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "[harness] running threatintel end-to-end proof"
+echo "[harness] running threatintel URLhaus end-to-end proof"
 go test -tags=harness -count=1 -run TestHarness_EndToEnd -v ./pkg/security/threatintel/...
+
+echo "[harness] running threatintel MISP end-to-end proof (Sprint 31 Ticket 53)"
+go test -tags=harness -count=1 -run TestHarness_MISPEndToEnd -v ./pkg/security/threatintel/...
 
 echo "[harness] OK"

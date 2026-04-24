@@ -1,0 +1,26 @@
+# Example ThreatFeed CR — MISP JSON feed (Sprint 31 Ticket 53).
+#
+# Authenticates via a Kubernetes Secret whose `apiKey` data key carries the
+# MISP API token. The controller reads the Secret on each fetcher rebuild and
+# sends the value verbatim as the Authorization header on requests to
+# <url>/events/restSearch.
+#
+# The URL may be the MISP instance base (e.g. https://misp.example.com) or
+# already suffixed with /events/restSearch — both resolve the same way.
+#
+# The Secret referenced by authSecretRef must exist in the indicated
+# namespace before the feed is enabled. Missing or malformed Secrets are
+# surfaced as a non-Ready condition on the ThreatFeed status.
+apiVersion: security.fos1.io/v1alpha1
+kind: ThreatFeed
+metadata:
+  name: misp
+spec:
+  url: https://misp.example.com
+  format: misp-json
+  authSecretRef:
+    name: misp-api-key
+    namespace: security
+  refreshInterval: 15m
+  maxAge: 24h
+  enabled: true

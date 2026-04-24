@@ -1,18 +1,22 @@
 # Threat Intelligence System Design
 
-> **Implementation status (Sprint 30 / Ticket 44):** v0 is shipped. The
-> `ThreatFeed` CRD (cluster-scoped, `security.fos1.io/v1alpha1`) drives a
-> polling controller in `pkg/security/threatintel/` that fetches abuse.ch
-> URLhaus CSV, translates each URL indicator into a Cilium `toFQDNs` deny
-> policy (or `toCIDR` for IP literals), and expires the applied policy once
-> the indicator has not been seen in a successful fetch newer than
+> **Implementation status (Sprint 30 / Ticket 44 + Sprint 31 / Ticket 53):**
+> v1 is shipped. The `ThreatFeed` CRD (cluster-scoped,
+> `security.fos1.io/v1alpha1`) drives a polling controller in
+> `pkg/security/threatintel/` that fetches either the abuse.ch URLhaus CSV
+> (`format: urlhaus-csv`) or a MISP instance's `events/restSearch` JSON
+> (`format: misp-json`), translates each indicator into a Cilium `toFQDNs`
+> deny policy (or `toCIDR` for IP literals), and expires the applied policy
+> once the indicator has not been seen in a successful fetch newer than
 > `spec.maxAge`.
 >
-> **v0 scope:** URLhaus CSV ingestion only, polling-based, one feed per CR.
-> **Non-goals for v0:** MISP, STIX/TAXII, confidence scoring, feed
-> authentication, ETag/If-Modified-Since caching, and the rich indicator
-> database / reputation engine described below. Those remain design-stage
-> aspirations and will land in later sprints.
+> **v1 scope:** URLhaus CSV and MISP JSON ingestion, polling-based, one feed
+> per CR. MISP auth is API-key only (Secret referenced by
+> `spec.authSecretRef`, key under `apiKey`).
+> **Non-goals for v1:** STIX/TAXII, confidence scoring, MISP tag/confidence
+> filtering, ETag/If-Modified-Since caching, certificate-based MISP auth,
+> and the rich indicator database / reputation engine described below.
+> Those remain design-stage aspirations and will land in later sprints.
 
 ## Overview
 
@@ -92,11 +96,110 @@ pod that serves the same CSV from a ConfigMap.
 
 ### Explicit non-goals for v0
 
-- MISP integration
 - STIX/TAXII ingestion
 - Confidence scoring and reputation models
-- Feed authentication (Basic/Bearer/Secret-ref)
 - ETag / `If-Modified-Since` caching
+- The full Indicator / Reputation / Distribution framework described below
+
+MISP integration and API-key-backed feed authentication, previously listed
+as v0 non-goals, are addressed in v1 via Sprint 31 Ticket 53; see the
+"MISP JSON ingestion" section below.
+
+## v1: MISP JSON Ingestion (Sprint 31 / Ticket 53)
+
+### CRD extensions
+
+`ThreatFeedSpec` gains an optional `authSecretRef` pointer. It is mandatory
+when `format: misp-json` and ignored otherwise:
+
+```yaml
+apiVersion: security.fos1.io/v1alpha1
+kind: ThreatFeed
+metadata:
+  name: misp
+spec:
+  url: https://misp.example.com           # /events/restSearch is appended
+  format: misp-json
+  authSecretRef:
+    name: misp-api-key
+    namespace: security                   # defaults to Controller.DefaultSecretNamespace
+  refreshInterval: 15m
+  maxAge: 24h
+  enabled: true
+```
+
+The controller reads the referenced Secret's `apiKey` data key (see the
+`security.fos1.io/v1alpha1.ThreatFeedAuthSecretAPIKey` constant) and forwards
+it verbatim as the HTTP `Authorization` header when calling
+`/events/restSearch`. Other Secret keys are ignored in v1.
+
+### Parser and dispatch
+
+1. `controller.buildFetcher` dispatches on `spec.Format` —
+   `urlhaus-csv` → `URLhausFetcher`, `misp-json` → `MISPFetcher`. Unknown
+   formats record an `Invalid` condition; no fetcher is constructed.
+2. `MISPFetcher.Fetch` GETs `<url>/events/restSearch` with
+   `Authorization: <apiKey>`, decodes the MISP response envelope
+   (`response[].Event.Attribute[]`), and emits one `Indicator` per supported
+   attribute:
+   - `url`, `domain` → indicator fed through the shared translator's FQDN
+     path (lowercased host, port stripped).
+   - `ip-dst`, `ip-src` → indicator fed through the translator's CIDR path
+     (`/32` for IPv4, `/128` for IPv6).
+   - Everything else (`sha256`, `email-src`, TTPs, etc.) is silently skipped
+     in v1 — the translator cannot build a Cilium rule for them.
+3. Indicator deduplication happens twice: the fetcher collapses exact-value
+   duplicates across events up front, and the translator additionally
+   collapses URLs that hash to the same host.
+
+### Authentication and Secret handling
+
+- The Secret is looked up via a `SecretReader` interface. The production
+  implementation (`KubectlSecretReader`) shells out to `kubectl get secret
+  <name> -n <namespace> -o json` and base64-decodes the `data` payload,
+  matching the `KubectlFeedStore` pattern. Tests use an
+  `InMemorySecretReader`.
+- Missing Secret, missing `apiKey` data key, and empty `authSecretRef` all
+  produce an `Invalid` condition on the `ThreatFeed` status with an
+  explicit message. The API key is never logged, never echoed into error
+  strings, and never stored in the status.
+- The Secret is re-read on every fetcher rebuild — that is, on first
+  reconcile, on any `URL`/`Format`/`AuthSecretRef` change, and on controller
+  restart. A rotated Secret whose reference in the CR is unchanged does not
+  trigger an automatic reload in v1; operators who rotate the Secret must
+  either restart the threatintel controller or toggle a spec field to
+  force a rebuild.
+
+### Rate limiting
+
+MISP servers advertise a standard `Retry-After` header when they return
+HTTP 429. `MISPFetcher` honours this header once per fetch: on the first
+429 it waits the advertised duration (capped at 5 minutes to keep a
+misbehaving server from stalling reconciles indefinitely) and retries the
+request exactly once. A second 429 surfaces as an error, which the
+controller records as a `FetchFailed` condition; the controller will try
+again on the next scheduled interval.
+
+### CI harness coverage
+
+`scripts/harness-threatintel.sh` now runs both the URLhaus and MISP
+end-to-end tests (`TestHarness_EndToEnd` and `TestHarness_MISPEndToEnd`,
+build-tagged `harness`). The MISP harness boots an in-process
+`httptest.Server` that emits a canned MISP response, seeds an in-memory
+Secret reader with an `apiKey`, drives a full reconcile, and asserts the
+expected three Cilium policies are applied and that the canned server
+received the correct `Authorization` header.
+
+Example manifests at
+`manifests/examples/security/threatfeed-misp.yaml` and
+`manifests/examples/security/threatfeed-misp-auth-secret.yaml` show the
+in-cluster wiring.
+
+### Explicit non-goals for v1
+
+- STIX/TAXII ingestion (Sprint 32+)
+- MISP event tagging / confidence filtering (ingest everything)
+- Certificate-based MISP authentication (API key only)
 - The full Indicator / Reputation / Distribution framework described below
 
 ## Design Goals
