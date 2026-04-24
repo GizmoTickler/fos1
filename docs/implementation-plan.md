@@ -5,10 +5,10 @@ This document replaces the older time-boxed plan with a codebase-driven implemen
 
 ## Verification Snapshot
 
-Verified contract on 2026-04-19:
-- `make verify-mainline` is the canonical Go verification target
+Verified contract on 2026-04-23 (post-Sprint-30):
+- `make verify-mainline` is the canonical Go verification target (`go test ./...` 42/42 packages pass, `go build ./...` green)
 - `.github/workflows/ci.yml` enforces `make verify-mainline` on pushes to `main` and PRs targeting `main`
-- `.github/workflows/validate-manifests.yml` validates rendered manifests on manifest-affecting PRs and fails on real `kubeconform` errors
+- `.github/workflows/validate-manifests.yml` validates rendered manifests on manifest-affecting PRs and fails on real `kubeconform` errors; Sprint 30 Ticket 42 added `scripts/ci/prove-no-cluster-admin.sh` as a CI step that blocks any `ClusterRoleBinding` to `cluster-admin` without an explicit `fos1.io/rbac-exception` annotation
 
 Owned runtime observability proof on 2026-04-20:
 - `.github/workflows/test-bootstrap.yml` now proves the Prometheus pod-annotation scrape path for node-local `dpi-manager` and `ntp-controller`
@@ -100,15 +100,27 @@ Sprint 29 (runtime depth and post-baseline hardening) — completed:
 - Ticket 34: SAML/RADIUS/certificate auth stubs removed from manager factory, CRD enum, manifests, and docs; auth surface scoped to local/LDAP/OAuth (merges `92088b8`, `ac4f32e`)
 - Ticket 35: real NIC + capture capability reporting via Linux ethtool/tcpdump with explicit unsupported paths (`ErrNICStatisticsNotSupported`, `ErrTCPDumpNotAvailable`, `ErrNICUnsupportedPlatform`); eBPF-based capture labelled non-goal (merges `83211d4`, `497f286`)
 - Ticket 36: reconciliation-style coverage raised on thin packages — `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1% (merges `e5dcb3f`, `c31caf8`, `3714873`, `d2ec037`)
-- Ticket 37: post-Sprint-29 status truth-up (this ticket)
+- Ticket 37: post-Sprint-29 status truth-up (merge `fd131de`)
 
-See `docs/design/implementation_backlog.md` for the full Sprint 29 ticket definitions, the landed commits, and the Sprint 30 scope.
+Sprint 30 (critical-path production gaps) — completed:
+- Ticket 38: prototype eBPF XDP program compilation + attachment via `github.com/cilium/ebpf`; `bpf/xdp_ddos_drop.c` builds through `make bpf-objects`, compiled ELF committed at `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o` and embedded via `//go:embed`; Linux-only integration test skips without `CAP_BPF`/`CAP_NET_ADMIN`; non-XDP types return `ErrEBPFProgramTypeUnsupported` (feat `3a9f677`, merge `de851a6`)
+- Ticket 39: TC-attached QoS shaping program + clsact qdisc bootstrap; `bpf/tc_qos_shape.c` compiles via `make bpf-objects`, loads through `pkg/hardware/ebpf/tc_loader_linux.go`, attaches via `AttachTCX` (kernel ≥ 6.6), exposes per-ifindex priority map for user-space population before attach (feat `f9f3565`)
+- Ticket 40: shared CRD status writeback helper at `pkg/controllers/status/writer.go` lifts the NAT controller's `writeStatusToCRD` pattern; adopted by FilterPolicy (closes Sprint 29 Ticket 33 in-memory-only caveat), NAT, and MultiWAN controllers; round-trip unit tests verify retry-on-conflict (feat `47b8088`, merge `2a2851c`)
+- Ticket 41: read-only REST API v0 under `cmd/api-server/` and `pkg/api/`; exposes `/v1/filter-policies` list+get, `/healthz`, `/readyz`, `/openapi.json` behind `tls.RequireAndVerifyClientCert` with a ConfigMap-backed Subject-CN allowlist; base manifests at `manifests/base/api/`; `pkg/api.TestMTLSEndToEnd` proves 200/403/handshake-failure cases (feat `e3bc979`, merge `9c70daf`)
+- Ticket 42: RBAC minimum-privilege baseline — every ServiceAccount bound to a scoped ClusterRole, `scripts/ci/prove-no-cluster-admin.sh` blocks `cluster-admin` bindings without an explicit `fos1.io/rbac-exception` annotation; full verb/resource table at `docs/design/rbac-baseline.md` (feat `e13b91a`, merge `4af3403`; branch not pushed)
+- Ticket 43: NAT policy apply performance baseline — `tools/bench/nat_apply_bench_test.go` plus baseline report at `docs/performance/baseline-2026-04.md`; regressions flagged as warnings in CI output (non-blocking) (feat `2b844d7`, merge `4ce31e8`)
+- Ticket 44: URLhaus threat-intel v0 ingestion — `ThreatFeed` CRD, `cmd/threatintel-controller/`, `pkg/security/threatintel/` parses URLhaus CSV, translates into Cilium deny policies with last-seen TTL; `ThreatFeed.Status` reports last-fetch time, entry count, expiry state; MISP/STIX remain non-goals (feat `2c042a5`, merge `fb9dfb0`)
+- Ticket 45: QoS enforcement via Cilium Bandwidth Manager — `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation → BPF TBF rate limiter at pod admission; classful/uplink TC shaping lives on the Ticket 39 infrastructure for a future VLAN-shaper controller to consume (feat `3326f46`, merge `a04ce71`)
+- Ticket 46: post-Sprint-30 status truth-up (this ticket)
+
+See `docs/design/implementation_backlog.md` for full ticket definitions. The next phase is Sprint 31 (scope finalization out of scope for Ticket 46; a placeholder lives in `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening").
 
 Interpretation:
 - Tickets 1-20 are complete for the primary implementation track that converted the main routing/NAT/service/security backends away from earlier placeholder behavior.
 - Tickets 21-28 plus the ops follow-through closed out the post-ticket-20 convergence and ops sprint: Kubernetes DPI policy, security policy controller, route-sync/direct/K8s helper clients, event-correlation controller contract, hardware offload stats, observability docs, `make verify-mainline`, CI enforcement, and the owned Kind proof baseline.
 - Sprint 29 (tickets 29-37) moved the work from "baseline proven" to "baseline exercised" and closed out advertised-but-unshipped surfaces: event-correlator runtime end-to-end, accelerated Elasticsearch rollover proof, natural-traffic DPI proof, dashboard/alert query validation, `FilterPolicy` → Cilium translation, auth provider scope reduction (SAML/RADIUS/cert removed as non-goals), real NIC/capture reporting with explicit unsupported paths, coverage bumps on thin packages, and a post-sprint status truth-up.
-- The next phase is Sprint 30 (tickets 38-46) targeting the remaining critical-path production gaps: eBPF compilation and loading (XDP + TC), shared CRD status writeback helper, read-only REST management API, minimum-privilege RBAC, performance baseline harness, threat-intelligence ingestion v0, and QoS enforcement via Cilium Bandwidth Manager. See `docs/design/implementation_backlog.md` §"Sprint 30: Critical-Path Production Gaps" for ticket definitions.
+- Sprint 30 (tickets 38-46) closed the critical-path production gaps called out as Sprint 29 non-goals: XDP + TC eBPF compile/load on Linux, shared CRD status writeback helper, read-only REST management API with mTLS, minimum-privilege RBAC with CI enforcement, NAT performance baseline, URLhaus threat-intel v0 ingestion, per-pod egress QoS via Cilium Bandwidth Manager, and a post-sprint truth-up.
+- The next phase is Sprint 31 (placeholder scope in the backlog; detailed ticket definitions come in a separate planning session). Candidate focus areas are HA/clustering, write-path REST API, broader eBPF program types (sockops / cgroup), more threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets management, and ingress / VLAN-scoped TC shaping on top of the Ticket 39 loader.
 - Repository-wide completion is broader than that ticket set; there are still secondary packages and legacy controller paths that need convergence before the codebase can be described as uniformly production-ready.
 
 ## Epic 1: Datapath Unification
@@ -207,83 +219,19 @@ Milestone 5: **complete**
 
 ## Next Phase Workstreams
 
-Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps called out in `Status.md` §Critical Implementation Gaps. Full ticket definitions, critical path, and suggested parallel ownership live in `docs/design/implementation_backlog.md` §"Sprint 30: Critical-Path Production Gaps". The workstream summary below is a pointer to that backlog, not a duplicate source of truth.
+Sprint 30 is fully merged. The next phase is **Sprint 31 (placeholder)**; candidate scope lives in `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening". Detailed ticket definitions come in a separate planning session and are intentionally not duplicated here.
 
-### Workstream 1: eBPF Compilation And Runtime Attachment
+Candidate Sprint 31 workstreams, distilled from the post-Sprint-30 state of `Status.md` §Critical Gaps and surviving caveats in `docs/design/implementation_caveats.md`:
 
-Why this is next:
-- the eBPF framework manages program state, but no BPF bytecode is produced or attached today
-- called out in `Status.md` §Critical Implementation Gaps as the biggest remaining feature gap
+- **HA / clustering** — elevate single-node Elasticsearch / Prometheus / Grafana / Alertmanager postures, add leader election and state replication for controllers. Largest residual production blocker after Sprint 30.
+- **Write-path REST API** — extend Ticket 41's read-only v0 with mutating verbs (POST/PUT/PATCH/DELETE), watch/streaming endpoints, and additional resource families beyond FilterPolicy (NAT, routing, DPI, zones).
+- **Broader eBPF program types** — add `sockops` and `cgroup` loaders alongside the Ticket 38 XDP + Ticket 39 TC path; unblock more hook coverage across the framework.
+- **More threat feeds** — expand beyond Ticket 44's URLhaus CSV to IP-reputation feeds and, if ADR-0001 is revisited, MISP/STIX/TAXII; MISP/STIX are current non-goals.
+- **Performance tuning beyond one hot path** — Ticket 43 baselined NAT policy apply. DPI event → Cilium policy, routing sync, DHCP control socket, DNS zone update remain unbenchmarked.
+- **Internal TLS + secrets management for non-API components** — Ticket 41 introduced mTLS for the REST API only; inter-controller TLS and a documented secrets model remain open.
+- **Ingress rate limiting + VLAN-scoped shaping** — Ticket 45 shipped per-pod egress rate limiting. Ingress enforcement and a VLAN-shaper controller on top of the Ticket-39 TC loader infrastructure are still to be scoped.
 
-Tickets: 38 (XDP compile + attach) -> 39 (TC-attached QoS shaping)
-
-Primary areas:
-- `bpf/xdp_ddos_drop.c`, `bpf/tc_qos_shape.c` (new)
-- `pkg/hardware/ebpf/xdp_loader_linux.go`, `pkg/hardware/ebpf/tc_loader_linux.go` (new)
-- `pkg/network/ebpf/manager.go`, `pkg/controllers/qos_controller.go`
-- `Makefile` (`bpf-objects` target)
-
-Exit criteria:
-- at least one XDP program builds, loads, and attaches on Linux
-- QoS controller drives a real TC program via the eBPF loader
-- non-Linux and insufficient-capability paths return explicit errors
-
-### Workstream 2: Status Writeback And Management API
-
-Why this is next:
-- Ticket 33 left `FilterPolicy.Status.Conditions` mutating the in-memory cache only; a shared helper is needed before additional controllers repeat the same pattern
-- there is no REST/gRPC surface today; management is only via `kubectl` + CRDs
-
-Tickets: 40 (shared status writeback helper), 41 (read-only REST API v0)
-
-Primary areas:
-- `pkg/controllers/status/writer.go` (new)
-- `pkg/security/policy/controller.go`, `pkg/controllers/nat_controller.go`
-- `cmd/api-server/`, `pkg/api/` (new)
-- `manifests/base/api/` (new)
-
-Exit criteria:
-- no controller duplicates the write-status-subresource idiom inline
-- read-only REST API serves one resource family under mTLS with health/ready probes
-- write paths are a clearly-labelled follow-up
-
-### Workstream 3: Security Posture And Performance Baseline
-
-Why this is next:
-- every controller runs without explicit ClusterRole scoping, internal TLS, or a documented secrets model
-- zero benchmarks exist; throughput and connection limits are unknown
-
-Tickets: 42 (RBAC ClusterRoles + internal service baseline), 43 (performance baseline harness)
-
-Primary areas:
-- `manifests/base/*/rbac.yaml`
-- `scripts/ci/prove-no-cluster-admin.sh` (new)
-- `tools/bench/`, `docs/performance/` (new)
-
-Exit criteria:
-- no controller has `cluster-admin` in its binding; CI enforces it
-- one hot path has a repeatable benchmark with baseline ops/s and p50/p95/p99 latency recorded
-
-### Workstream 4: Threat-Intelligence And QoS Enforcement
-
-Why this is next:
-- threat intelligence is a Sprint 29 non-goal but a candidate for Sprint 30 if capacity permits
-- `Status.md` reports QoS enforcement as stub while CRDs and controllers exist
-
-Tickets: 44 (threat-intelligence feed ingestion v0), 45 (QoS enforcement via Cilium Bandwidth Manager)
-
-Primary areas:
-- `pkg/security/threatintel/`, `cmd/threatintel-controller/` (new)
-- `pkg/apis/security/v1alpha1/` (ThreatFeed CRD)
-- `pkg/controllers/qos_controller.go`, `pkg/security/qos/manager.go`
-
-Exit criteria:
-- one feed fetch/parse/translation cycle runs end to end with a `ThreatFeed` CRD
-- at least one `QoSProfile` produces real rate-limiting behavior verified in Kind
-
-### Workstream 5: Post-Sprint-30 Truth-Up
-
-Ticket 46 — same truth-up pattern used after tickets 20, 27, and 37. Runs after Sprint 30 tickets 38-45 merge.
+These workstreams are placeholders; ticket-level definitions (scope, primary areas, acceptance criteria) will be written into the backlog during a dedicated Sprint 31 planning session.
 
 ## Architect Review Questions
 

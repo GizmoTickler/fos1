@@ -840,7 +840,10 @@ Critical path (draft):
 
 #### Ticket 38: Prototype eBPF XDP Program Compilation And Attachment
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `3a9f677`, merge `de851a6`
 
 Scope:
 - produce one owned eBPF XDP program under `bpf/xdp_ddos_drop.c` (simple allowlist-drop based on a map-backed denylist, enough to prove the toolchain)
@@ -866,7 +869,10 @@ Acceptance:
 
 ### Ticket 39: Extend eBPF Loading To A TC-Attached QoS Shaping Program
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `f9f3565` (landed directly on main, no merge commit)
 
 Scope:
 - produce one owned TC classifier program under `bpf/tc_qos_shape.c` (simple classify-and-mark using a map-backed class table)
@@ -888,7 +894,10 @@ Acceptance:
 
 ### Ticket 40: Shared CRD Status Writeback Helper Adopted By FilterPolicy And One Other Controller
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `47b8088`, merge `2a2851c`
 
 Scope:
 - extract the `writeStatusToCRD` pattern from `pkg/controllers/nat_controller.go:558` into `pkg/controllers/status/writer.go` (or similar shared location)
@@ -913,7 +922,10 @@ Acceptance:
 
 ### Ticket 41: Read-Only REST Management API (v0)
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `e3bc979`, merge `9c70daf`
 
 Scope:
 - add `cmd/api-server/main.go` serving Go `net/http` routes under `/v1/`
@@ -935,7 +947,10 @@ Acceptance:
 
 ### Ticket 42: RBAC ClusterRoles And Internal Service Baseline
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `e13b91a`, merge `4af3403` (branch not pushed)
 
 Scope:
 - author minimum-privilege ClusterRoles for every controller currently using the generic `cluster-admin` or loose RBAC
@@ -954,7 +969,10 @@ Acceptance:
 
 ### Ticket 43: Performance Baseline Harness For One Hot Path
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `2b844d7`, merge `4ce31e8`
 
 Scope:
 - add `tools/bench/` with a `go test -bench` harness that measures one hot path (recommended: NAT policy apply, or DPI event → Cilium policy creation)
@@ -974,7 +992,10 @@ Acceptance:
 
 ### Ticket 44: Threat-Intelligence Feed Ingestion v0
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `2c042a5`, merge `fb9dfb0`
 
 Scope:
 - ingest one public blocklist feed (recommend abuse.ch URLhaus CSV for simplicity; MISP if a test server is available) into a Kubernetes-native CRD (`ThreatFeed`) with periodic refresh
@@ -995,7 +1016,10 @@ Acceptance:
 
 ### Ticket 45: QoS Enforcement Via Cilium Bandwidth Manager
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `3326f46`, merge `a04ce71`
 
 Scope:
 - decide whether to target Cilium Bandwidth Manager (preferred, fits ADR-0001) or the Ticket-39 TC loader for QoS enforcement; document the choice
@@ -1015,7 +1039,7 @@ Acceptance:
 
 ### Ticket 46: Post-Sprint-30 Truth-Up
 Status:
-- open
+- completed
 
 Scope:
 - same pattern as Ticket 37: reconcile every status claim in `Status.md`, `docs/project-tracker.md`, `docs/implementation-plan.md`, `docs/observability-architecture.md`, `docs/design/implementation_caveats.md` against what Sprint 30 actually landed
@@ -1027,6 +1051,23 @@ Primary areas:
 Acceptance:
 - no status claim unsupported by a landed test, manifest, or harness step
 - remaining gaps for Sprint 31+ explicitly enumerated
+
+## Sprint 31 (placeholder): Post-Sprint-30 Production Hardening
+
+Candidate scope only. Sprint 31 ticket definitions are out of scope for Ticket 46; they will be finalized in a separate planning session after this truth-up closes.
+
+Candidate gaps, distilled from the post-Sprint-30 state of `Status.md` §Critical Gaps and from caveats flagged during Sprint 30 execution:
+
+- **HA / clustering** — the current posture is single-node for Elasticsearch, Prometheus, Grafana, Alertmanager; controllers run as single replicas with no leader election or state replication. This is the single largest residual production blocker after Sprint 30.
+- **Write-path API** — Ticket 41 shipped read-only `/v1/filter-policies`. Write verbs (POST/PUT/PATCH/DELETE), watch/streaming endpoints, and additional resource families (NAT, routing, DPI, zones) remain future work.
+- **Broader eBPF program types** — Sprint 30 Tickets 38-39 landed XDP + TC loaders. `sockops` and `cgroup` program types still return `ErrEBPFProgramTypeUnsupported` from `pkg/hardware/ebpf/program_manager.go`.
+- **More threat feeds** — Ticket 44 shipped URLhaus CSV. MISP, STIX/TAXII, and IP-reputation feeds are candidates; MISP/STIX are currently non-goals and would need ADR revisiting.
+- **Performance optimization beyond one hot path** — Ticket 43 baselined NAT policy apply only. DPI event → Cilium policy, routing sync, DHCP control socket, and DNS zone update remain unbenchmarked.
+- **Internal TLS + secrets management for non-API components** — Ticket 41 introduced mTLS for the REST API only. Inter-controller service TLS and a documented secrets model remain open.
+- **Ingress rate limiting** — Ticket 45 shipped per-pod egress rate limiting via Cilium Bandwidth Manager. Ingress enforcement and classful/VLAN-scoped shaping on top of the Ticket-39 TC loader remain open.
+- **VLAN-scoped TC shaper controller** — Ticket 39 landed the TC loader + clsact bootstrap + per-ifindex priority map as infrastructure. A CRD-driven controller that drives those maps from `QoSProfile` or a new `TrafficShaper` surface is still to be scoped.
+
+Working rules for Sprint 31: same as prior sprints (no placeholder success paths, idempotent reconciliation, statusful conditions, tests updated with behavior changes, docs updated after behavior is verified).
 
 ## Architect Review Questions
 
