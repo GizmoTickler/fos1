@@ -5,10 +5,11 @@ metadata:
   name: fos1-api-server
   namespace: security
 ---
-# The v0 API is strictly read-only and scoped to the FilterPolicy resource
-# family. The ClusterRole grants only the verbs the server actually uses
-# (get, list, watch). Adding write verbs here is a deliberate follow-up
-# ticket that requires sign-off.
+# The REST API surface (Sprint 30 Ticket 41 + Sprint 31 Ticket 48) is scoped
+# to the FilterPolicy resource family. The ClusterRole grants only the verbs
+# the server actually issues — Ticket 41 shipped read (get/list/watch) and
+# Ticket 48 added the write verbs (create/update/patch/delete). Adding
+# further verbs or resources requires a follow-up ticket with RBAC review.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -22,6 +23,10 @@ rules:
       - get
       - list
       - watch
+      - create
+      - update
+      - patch
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -46,5 +51,5 @@ metadata:
   namespace: security
 data:
   allowlist: |
-    # Add one client-cert Subject CN per line. The v0 server denies every
-    # request from a subject not listed here with HTTP 403.
+    # Add one client-cert Subject CN per line. The v1 write-path API denies
+    # every request from a subject not listed here with HTTP 403.

@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -174,6 +175,33 @@ func TestMTLSEndToEnd(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("allowed client can POST a new FilterPolicy", func(t *testing.T) {
+		body := bytes.NewBuffer(nil)
+		require.NoError(t, json.NewEncoder(body).Encode(fixturePolicy("security", "mtls-created")))
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("https://%s/v1/filter-policies", addr), body)
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := allowedClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode, "body: %s", string(respBody))
+	})
+
+	t.Run("denied client cannot POST a new FilterPolicy", func(t *testing.T) {
+		body := bytes.NewBuffer(nil)
+		require.NoError(t, json.NewEncoder(body).Encode(fixturePolicy("security", "mtls-denied")))
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("https://%s/v1/filter-policies", addr), body)
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := deniedClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 	})
 }
 
