@@ -125,7 +125,7 @@ Candidate Sprint 31 workstreams (in rough priority order):
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **nftables Firewall** | Non-goal per ADR-0001 | Cilium is the sole enforcement backend; sprint 29 ticket 33 removed the remaining nftables translator/zone manager, `pkg/security/firewall` package, and `pkg/cilium/controllers/firewall_controller.go`. |
+| **nftables Firewall** | Non-goal per ADR-0001 | Cilium is the sole enforcement backend. NAT-side nftables code (`pkg/network/nat/kernel.go`, `pkg/deprecated/nat/`) removed in Sprint 31 Ticket 50. Firewall-side `pkg/security/firewall/kernel.go` remains as the only `FirewallManager` backend pending a Cilium-backed replacement (Sprint 32 candidate). `pkg/cilium/controllers/firewall_controller.go` was removed in Sprint 29 Ticket 33. |
 | **FirewallRule CRD** | Non-goal per ADR-0001 | Schema-only with no Go types; CRD manifest and controller removed in sprint 29 ticket 33. `FilterPolicy` is the authoritative policy surface. |
 | **Policy Enforcement (FilterPolicy)** | ✅ Complete | `pkg/security/policy/controller.go` translates FilterPolicy → CiliumNetworkPolicy with spec-hash idempotency and Applied/Degraded/Invalid/Removed conditions (sprint 29 ticket 33). |
 | **SAML/RADIUS/Certificate Auth** | Removed (non-goal) | Stubs removed 2026-04-21 per Sprint 29 Ticket 34; auth is scoped to local/LDAP/OAuth |
