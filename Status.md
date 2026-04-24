@@ -12,7 +12,7 @@ Sprint 30 closed the critical-path production gaps that Sprint 29 had deferred:
 - **Shared CRD status writeback helper** — `pkg/controllers/status/writer.go` lifts the NAT controller's `writeStatusToCRD` idiom into a reusable helper. Adopted by FilterPolicy (closes the Sprint 29 Ticket 33 in-memory-only caveat), NAT, and MultiWAN. Round-trip tests verify retry-on-conflict (Ticket 40).
 - **Read-only REST API v0** — `cmd/api-server/` and `pkg/api/` expose `/v1/filter-policies` list+get, `/healthz`, `/readyz`, `/openapi.json` behind `tls.RequireAndVerifyClientCert` with a ConfigMap-backed Subject-CN allowlist. Base manifests at `manifests/base/api/`. `pkg/api.TestMTLSEndToEnd` asserts 200/403/handshake-failure cases (Ticket 41).
 - **Minimum-privilege RBAC** — every ServiceAccount bound to a scoped ClusterRole. `scripts/ci/prove-no-cluster-admin.sh` blocks any `ClusterRoleBinding` targeting `cluster-admin` without an explicit `fos1.io/rbac-exception` annotation. Per-controller verb/resource table at `docs/design/rbac-baseline.md` (Ticket 42).
-- **NAT policy apply performance baseline** — `tools/bench/nat_apply_bench_test.go` with ops/s + p50/p95/p99 latency recorded at `docs/performance/baseline-2026-04.md`; regressions flagged as warnings in CI (non-blocking) (Ticket 43).
+- **Four-hot-path performance baseline** — NAT apply, DPI event → Cilium policy, FilterPolicy translate, and threat-intel translate are all baselined in `tools/bench/` with ops/s + p50/p95/p99 latency recorded at `docs/performance/baseline-2026-04.md`; regressions flagged as warnings in CI (non-blocking) via `scripts/ci/run-bench.sh` (Tickets 43 + 54).
 - **URLhaus threat-intel v0** — `ThreatFeed` CRD + `cmd/threatintel-controller/` + `pkg/security/threatintel/` parses URLhaus CSV and translates into Cilium deny policies with last-seen TTL. `ThreatFeed.Status` reports last-fetch time, entry count, expiry state. MISP/STIX remain non-goals (Ticket 44).
 - **QoS via Cilium Bandwidth Manager** — `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation → BPF TBF rate limiter at pod admission via `pkg/security/qos.BandwidthManager`. Per-pod egress only in v1; ingress enforcement and classful/uplink TC shaping remain future work (Ticket 45).
 
@@ -26,7 +26,7 @@ Verified contract as of 2026-04-23:
   - `go build ./...`
 - `.github/workflows/ci.yml` enforces `make verify-mainline` on pushes to `main` and pull requests targeting `main`
 - `.github/workflows/validate-manifests.yml` runs on manifest-affecting pull requests and fails on real `kubeconform` validation errors; post-Sprint-30 it also runs `scripts/ci/prove-no-cluster-admin.sh` (Ticket 42) to block any `ClusterRoleBinding` targeting `cluster-admin` without an explicit `fos1.io/rbac-exception` annotation
-- `.github/workflows/test-bootstrap.yml` runs the NAT policy apply benchmark (Ticket 43) as a non-blocking job that uploads `docs/performance/baseline-2026-04.md` as a CI artifact and flags regressions beyond a configurable threshold as warnings
+- `.github/workflows/test-bootstrap.yml` runs all four hot-path benchmarks (NAT apply — Ticket 43; DPI / FilterPolicy / ThreatIntel — Ticket 54) via `go test -bench=. ./tools/bench/...` as a non-blocking job that uploads `docs/performance/baseline-2026-04.md` as a CI artifact and flags regressions beyond a configurable threshold as warnings
 
 Owned observability contract as of 2026-04-22:
 - `dpi-manager` runs as a node-local `DaemonSet` and its annotated `:8080/metrics` endpoint is runtime-proven through the Kind Prometheus pod-scrape path

@@ -3,14 +3,25 @@
 This directory holds Go benchmark baselines for FOS1 hot paths. It
 exists because `Status.md` listed "Performance Unknown (High Risk)"
 under Weaknesses and there were no benchmarks in the repo. Sprint 30
-Ticket 43 adds the first one (NAT policy apply) and the surrounding
-infrastructure.
+Ticket 43 added the first one (NAT policy apply) and the surrounding
+infrastructure. Sprint 31 Ticket 54 extended the harness to cover
+three more hot paths:
+
+- DPI event → CiliumPolicy (`pkg/security/dpi.PolicyPipeline.ProcessEvent`)
+- FilterPolicy → CiliumPolicy translate (`pkg/security/policy.CiliumPolicyTranslator.TranslatePolicy`)
+- Threat-intel Indicator → CiliumPolicy translate (`pkg/security/threatintel.Translator.Translate`)
+
+Still unbenchmarked (Sprint 32 candidates): DHCP control-socket
+round-trip, DNS zone update via CoreDNS / AdGuard, FRR reload /
+routing sync, and any end-to-end envtest / Kind latency harness.
 
 ## Philosophy
 
-- **One hot path at a time.** v0 covers NAT policy apply only. We do
-  not try to cover every hot path; we prove that we can measure one
-  end to end and act on regressions.
+- **One hot path at a time, measured in isolation.** Each bench
+  isolates its hot path behind an in-process fake (where I/O exists)
+  so the number is about the code, not Kubernetes API RTT or a real
+  Cilium agent. Multi-component latency belongs in an envtest or Kind
+  harness, not here.
 - **Isolate the thing being measured.** Benchmarks use in-process
   fakes (e.g. `fakeCiliumClient` in `tools/bench/`) so we measure our
   code, not Kubernetes API RTT, not a real Cilium agent.
@@ -38,8 +49,9 @@ infrastructure.
 
     go test -bench=. -benchmem -count=10 -run '^$' ./tools/bench/...
 
-Expected wall-clock: <5 minutes on a modern laptop. On an Apple M3
-Pro the full run is ~42s.
+Expected wall-clock: <10 minutes on a modern laptop. On an Apple M3
+Pro the full 12-bench run (NAT + DPI + FilterPolicy + ThreatIntel) is
+~3m 14s. The original three NAT-only benches alone still run in ~42s.
 
 For cleaner median/variance numbers, pipe through `benchstat`:
 
@@ -80,9 +92,11 @@ script picks the lexicographically latest `baseline-*.md`.
 
 ## Out of scope (v0)
 
-- Coverage for every hot path. DPI event → policy, routing sync,
-  DHCP/Kea control-socket round-trip, and the rest still have no
-  baseline. Follow-up tickets will add them one at a time.
+- Coverage for every hot path. DPI event → policy, FilterPolicy
+  translate, and threat-intel translate are now baselined (Ticket 54),
+  alongside the original NAT apply baseline (Ticket 43). Routing sync,
+  DHCP/Kea control-socket round-trip, DNS zone update, and FRR reload
+  still have no baseline and are Sprint-32 candidates.
 - Production load simulation. The benchmarks hammer a single in-
   process call; they do not model concurrent clients, CRD
   reconciliation storms, or Kubernetes API latency.
