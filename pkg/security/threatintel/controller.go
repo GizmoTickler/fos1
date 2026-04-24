@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 
@@ -25,6 +26,18 @@ type FeedStore interface {
 	// UpdateStatus writes the provided status back to the named ThreatFeed.
 	// Implementations must be idempotent; controller will retry on error.
 	UpdateStatus(ctx context.Context, name string, status securityv1alpha1.ThreatFeedStatus) error
+}
+
+// SecretReader abstracts Secret lookups so authenticated feed formats can
+// pull credentials without wiring the full client-go dependency chain. The
+// production implementation shells out to kubectl (matching the rest of the
+// package's external-state access pattern); tests inject an in-memory map.
+//
+// Read returns the raw byte values keyed by the Secret's data keys (i.e.
+// already base64-decoded). Missing Secrets must return an error whose text
+// is safe to surface on the ThreatFeed CR status.
+type SecretReader interface {
+	Read(ctx context.Context, namespace, name string) (map[string][]byte, error)
 }
 
 // Controller drives the ThreatFeed CRD. One Controller instance manages all
@@ -51,9 +64,23 @@ type Controller struct {
 	HTTPClient *http.Client
 
 	// NewFetcher constructs a Fetcher for a given feed. If nil, the
-	// URLhaus CSV fetcher is used for format=urlhaus-csv and an error is
-	// recorded on the CR status for unknown formats.
+	// controller dispatches on Spec.Format:
+	//   - urlhaus-csv → URLhausFetcher (no auth)
+	//   - misp-json   → MISPFetcher (API key loaded via Secrets)
+	// Unknown formats surface as an Invalid condition on the CR.
 	NewFetcher func(spec securityv1alpha1.ThreatFeedSpec) (Fetcher, error)
+
+	// Secrets is the lookup used to fetch auth credentials for feed
+	// formats that require them (currently: misp-json). When nil and an
+	// authenticated feed is encountered, the controller records an
+	// Invalid condition rather than panicking.
+	Secrets SecretReader
+
+	// DefaultSecretNamespace is used when AuthSecretRef.Namespace is
+	// empty. It mirrors how ConfigMap/Secret references work against a
+	// controller that runs outside the feed's namespace. Defaults to
+	// "security".
+	DefaultSecretNamespace string
 
 	// Now returns the current time. Injected for tests.
 	Now func() time.Time
@@ -258,7 +285,10 @@ func (c *Controller) getOrCreateManager(feed *securityv1alpha1.ThreatFeed) (*man
 	return mf, nil
 }
 
-// buildFetcher translates a ThreatFeedSpec into a concrete Fetcher.
+// buildFetcher translates a ThreatFeedSpec into a concrete Fetcher, honouring
+// any injected factory in c.NewFetcher. For MISP feeds the controller loads
+// the referenced Secret and extracts the API key; other authenticated feed
+// types are expected to follow the same pattern.
 func (c *Controller) buildFetcher(spec securityv1alpha1.ThreatFeedSpec) (Fetcher, error) {
 	if c.NewFetcher != nil {
 		return c.NewFetcher(spec)
@@ -269,9 +299,49 @@ func (c *Controller) buildFetcher(spec securityv1alpha1.ThreatFeedSpec) (Fetcher
 			URL:    spec.URL,
 			Client: c.HTTPClient,
 		}, nil
+	case securityv1alpha1.ThreatFeedFormatMISPJSON:
+		apiKey, err := c.loadAPIKey(context.Background(), spec)
+		if err != nil {
+			return nil, err
+		}
+		return &MISPFetcher{
+			URL:    spec.URL,
+			APIKey: apiKey,
+			Client: c.HTTPClient,
+		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported threat feed format %q (v0 supports %q only)", spec.Format, securityv1alpha1.ThreatFeedFormatURLhausCSV)
+		return nil, fmt.Errorf("unsupported threat feed format %q (supported: %q, %q)", spec.Format,
+			securityv1alpha1.ThreatFeedFormatURLhausCSV,
+			securityv1alpha1.ThreatFeedFormatMISPJSON)
 	}
+}
+
+// loadAPIKey resolves an AuthSecretRef into the raw API key string. It
+// surfaces the specific failure mode (missing ref, missing Secret, missing
+// key) in the error so the ThreatFeed.Status condition is diagnosable.
+func (c *Controller) loadAPIKey(ctx context.Context, spec securityv1alpha1.ThreatFeedSpec) (string, error) {
+	if spec.AuthSecretRef == nil || spec.AuthSecretRef.Name == "" {
+		return "", fmt.Errorf("authSecretRef is required for format %q", spec.Format)
+	}
+	if c.Secrets == nil {
+		return "", fmt.Errorf("no Secret reader configured; cannot resolve authSecretRef %q", spec.AuthSecretRef.Name)
+	}
+	ns := spec.AuthSecretRef.Namespace
+	if ns == "" {
+		ns = c.DefaultSecretNamespace
+	}
+	if ns == "" {
+		ns = "security"
+	}
+	data, err := c.Secrets.Read(ctx, ns, spec.AuthSecretRef.Name)
+	if err != nil {
+		return "", fmt.Errorf("read secret %s/%s: %w", ns, spec.AuthSecretRef.Name, err)
+	}
+	raw, ok := data[securityv1alpha1.ThreatFeedAuthSecretAPIKey]
+	if !ok || len(raw) == 0 {
+		return "", fmt.Errorf("secret %s/%s missing %q data key", ns, spec.AuthSecretRef.Name, securityv1alpha1.ThreatFeedAuthSecretAPIKey)
+	}
+	return string(raw), nil
 }
 
 // writeStatus marshalls a status-update closure and persists the result.
@@ -305,9 +375,28 @@ func (c *Controller) now() time.Time {
 // specSourceChanged reports whether the upstream source identity changed
 // between two spec snapshots. Only fields that influence the fetcher's
 // identity are compared; RefreshInterval/MaxAge/Enabled are handled in the
-// hot path directly.
+// hot path directly. AuthSecretRef is included so rotating the credential
+// Secret (pointing at a different Secret) forces a fresh fetcher build and
+// re-loads the API key on the next reconcile.
 func specSourceChanged(a, b securityv1alpha1.ThreatFeedSpec) bool {
-	return a.URL != b.URL || a.Format != b.Format
+	if a.URL != b.URL || a.Format != b.Format {
+		return true
+	}
+	return !secretRefEqual(a.AuthSecretRef, b.AuthSecretRef)
+}
+
+// secretRefEqual reports whether two SecretReference pointers select the same
+// Secret. Nil and empty are treated as equivalent.
+func secretRefEqual(a, b *corev1.SecretReference) bool {
+	aName, aNS := "", ""
+	if a != nil {
+		aName, aNS = a.Name, a.Namespace
+	}
+	bName, bNS := "", ""
+	if b != nil {
+		bName, bNS = b.Name, b.Namespace
+	}
+	return aName == bName && aNS == bNS
 }
 
 // setCondition replaces any existing condition of the same Type and appends

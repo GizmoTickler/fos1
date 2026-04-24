@@ -18,6 +18,12 @@ rules:
   - apiGroups: ["cilium.io"]
     resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Sprint 31 Ticket 53: MISP feeds reference API-key Secrets via
+  # spec.authSecretRef. Read-only access is required to load the `apiKey`
+  # data key before each fetcher build.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

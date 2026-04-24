@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -15,7 +16,8 @@ import (
 // MaxAge; when an indicator has not been seen in a fetch newer than MaxAge,
 // the corresponding Cilium policy is removed.
 //
-// v0 supports only the "urlhaus-csv" format (abuse.ch URLhaus CSV feed).
+// v0 shipped the "urlhaus-csv" format; Sprint 31 Ticket 53 adds "misp-json"
+// behind an API-key Secret referenced via AuthSecretRef.
 type ThreatFeed struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -29,9 +31,20 @@ type ThreatFeedSpec struct {
 	// URL is the feed source endpoint.
 	URL string `json:"url"`
 
-	// Format describes the feed content type. Only "urlhaus-csv" is
-	// supported in v0.
+	// Format describes the feed content type. Supported values:
+	//   - "urlhaus-csv" — abuse.ch URLhaus CSV feed (no auth)
+	//   - "misp-json"   — MISP JSON /events/restSearch (requires AuthSecretRef)
 	Format string `json:"format"`
+
+	// AuthSecretRef points at a Kubernetes Secret providing credentials for
+	// authenticated feeds. The controller reads the Secret's `apiKey` data
+	// key and injects it into the fetcher. Required when Format requires
+	// authentication (currently: "misp-json"); ignored otherwise.
+	//
+	// The Secret must live in the same namespace as the referring
+	// ThreatFeed unless the Namespace field is explicitly set, matching
+	// the upstream SecretReference semantics.
+	AuthSecretRef *corev1.SecretReference `json:"authSecretRef,omitempty"`
 
 	// RefreshInterval is how often the feed is re-fetched.
 	RefreshInterval metav1.Duration `json:"refreshInterval"`
@@ -109,4 +122,16 @@ const (
 const (
 	// ThreatFeedFormatURLhausCSV identifies the abuse.ch URLhaus CSV feed.
 	ThreatFeedFormatURLhausCSV = "urlhaus-csv"
+
+	// ThreatFeedFormatMISPJSON identifies the MISP events/restSearch JSON
+	// feed. Requires AuthSecretRef.
+	ThreatFeedFormatMISPJSON = "misp-json"
+)
+
+// Well-known data keys that the controller expects inside an auth Secret.
+const (
+	// ThreatFeedAuthSecretAPIKey is the data key the controller reads from
+	// an AuthSecretRef'd Secret when the feed format is MISP JSON. The
+	// value is passed verbatim as the `Authorization` header.
+	ThreatFeedAuthSecretAPIKey = "apiKey"
 )
