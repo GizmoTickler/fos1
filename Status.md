@@ -87,7 +87,7 @@ Sprint 30 (tickets 38-46) targets the remaining critical-path production gaps. F
 
 | Component | Files | Lines | Status | Critical Gaps |
 |-----------|-------|-------|--------|---------------|
-| **eBPF Framework** | `pkg/network/ebpf/`, `pkg/hardware/ebpf/`, `bpf/` | 650 + owned XDP | XDP compile + load verified on Linux (Sprint 30 Ticket 38) | `bpf/xdp_ddos_drop.c` compiles via `make bpf-objects`, is embedded through `//go:embed`, and loads via `github.com/cilium/ebpf`. TC / sockops / cgroup loaders remain non-goals until Sprint 30 Ticket 39; other program types return `ErrEBPFProgramTypeUnsupported`. |
+| **eBPF Framework** | `pkg/network/ebpf/`, `pkg/hardware/ebpf/`, `bpf/` | 650 + owned XDP + owned TC | XDP and TC compile + load verified on Linux (Sprint 30 Tickets 38/39) | `bpf/xdp_ddos_drop.c` and `bpf/tc_qos_shape.c` compile via `make bpf-objects`, are embedded through `//go:embed`, and load via `github.com/cilium/ebpf`. The TC path attaches via `AttachTCX` against a `clsact` qdisc (bootstrap is idempotent; kernel >= 6.6 required for TCX) and exposes a per-ifindex priority map that user-space populates before attach. Sockops / cgroup loaders remain future work; those program types continue to return `ErrEBPFProgramTypeUnsupported`. |
 
 #### ❌ Not Implemented
 
@@ -506,9 +506,9 @@ Still open for Sprint 30:
 
 ### ❌ Doesn't Work (Major implementation needed — Sprint 30 scope)
 
-1. **eBPF Program Compilation/Loading** - XDP compile + load landed in Sprint 30 Ticket 38; TC/QoS shaping (Ticket 39) and broader program types remain future work
+1. **eBPF Program Compilation/Loading** - XDP compile + load landed in Sprint 30 Ticket 38; TC-attached QoS classifier compile + load landed in Ticket 39 (clsact bootstrap + TCX attach + per-ifindex priority map). Sockops / cgroup program types remain future work.
 2. **REST / gRPC API** - Read-only REST v0 landed in Sprint 30 Ticket 41; write paths, watch streams, and other resource families remain future work
-3. **QoS Enforcement** - Per-pod egress rate limiting via Cilium Bandwidth Manager landed in Sprint 30 Ticket 45 (`QoSProfile` CR → `kubernetes.io/egress-bandwidth` annotation). Classful/uplink TC shaping remains Ticket 39 territory.
+3. **QoS Enforcement** - Per-pod egress rate limiting via Cilium Bandwidth Manager landed in Sprint 30 Ticket 45 (`QoSProfile` CR → `kubernetes.io/egress-bandwidth` annotation). Sprint 30 Ticket 39 adds the complementary TC-attached classifier (`bpf/tc_qos_shape.c` + `pkg/hardware/ebpf.TCLoader`) for per-interface / VLAN-scoped priority marking — the two paths are composable (per-pod enforcement on the pod netdev, priority classification on the uplink).
 4. **Threat Intelligence** - v0 URLhaus CSV ingestion shipped in Sprint 30 Ticket 44 (`ThreatFeed` CRD + Cilium policy translator with last-seen TTL); MISP/STIX/reputation remain future work
 5. **Performance Baseline** - NAT policy apply baseline landed in Sprint 30 Ticket 43; broader hot-path coverage remains future work
 6. **HA / Clustering** - Single-node posture (later-sprint target)
@@ -541,7 +541,7 @@ Still open for Sprint 30:
 | WireGuard VPN | ✅ Detailed | ✅ Complete | Real CRD-to-interface reconciliation |
 | Authentication | ✅ Detailed | ✅ Complete (scoped) | Local, LDAP, OAuth wired; SAML/RADIUS/cert removed as non-goals (2026-04-21) |
 | Certificates | ✅ Detailed | ✅ Complete | None |
-| QoS/Traffic Shaping | ✅ Detailed | ✅ Complete (per-pod egress) | Cilium Bandwidth Manager backend per Sprint 30 Ticket 45. `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation. Classful/uplink TC shaping remains Ticket 39 territory. See `docs/design/qos.md`. |
+| QoS/Traffic Shaping | ✅ Detailed | ✅ Complete (per-pod egress + TC classifier loader) | Cilium Bandwidth Manager backend per Sprint 30 Ticket 45 (`QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation). Sprint 30 Ticket 39 adds the TC-attached QoS classifier (`bpf/tc_qos_shape.c`, `pkg/hardware/ebpf.TCLoader`) for per-interface priority marking via `skb->priority` against a clsact qdisc — exposed as infrastructure that a future VLAN-shaper controller can consume. See `docs/design/qos.md` and `docs/design/ebpf-implementation.md`. |
 | Hardware Offload | ✅ Detailed | ⚠️ Partial | No driver integration |
 
 ---

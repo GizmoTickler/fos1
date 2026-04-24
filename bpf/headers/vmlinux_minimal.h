@@ -46,7 +46,47 @@ struct xdp_md {
     __u32 egress_ifindex;
 };
 
+/* TC (classifier) context — minimal subset of struct __sk_buff used by
+ * bpf/tc_qos_shape.c. Ordering and sizes must match the kernel's UAPI
+ * layout (include/uapi/linux/bpf.h); additions here should preserve the
+ * preceding fields so offsets stay correct.
+ *
+ * We carry the fields up to `priority` (which is what the QoS shaper
+ * mutates). The kernel's struct continues past this point with
+ * ingress_ifindex, ifindex, tc_index, cb[5], hash, tc_classid, etc. —
+ * we deliberately omit them because the shaper does not read them.
+ */
+struct __sk_buff {
+    __u32 len;
+    __u32 pkt_type;
+    __u32 mark;
+    __u32 queue_mapping;
+    __u32 protocol;
+    __u32 vlan_present;
+    __u32 vlan_tci;
+    __u32 vlan_proto;
+    __u32 priority;
+    __u32 ingress_ifindex;
+    __u32 ifindex;
+    __u32 tc_index;
+    __u32 cb[5];
+    __u32 hash;
+    __u32 tc_classid;
+    __u32 data;
+    __u32 data_end;
+};
+
+/* TC classifier return codes — see include/uapi/linux/pkt_cls.h. The
+ * common set used by sched_cls/action programs. */
+#define TC_ACT_UNSPEC   (-1)
+#define TC_ACT_OK       0
+#define TC_ACT_RECLASSIFY 1
+#define TC_ACT_SHOT     2
+#define TC_ACT_PIPE     3
+
 /* Map-type IDs (subset). */
+#define BPF_MAP_TYPE_HASH     1
+#define BPF_MAP_TYPE_ARRAY    2
 #define BPF_MAP_TYPE_LPM_TRIE 11
 
 /* Map flags. */

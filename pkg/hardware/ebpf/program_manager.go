@@ -95,6 +95,14 @@ type LoadedProgram struct {
 	// the backing *ebpf.Collection and map handles so UnloadProgram can
 	// release them deterministically. Nil for legacy Code-based loads.
 	xdpLoader *XDPLoader
+
+	// tcLoader is set when the program was loaded via the owned TC
+	// loader path (Type == ProgramTypeTCIngress or ProgramTypeTCEgress
+	// with empty Code). Same ownership contract as xdpLoader: the
+	// collection and map handles are released through this loader, not
+	// through InnerProg.Close, to avoid a double-close. Nil for legacy
+	// Code-based loads and for XDP programs.
+	tcLoader *TCLoader
 }
 
 // ProgramManager handles the lifecycle of eBPF programs.
@@ -140,12 +148,17 @@ const (
 //   - `Type == "xdp"` with empty Code loads the owned xdp_ddos_drop
 //     object from the embedded ELF (see `bpf/xdp_ddos_drop.o`). This is
 //     the supported path for Sprint 30 ticket 38.
-//   - `Type == "xdp"` with non-empty Code loads the caller-supplied
-//     ELF bytes (legacy compile-and-pass path, used by older callers
-//     that hand-compile programs into [Program.Code]).
-//   - Any other program type returns [ErrEBPFProgramTypeUnsupported].
-//     Extending this set (TC / sockops / cgroup) is tracked by
-//     Sprint 30 ticket 39.
+//   - `Type == "tc-ingress"` or `"tc-egress"` with empty Code loads the
+//     owned tc_qos_shape object (see `bpf/tc_qos_shape.o`). The
+//     ingress vs. egress split selects which of the two SEC()s in the
+//     object gets bound to InnerProg — the other stays live inside the
+//     loader's *ebpf.Collection until Close. Sprint 30 ticket 39.
+//   - `Type == "xdp" | "tc-ingress" | "tc-egress"` with non-empty Code
+//     loads the caller-supplied ELF bytes (legacy compile-and-pass
+//     path, used by older callers that hand-compile programs into
+//     [Program.Code]).
+//   - Sockops / cgroup program types still return
+//     [ErrEBPFProgramTypeUnsupported]; those loaders are future work.
 func (p *ProgramManager) LoadProgram(program Program) error {
 	p.programsMu.Lock()
 	defer p.programsMu.Unlock()
@@ -156,17 +169,18 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 	}
 
 	switch program.Type {
-	case ProgramTypeXDP:
+	case ProgramTypeXDP, ProgramTypeTCIngress, ProgramTypeTCEgress:
 		// fall through to load path below.
-	case ProgramTypeTCIngress, ProgramTypeTCEgress, ProgramTypeSockOps, ProgramTypeCGroup:
-		return fmt.Errorf("%w: %q (XDP is the only type implemented by the owned loader in v1; see Sprint 30 ticket 39)",
+	case ProgramTypeSockOps, ProgramTypeCGroup:
+		return fmt.Errorf("%w: %q (XDP and TC are implemented by the owned loader; sockops / cgroup are future work)",
 			ErrEBPFProgramTypeUnsupported, program.Type)
 	default:
 		return fmt.Errorf("%w: %q", ErrEBPFProgramTypeUnsupported, program.Type)
 	}
 
 	var loadedProg *ebpf.Program
-	var ownedLoader *XDPLoader
+	var ownedXDP *XDPLoader
+	var ownedTC *TCLoader
 
 	if len(program.Code) > 0 {
 		// Legacy path: caller supplies raw ELF bytes. Used by the
@@ -196,18 +210,38 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 			return fmt.Errorf("failed to load eBPF program: %w", err)
 		}
 	} else {
-		// Owned path: load the embedded xdp_ddos_drop object via the
-		// dedicated XDPLoader. This is the supported production path.
-		objectBytes, err := XDPDDoSDropObject()
-		if err != nil {
-			return fmt.Errorf("load owned XDP object: %w", err)
+		// Owned path: instantiate the loader that matches the program
+		// type. Both loaders parse the embedded object and return
+		// ErrEBPFObjectMissing when `make bpf-objects` has not been
+		// run.
+		switch program.Type {
+		case ProgramTypeXDP:
+			objectBytes, err := XDPDDoSDropObject()
+			if err != nil {
+				return fmt.Errorf("load owned XDP object: %w", err)
+			}
+			loader, err := NewXDPLoader(objectBytes)
+			if err != nil {
+				return fmt.Errorf("instantiate XDPLoader: %w", err)
+			}
+			loadedProg = loader.Program()
+			ownedXDP = loader
+		case ProgramTypeTCIngress, ProgramTypeTCEgress:
+			objectBytes, err := TCQoSShapeObject()
+			if err != nil {
+				return fmt.Errorf("load owned TC object: %w", err)
+			}
+			loader, err := NewTCLoader(objectBytes)
+			if err != nil {
+				return fmt.Errorf("instantiate TCLoader: %w", err)
+			}
+			if program.Type == ProgramTypeTCIngress {
+				loadedProg = loader.IngressProgram()
+			} else {
+				loadedProg = loader.EgressProgram()
+			}
+			ownedTC = loader
 		}
-		loader, err := NewXDPLoader(objectBytes)
-		if err != nil {
-			return fmt.Errorf("instantiate XDPLoader: %w", err)
-		}
-		loadedProg = loader.Program()
-		ownedLoader = loader
 	}
 
 	// Create a loaded program object
@@ -219,7 +253,8 @@ func (p *ProgramManager) LoadProgram(program Program) error {
 		InnerProg: loadedProg,
 		Maps:      program.Maps,
 		Attached:  false,
-		xdpLoader: ownedLoader,
+		xdpLoader: ownedXDP,
+		tcLoader:  ownedTC,
 	}
 
 	// Store the program
@@ -256,17 +291,25 @@ func (p *ProgramManager) UnloadProgram(name string) error {
 		prog.Attached = false
 	}
 
-	// Close the program. When the program was loaded via the owned
-	// XDPLoader path, the *ebpf.Program handle is owned by the
-	// collection inside the loader, so we release via the loader to
-	// avoid a double-close.
-	if prog.xdpLoader != nil {
+	// Close the program. When the program was loaded via one of the
+	// owned loaders (XDP or TC) the *ebpf.Program handle is owned by
+	// the collection inside the loader, so we release via the loader
+	// to avoid a double-close. Legacy Code-based loads own InnerProg
+	// directly.
+	switch {
+	case prog.xdpLoader != nil:
 		if err := prog.xdpLoader.Close(); err != nil {
 			return fmt.Errorf("failed to close owned XDP loader: %w", err)
 		}
 		prog.xdpLoader = nil
 		prog.InnerProg = nil
-	} else if prog.InnerProg != nil {
+	case prog.tcLoader != nil:
+		if err := prog.tcLoader.Close(); err != nil {
+			return fmt.Errorf("failed to close owned TC loader: %w", err)
+		}
+		prog.tcLoader = nil
+		prog.InnerProg = nil
+	case prog.InnerProg != nil:
 		if err := prog.InnerProg.Close(); err != nil {
 			return fmt.Errorf("failed to close eBPF program: %w", err)
 		}
@@ -331,32 +374,16 @@ func (p *ProgramManager) AttachProgram(programName string, hookName string) erro
 			return fmt.Errorf("failed to attach XDP program: %w", err)
 		}
 	case HookTypeTCIngress:
-		// Get the interface
-		iface, err := netlink.LinkByName(prog.Interface)
-		if err != nil {
-			return fmt.Errorf("failed to get interface %s: %w", prog.Interface, err)
-		}
-		// Attach TC ingress program
-		l, err = link.AttachTCX(link.TCXOptions{
-			Program:   prog.InnerProg,
-			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCXIngress,
-		})
+		// attachTCProgram wraps both the owned-loader and legacy
+		// (Code-based) paths. On Linux the helper ensures a clsact
+		// qdisc is in place before calling AttachTCX. On non-Linux it
+		// returns ErrEBPFUnsupportedPlatform.
+		l, err = attachTCProgram(prog, ebpf.AttachTCXIngress)
 		if err != nil {
 			return fmt.Errorf("failed to attach TC ingress program: %w", err)
 		}
 	case HookTypeTCEgress:
-		// Get the interface
-		iface, err := netlink.LinkByName(prog.Interface)
-		if err != nil {
-			return fmt.Errorf("failed to get interface %s: %w", prog.Interface, err)
-		}
-		// Attach TC egress program
-		l, err = link.AttachTCX(link.TCXOptions{
-			Program:   prog.InnerProg,
-			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCXEgress,
-		})
+		l, err = attachTCProgram(prog, ebpf.AttachTCXEgress)
 		if err != nil {
 			return fmt.Errorf("failed to attach TC egress program: %w", err)
 		}
@@ -480,35 +507,17 @@ func (p *ProgramManager) ReplaceProgram(oldName, newName string) error {
 			return fmt.Errorf("failed to attach XDP program: %w", err)
 		}
 	case HookTypeTCIngress:
-		// Get the interface
-		iface, err := netlink.LinkByName(newProg.Interface)
-		if err != nil {
-			return fmt.Errorf("failed to get interface %s: %w", newProg.Interface, err)
+		tcLink, tcErr := attachTCProgram(newProg, ebpf.AttachTCXIngress)
+		if tcErr != nil {
+			return fmt.Errorf("failed to attach TC ingress program: %w", tcErr)
 		}
-		// Attach TC ingress program
-		l, err = link.AttachTCX(link.TCXOptions{
-			Program:   newProg.InnerProg,
-			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCXIngress,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to attach TC ingress program: %w", err)
-		}
+		l = tcLink
 	case HookTypeTCEgress:
-		// Get the interface
-		iface, err := netlink.LinkByName(newProg.Interface)
-		if err != nil {
-			return fmt.Errorf("failed to get interface %s: %w", newProg.Interface, err)
+		tcLink, tcErr := attachTCProgram(newProg, ebpf.AttachTCXEgress)
+		if tcErr != nil {
+			return fmt.Errorf("failed to attach TC egress program: %w", tcErr)
 		}
-		// Attach TC egress program
-		l, err = link.AttachTCX(link.TCXOptions{
-			Program:   newProg.InnerProg,
-			Interface: iface.Attrs().Index,
-			Attach:    ebpf.AttachTCXEgress,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to attach TC egress program: %w", err)
-		}
+		l = tcLink
 	case HookTypeSockOps, HookTypeCGroup:
 		return fmt.Errorf("hot swap not supported for hook type %s", oldHookType)
 	default:

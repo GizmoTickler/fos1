@@ -2,8 +2,14 @@
 
 This directory holds pre-compiled BPF ELF objects that are embedded into the
 Go binary via `//go:embed`. Commit the compiled `.o` files here so the binary
-ships with a working eBPF program without requiring `clang` on every build
+ships with working eBPF programs without requiring `clang` on every build
 machine.
+
+Currently embedded:
+
+- `xdp_ddos_drop.o` — XDP denylist drop (Sprint 30 Ticket 38).
+- `tc_qos_shape.o` — TC classifier that marks `skb->priority` per
+  interface (Sprint 30 Ticket 39).
 
 ## Regenerating
 
@@ -11,17 +17,19 @@ From the repository root:
 
 ```
 make bpf-objects
-cp bpf/out/xdp_ddos_drop.o pkg/hardware/ebpf/bpf/xdp_ddos_drop.o
 ```
 
-The `bpf-objects` target requires an LLVM-based `clang` with a `bpf` target
-(Apple's bundled clang does not include the BPF backend; install the LLVM
-Homebrew formula or run on a Linux host with a stock `clang`).
+The `bpf-objects` target discovers every `bpf/*.c` source, compiles each
+into `bpf/out/*.o`, and copies the result into this directory. It requires
+an LLVM-based `clang` with a `bpf` target (Apple's bundled clang does not
+include the BPF backend; install the LLVM Homebrew formula — e.g.
+`brew install llvm@21` — or run on a Linux host with a stock `clang`, then
+pass `BPF_CLANG=/opt/homebrew/opt/llvm@21/bin/clang`).
 
 ## Missing object
 
-If `xdp_ddos_drop.o` does not exist here, `NewXDPLoader` returns
-`ErrEBPFObjectMissing` and callers see an explicit, actionable failure rather
-than a silent success. This lets the Go tree build on platforms where a
-BPF-capable clang is not installed, while still preventing the runtime from
-pretending it has loaded a program.
+If an expected `.o` file is absent, the matching loader (`NewXDPLoader` /
+`NewTCLoader`) returns `ErrEBPFObjectMissing` and callers see an explicit,
+actionable failure rather than a silent success. This lets the Go tree
+build on platforms where a BPF-capable clang is not installed, while still
+preventing the runtime from pretending it has loaded a program.

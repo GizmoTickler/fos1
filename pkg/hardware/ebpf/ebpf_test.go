@@ -119,13 +119,16 @@ func TestProgramManager_LoadXDPWithoutCodeUsesOwnedLoader(t *testing.T) {
 	assert.NotContains(t, err.Error(), "no program code provided")
 }
 
-func TestProgramManager_LoadRejectsNonXDPTypes(t *testing.T) {
+// TestProgramManager_LoadRejectsUnsupportedTypes asserts that the
+// program-manager dispatch still returns ErrEBPFProgramTypeUnsupported
+// for program types without an owned loader. Sprint 30 / Ticket 39
+// added TC ingress/egress support, so this test covers the remaining
+// unsupported shapes (sockops, cgroup, and anything unrecognised).
+func TestProgramManager_LoadRejectsUnsupportedTypes(t *testing.T) {
 	mm := NewMapManager()
 	pm := NewProgramManager(mm, "")
 
 	for _, typ := range []string{
-		ProgramTypeTCIngress,
-		ProgramTypeTCEgress,
 		ProgramTypeSockOps,
 		ProgramTypeCGroup,
 		"unknown-type",
@@ -134,6 +137,26 @@ func TestProgramManager_LoadRejectsNonXDPTypes(t *testing.T) {
 		assert.Error(t, err, "expected %q to be rejected", typ)
 		assert.ErrorIs(t, err, ErrEBPFProgramTypeUnsupported,
 			"type %q must return ErrEBPFProgramTypeUnsupported", typ)
+	}
+}
+
+// TestProgramManager_LoadTCTypesUsesOwnedLoader mirrors the XDP-side
+// coverage: a LoadProgram call with a TC type and no caller-supplied
+// Code must flow through the owned TCLoader. On hosts without the
+// embedded BPF object or without BPF privileges the call fails, but
+// the error must NOT be ErrEBPFProgramTypeUnsupported — that would
+// signal we regressed the dispatch and stopped wiring TC through the
+// owned loader.
+func TestProgramManager_LoadTCTypesUsesOwnedLoader(t *testing.T) {
+	mm := NewMapManager()
+	pm := NewProgramManager(mm, "")
+
+	for _, typ := range []string{ProgramTypeTCIngress, ProgramTypeTCEgress} {
+		err := pm.LoadProgram(Program{Name: "tc-" + typ, Type: typ})
+		assert.Error(t, err, "expected %q to fail without a BPF-capable environment", typ)
+		assert.NotErrorIs(t, err, ErrEBPFProgramTypeUnsupported,
+			"type %q must route through the owned TC loader, not the unsupported-type bail-out", typ)
+		assert.NotContains(t, err.Error(), "no program code provided")
 	}
 }
 

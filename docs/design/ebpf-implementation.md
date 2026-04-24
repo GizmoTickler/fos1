@@ -514,50 +514,66 @@ int xdp_main(struct xdp_md *ctx) {
 char _license[] SEC("license") = "GPL";
 ```
 
-## Compile and Load Pipeline (Sprint 30 Ticket 38)
+## Compile and Load Pipeline (Sprint 30 Tickets 38 / 39)
 
-The owned compile/load path lands one XDP program — `xdp_ddos_drop` — end
-to end. This section describes how the source, object, embed, and
-loader fit together, and labels the program types that are explicitly
-out of scope for v1.
+The owned compile/load path lands two programs end to end:
+
+- `xdp_ddos_drop` — XDP denylist drop (Ticket 38).
+- `tc_qos_shape` — TC classifier that marks `skb->priority` per
+  interface for classful shaping (Ticket 39).
+
+This section describes how the sources, objects, embeds, and loaders
+fit together, and labels the program types that are explicitly out of
+scope.
 
 ### Source layout
 
-- `bpf/xdp_ddos_drop.c` — the single owned XDP source. Parses
-  Ethernet/IPv4 and drops packets whose source address is present in an
-  LPM-trie denylist map; passes everything else.
+- `bpf/xdp_ddos_drop.c` — owned XDP source. Parses Ethernet/IPv4 and
+  drops packets whose source address is present in an LPM-trie
+  denylist map; passes everything else.
+- `bpf/tc_qos_shape.c` — owned TC source. Defines two `SchedCLS`
+  programs (`tc_qos_ingress` / `tc_qos_egress`) that look the skb's
+  ifindex up in a `BPF_MAP_TYPE_HASH` map (`qos_iface_priority`) and,
+  on a hit, stamp the configured priority onto `skb->priority`. Never
+  drops.
 - `bpf/headers/bpf_helpers.h` — pinned minimal subset of libbpf's
   `bpf_helpers.h`. Pinning (rather than vendoring all of libbpf) keeps
   the repository reproducible and avoids pulling a submodule.
+- `bpf/headers/vmlinux_minimal.h` — pinned UAPI subset. Ticket 39
+  extended this with a minimal `struct __sk_buff` (up to and including
+  `priority`, `ifindex`, `data`, `data_end`) and the `TC_ACT_*` return
+  codes used by classifier programs.
 - `bpf/out/` — build output directory, `.gitignore`d. Produced by
   `make bpf-objects`.
-- `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o` — the compiled ELF object
-  that Go embeds into the binary via `//go:embed`.
+- `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o` and `tc_qos_shape.o` — the
+  compiled ELF objects that Go embeds into the binary via `//go:embed`.
 
 ### Build target
 
-`make bpf-objects` runs:
+`make bpf-objects` discovers every `bpf/*.c` source and compiles it
+with:
 
 ```
 clang -O2 -g -target bpf -D__TARGET_ARCH_<arch> -I bpf/headers \
-  -Wall -Werror -c bpf/xdp_ddos_drop.c -o bpf/out/xdp_ddos_drop.o
+  -Wall -Werror -c bpf/<name>.c -o bpf/out/<name>.o
 ```
 
 The target pre-flights the clang binary with `clang -print-targets` and
 aborts with an actionable error if the BPF backend is missing. Apple's
 system `/usr/bin/clang` does not include the BPF backend; use
-`brew install llvm` and pass `BPF_CLANG=/opt/homebrew/opt/llvm/bin/clang`,
+`brew install llvm` and pass `BPF_CLANG=/opt/homebrew/opt/llvm@21/bin/clang`,
 or run the target on a Linux host with upstream clang.
 
-After `make bpf-objects` produces `bpf/out/xdp_ddos_drop.o`, the target
-copies it into `pkg/hardware/ebpf/bpf/` so `go build` picks up the new
+After `make bpf-objects` produces `bpf/out/*.o`, the target copies every
+object into `pkg/hardware/ebpf/bpf/` so `go build` picks up the new
 embed contents.
 
-A `go:generate` directive on `pkg/hardware/ebpf/xdp_loader_linux.go`
-provides the same hook for `go generate` flows:
+`go:generate` directives on the loader files provide the same hook for
+`go generate` flows (one per program):
 
 ```
 //go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/xdp_ddos_drop.o pkg/hardware/ebpf/bpf/xdp_ddos_drop.o"
+//go:generate sh -c "cd ../../.. && make bpf-objects && cp bpf/out/tc_qos_shape.o pkg/hardware/ebpf/bpf/tc_qos_shape.o"
 ```
 
 ### Loader seam
@@ -581,23 +597,78 @@ The non-Linux build in `xdp_loader_stub.go` returns
 `ErrEBPFUnsupportedPlatform` from every method. `go build ./...`
 succeeds on macOS/Windows; the XDP surface is simply unusable there.
 
+### TC loader seam (Ticket 39)
+
+`pkg/hardware/ebpf/tc_loader_linux.go` mirrors the XDP seam:
+
+- `TCQoSShapeObject() ([]byte, error)` returns the embedded TC ELF,
+  or `ErrEBPFObjectMissing` when `make bpf-objects` has not been run.
+- `NewTCLoader(objectBytes) (*TCLoader, error)` parses the ELF, bumps
+  `RLIMIT_MEMLOCK`, validates capabilities, and asserts that both
+  `tc_qos_ingress` and `tc_qos_egress` plus the `qos_iface_priority`
+  map are present in the collection. Mismatches fail loudly rather
+  than producing a half-loaded loader.
+- `TCLoader.SetPriority(iface string, prio uint32) error` /
+  `ClearPriority(iface string) error` are thin wrappers around the
+  backing map so user-space controllers do not need to resolve
+  ifindex themselves.
+- `TCLoader.AttachIngress(iface) / AttachEgress(iface)` ensure a
+  `clsact` qdisc exists on the target (`netlink.QdiscAdd(...)` with
+  `Parent: HANDLE_CLSACT`, tolerating `EEXIST`) and then call
+  `link.AttachTCX` with `ebpf.AttachTCXIngress` / `Egress`. Qdisc
+  errors are wrapped with `ErrTCQdiscUnsupported` so operators can
+  distinguish "this environment cannot clsact" from "the attach
+  itself failed".
+
+**Kernel requirements:** `AttachTCX` requires Linux >= 6.6 (the TCX
+hook landed in v6.6). Older kernels that only support classic tc
+filters would need a netlink-tc attach path; we treat that as a
+non-goal because TCX is upstream-forward and removes the filter-
+priority bookkeeping tc(8) imposes. The integration test skips with
+`t.Skip` on `ENOTSUP` / `EINVAL`.
+
+The non-Linux build in `tc_loader_stub.go` returns
+`ErrEBPFUnsupportedPlatform` from every method; darwin `go build`
+still succeeds.
+
 ### Program-manager dispatch
 
-`pkg/hardware/ebpf/program_manager.go`'s `LoadProgram` now dispatches
-on `Program.Type`:
+`pkg/hardware/ebpf/program_manager.go`'s `LoadProgram` dispatches on
+`Program.Type`:
 
-- `ProgramTypeXDP` with empty Code → load the owned embedded object via
-  `XDPLoader`.
-- `ProgramTypeXDP` with non-empty Code → legacy path (caller-supplied
-  ELF bytes, used by `compiler.go` and hand-compiled tests).
-- `ProgramTypeTCIngress`, `ProgramTypeTCEgress`, `ProgramTypeSockOps`,
-  `ProgramTypeCGroup`, or any unknown string → return
-  `ErrEBPFProgramTypeUnsupported`.
+- `ProgramTypeXDP` with empty Code → load the owned embedded XDP
+  object via `XDPLoader`.
+- `ProgramTypeTCIngress` / `ProgramTypeTCEgress` with empty Code →
+  load the owned embedded TC object via `TCLoader`; `InnerProg` is
+  bound to the ingress or egress section as requested, the other
+  section stays live inside the collection until `Close`.
+- Any of the three above with non-empty Code → legacy path (caller-
+  supplied ELF bytes, used by `compiler.go` and hand-compiled tests).
+- `ProgramTypeSockOps`, `ProgramTypeCGroup`, or any unknown string →
+  return `ErrEBPFProgramTypeUnsupported`.
 
-Extending the owned path to TC ingress/egress is explicit non-goal for
-Ticket 38 and is tracked by Ticket 39.
+`AttachProgram` routes TC hook types through the shared
+`attachTCProgram` helper, which prefers the owned loader's attach
+path (with clsact bootstrap and map wiring in one place) and falls
+back to a raw `link.AttachTCX` call (still with best-effort clsact
+bootstrap) for legacy Code-based loads.
 
-### Integration test
+### Composition with the Cilium Bandwidth Manager path (Ticket 45)
+
+Ticket 45's `QoSProfile` controller translates pod-selector + egress
+bandwidth into `kubernetes.io/egress-bandwidth` annotations that
+Cilium's in-kernel Bandwidth Manager enforces on the pod's netdev
+(`lxc*`). That is orthogonal to the Ticket 39 TC loader, which is
+intended to attach to VLAN / physical uplink NICs where Bandwidth
+Manager has no hook. The two paths are composable — per-pod egress
+caps run on the pod side, classful priority marking runs on the
+uplink side — and there is no overlap in state: neither writes the
+other's annotations or maps. Ticket 39 deliberately does **not** wire
+a new CRD consumer; the loader ships as infrastructure a future
+`VLANShaper`-style controller can call, which keeps the change
+focused and avoids re-litigating Ticket 45's CRD surface.
+
+### Integration tests
 
 `pkg/hardware/ebpf/xdp_loader_linux_test.go` runs only on Linux. It:
 
@@ -607,15 +678,32 @@ Ticket 38 and is tracked by Ticket 39.
 4. Loads the program, attaches it, asserts a non-nil link handle.
 5. Detaches and removes the interface in `t.Cleanup`.
 
+`pkg/hardware/ebpf/tc_loader_linux_test.go` follows the same pattern
+for TC:
+
+1. Skips on missing embedded object, missing caps, or pre-6.6 kernel
+   (detected via `ENOTSUP` / `EINVAL` from `AttachTCX`).
+2. Creates a dummy interface `fos1testtc`.
+3. Loads the collection, populates + clears the priority map, attaches
+   both ingress and egress TCX links, asserts non-nil handles, and
+   detaches.
+4. A separate `TestEnsureClsactQdisc_Idempotent` asserts the clsact
+   bootstrap tolerates `EEXIST`.
+
 ### Non-goals for v1
 
-- TC / sockops / cgroup loaders — Ticket 39 extends to TC.
+- sockops / cgroup loaders — future tickets.
+- Classful HTB shaping attached automatically by the controller — the
+  TC loader exposes the priority-marking primitive; a future ticket
+  wires it to a VLAN shaper CR alongside the existing tc-binary-backed
+  implementation in `pkg/network/vlan/qos.go`.
 - Packet-level DDoS heuristics (the denylist is populated elsewhere).
-- BTF-based CO-RE vs. legacy compile — the current program is legacy
-  (explicit headers); CO-RE is a follow-up if kernel drift becomes an
-  operational problem.
+- BTF-based CO-RE vs. legacy compile — the current programs are
+  legacy (explicit headers); CO-RE is a follow-up if kernel drift
+  becomes an operational problem.
 - User-space map population controller — a future ticket wires the
-  Suricata / threat-intel pipeline to `DenylistMap()`.
+  Suricata / threat-intel pipeline to `DenylistMap()` and a future
+  VLANShaper wires uplink interfaces to `PriorityMap()`.
 
 ## Implementation Plan
 

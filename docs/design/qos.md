@@ -1,11 +1,13 @@
 # QoS Enforcement Design (v1)
 
-**Status:** Accepted (Sprint 30 / Ticket 45)
+**Status:** Accepted (Sprint 30 / Ticket 45; complemented by Ticket 39)
 **Supersedes:** Legacy TC-based prototype in `pkg/security/qos/manager.go`
 (removed in Ticket 45)
 **Related:**
 [ADR-0001 Cilium-first control plane](adr-0001-cilium-first-control-plane-contract.md),
-Ticket 39 (TC-bpf shaping — separate, orthogonal effort).
+Ticket 39 (TC-attached QoS classifier — orthogonal uplink-side loader,
+delivered as infrastructure in `pkg/hardware/ebpf.TCLoader` +
+`bpf/tc_qos_shape.c`).
 
 ---
 
@@ -70,15 +72,21 @@ integrates with pod lifecycle events we already receive.
 ## Non-Goals (v1)
 
 - **Classful HTB shaping.** DSCP-aware class bands with per-class rate +
-  ceiling live under Ticket 39. The TC-bpf loader there attaches to
-  **uplink** NICs; it does not overlap with per-pod Bandwidth Manager.
+  ceiling live under a future VLAN-shaper controller. Ticket 39 ships
+  the underlying TC-bpf loader (`pkg/hardware/ebpf.TCLoader` +
+  `bpf/tc_qos_shape.c`) that attaches to **uplink** NICs via a `clsact`
+  qdisc and stamps `skb->priority` for downstream classful qdiscs —
+  there is no CR consumer yet, by design. It does not overlap with
+  per-pod Bandwidth Manager.
 - **Ingress rate limiting in the data path.** Cilium's Bandwidth Manager
   currently enforces **egress only**. The CR accepts an ingress value so
   the control plane is forward-compatible, but operators should not
   expect ingress enforcement today — that's a Cilium/kernel capability
   we adopt when it lands.
-- **Per-VLAN QoS tagging (802.1p).** Also Ticket 39 territory; handled in
-  the VLAN manager's queue-mapping path, not in per-pod annotations.
+- **Per-VLAN QoS tagging (802.1p).** Handled in the VLAN manager's
+  queue-mapping path (`pkg/network/vlan/qos.go`), either via the `ip`
+  command fallback or via the Ticket 39 TC-bpf loader; not in per-pod
+  annotations.
 - **Hardware offload** of the rate limiter. Cilium's BPF-TBF runs on the
   host CPU. Intel I225/X540/X550 hardware traffic classes belong to
   Ticket 35's hardware-integration track.

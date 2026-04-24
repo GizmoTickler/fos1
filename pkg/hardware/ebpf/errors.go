@@ -27,4 +27,12 @@ var (
 	// Go tree buildable on non-BPF hosts without shipping placeholder
 	// success paths.
 	ErrEBPFObjectMissing = errors.New("eBPF: embedded BPF object missing; run `make bpf-objects`")
+
+	// ErrTCQdiscUnsupported is returned when the TC loader cannot
+	// bootstrap a `clsact` qdisc on the target interface (missing kernel
+	// support, insufficient privileges, or an incompatible existing
+	// qdisc). Callers should surface the wrapped error to operators —
+	// clsact is supported on every kernel >= 4.5 so a failure here
+	// almost always reflects environment, not the loader.
+	ErrTCQdiscUnsupported = errors.New("eBPF: clsact qdisc bootstrap failed")
 )

@@ -3,6 +3,7 @@
 package vlan
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -10,6 +11,31 @@ import (
 	"github.com/vishvananda/netlink"
 	"k8s.io/klog/v2"
 )
+
+// ErrVLANPrioritySysfsUnsupported is the sentinel returned by
+// setVLANPriorityViaSysfs to signal that the sysfs-backed configuration
+// path is not implemented.
+//
+// Historical note: the sysfs path was a speculative fast-path for
+// setting 802.1p egress priority mapping without forking `ip`. Modern
+// kernels expose the mapping exclusively through the rtnetlink
+// IFLA_VLAN_EGRESS_QOS / IFLA_VLAN_INGRESS_QOS attributes (see
+// include/uapi/linux/if_link.h), not via sysfs — there is no stable
+// sysfs knob to write here. The sibling `setVLANPriorityViaIP` path
+// uses the `ip link set ... egress` syntax which speaks that same
+// netlink API under the hood.
+//
+// The eBPF-based alternative (Sprint 30 / Ticket 39) attaches
+// `bpf/tc_qos_shape.c` through `pkg/hardware/ebpf.TCLoader` against a
+// `clsact` qdisc and stamps `skb->priority` per interface — useful
+// when the shaper must run without invoking `ip` and when VLAN-scoped
+// priorities need to be changed without flapping the netdev.
+//
+// SetVLANPriority falls through to the `ip` path when this sentinel
+// surfaces, so callers get a working result regardless of the
+// environment. errors.Is(err, ErrVLANPrioritySysfsUnsupported) is the
+// intended discriminator for log-level decisions.
+var ErrVLANPrioritySysfsUnsupported = errors.New("vlan: sysfs egress-priority path is unsupported by the kernel ABI; use the ip-command fallback or pkg/hardware/ebpf.TCLoader with bpf/tc_qos_shape.c")
 
 // QoSManager handles QoS configuration for VLAN interfaces
 type QoSManager struct{}
@@ -62,15 +88,19 @@ func (q *QoSManager) SetVLANPriority(linkName string, priority int) error {
 	return nil
 }
 
-// setVLANPriorityViaSysfs sets VLAN priority using sysfs
+// setVLANPriorityViaSysfs is the explicit non-goal branch of
+// SetVLANPriority. See ErrVLANPrioritySysfsUnsupported for the full
+// rationale: the kernel exposes VLAN egress-priority mapping through
+// rtnetlink (IFLA_VLAN_EGRESS_QOS), not sysfs, so there is no stable
+// file to write here. The function is retained as a named call site so
+// the fallback logic in SetVLANPriority has a clear decision point and
+// so callers who expected a sysfs path get an actionable error message
+// pointing at both the `ip` fallback and the eBPF-based alternative
+// from Sprint 30 / Ticket 39.
 func (q *QoSManager) setVLANPriorityViaSysfs(ifname string, priority int) error {
-	// Modern kernels expose VLAN egress priority mapping via sysfs
-	// This is a simplified approach - in production you might need more sophisticated handling
-	// The actual sysfs path and method may vary by kernel version
-
-	// For now, we'll return an error to fall back to the ip command
-	// In a production system, you'd implement proper sysfs manipulation here
-	return fmt.Errorf("sysfs VLAN priority setting not implemented, will use ip command")
+	_ = ifname
+	_ = priority
+	return ErrVLANPrioritySysfsUnsupported
 }
 
 // setVLANPriorityViaIP sets VLAN priority using the ip command
