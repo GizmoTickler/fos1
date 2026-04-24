@@ -1,13 +1,15 @@
-// Package api implements the read-only REST management API (v0) for the fos1
+// Package api implements the REST management API for the fos1
 // router/firewall. It exposes a single resource family, FilterPolicy, over
 // HTTPS with mTLS client-cert authentication. The server is backed by a
 // controller-runtime client so it shares a cached view of the cluster with
 // other in-process controllers when run side-by-side.
 //
-// Scope: v0 is READ-ONLY. There are no POST/PUT/PATCH/DELETE routes, no
-// watch/streaming endpoints, and no resource families beyond FilterPolicy.
-// See docs/design/api-server.md for the full architecture and the list of
-// explicit deferrals.
+// Scope: Sprint 30 Ticket 41 shipped list/get (read-only v0). Sprint 31
+// Ticket 48 adds Create (POST), Replace (PUT), Patch (JSON Merge Patch /
+// Strategic Merge Patch), and Delete verbs. Watch / streaming endpoints
+// and additional resource families (NAT, routing, DPI, zones) remain
+// explicit non-goals. See docs/design/api-server.md for the full
+// architecture and the list of explicit deferrals.
 package api
 
 import (
@@ -141,11 +143,12 @@ func NewServer(c client.Client, cfg ServerConfig) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// List + Get FilterPolicy. The handler dispatches between the two
-	// shapes based on path segments.
+	// List/Create FilterPolicy on the collection route; Get/Replace/
+	// Patch/Delete on the item route. handleList and handleItem
+	// internally dispatch on HTTP method.
 	fpHandler := &FilterPolicyHandler{Client: s.Client}
 	mux.HandleFunc("/v1/filter-policies", fpHandler.handleList)
-	mux.HandleFunc("/v1/filter-policies/", fpHandler.handleGet)
+	mux.HandleFunc("/v1/filter-policies/", fpHandler.handleItem)
 
 	// Health probes. /healthz is cheap; /readyz consults the informer
 	// cache via Readiness.
@@ -181,7 +184,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	klog.InfoS("api server listening", "address", s.Config.Address, "endpoints", []string{
-		"/v1/filter-policies", "/v1/filter-policies/{ns}/{name}",
+		"GET/POST /v1/filter-policies",
+		"GET/PUT/PATCH/DELETE /v1/filter-policies/{ns}/{name}",
 		"/healthz", "/readyz", "/openapi.json",
 	})
 

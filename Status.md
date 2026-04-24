@@ -10,13 +10,13 @@ Sprint 30 closed the critical-path production gaps that Sprint 29 had deferred:
 - **eBPF XDP compile + load** — `bpf/xdp_ddos_drop.c` compiles via `make bpf-objects` into an ELF committed at `pkg/hardware/ebpf/bpf/xdp_ddos_drop.o`, embedded through `//go:embed`, and loaded via `github.com/cilium/ebpf`. Linux-only integration test attaches XDP to a `netlink.Dummy` interface; skips without `CAP_BPF`/`CAP_NET_ADMIN`. Non-XDP program types return `ErrEBPFProgramTypeUnsupported` (Ticket 38).
 - **eBPF TC QoS shaping + qdisc bootstrap** — `bpf/tc_qos_shape.c` plus `pkg/hardware/ebpf/tc_loader_linux.go`. Clsact qdisc bootstrap is idempotent; attach via `AttachTCX` (kernel ≥ 6.6); per-ifindex priority map exposed for user-space population before attach. Infrastructure surface for a future VLAN-shaper controller (Ticket 39).
 - **Shared CRD status writeback helper** — `pkg/controllers/status/writer.go` lifts the NAT controller's `writeStatusToCRD` idiom into a reusable helper. Adopted by FilterPolicy (closes the Sprint 29 Ticket 33 in-memory-only caveat), NAT, and MultiWAN. Round-trip tests verify retry-on-conflict (Ticket 40).
-- **Read-only REST API v0** — `cmd/api-server/` and `pkg/api/` expose `/v1/filter-policies` list+get, `/healthz`, `/readyz`, `/openapi.json` behind `tls.RequireAndVerifyClientCert` with a ConfigMap-backed Subject-CN allowlist. Base manifests at `manifests/base/api/`. `pkg/api.TestMTLSEndToEnd` asserts 200/403/handshake-failure cases (Ticket 41).
+- **CRUD v1 REST API for FilterPolicy** — `cmd/api-server/` and `pkg/api/` expose the full `/v1/filter-policies` surface (GET list, POST create, GET/PUT/PATCH/DELETE per-object) plus `/healthz`, `/readyz`, `/openapi.json` behind `tls.RequireAndVerifyClientCert` with a ConfigMap-backed Subject-CN allowlist. PATCH accepts JSON Merge Patch and Strategic Merge Patch content types; PUT requires `metadata.resourceVersion` for optimistic concurrency; server-side validation rejects malformed specs with a structured 422. Base manifests at `manifests/base/api/`; `pkg/api.TestMTLSEndToEnd` asserts 200/403/handshake/POST round-trip cases (Ticket 41 shipped list/get v0; Sprint 31 Ticket 48 added the write verbs).
 - **Minimum-privilege RBAC** — every ServiceAccount bound to a scoped ClusterRole. `scripts/ci/prove-no-cluster-admin.sh` blocks any `ClusterRoleBinding` targeting `cluster-admin` without an explicit `fos1.io/rbac-exception` annotation. Per-controller verb/resource table at `docs/design/rbac-baseline.md` (Ticket 42).
 - **NAT policy apply performance baseline** — `tools/bench/nat_apply_bench_test.go` with ops/s + p50/p95/p99 latency recorded at `docs/performance/baseline-2026-04.md`; regressions flagged as warnings in CI (non-blocking) (Ticket 43).
 - **URLhaus threat-intel v0** — `ThreatFeed` CRD + `cmd/threatintel-controller/` + `pkg/security/threatintel/` parses URLhaus CSV and translates into Cilium deny policies with last-seen TTL. `ThreatFeed.Status` reports last-fetch time, entry count, expiry state. MISP/STIX remain non-goals (Ticket 44).
 - **QoS via Cilium Bandwidth Manager** — `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation → BPF TBF rate limiter at pod admission via `pkg/security/qos.BandwidthManager`. Per-pod egress only in v1; ingress enforcement and classful/uplink TC shaping remain future work (Ticket 45).
 
-What remains for production readiness lives in Sprint 31 (placeholder scope): HA/clustering, write-path REST API verbs, broader eBPF program types (sockops/cgroup), additional threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets management, ingress rate limiting, and a VLAN-shaper controller on top of the Ticket 39 infrastructure. See `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening".
+Sprint 31 is in flight — Ticket 48 landed write-path CRUD v1 on the REST API for FilterPolicy (POST/PUT/PATCH/DELETE with server-side validation, optimistic concurrency on PUT, JSON Merge Patch + Strategic Merge Patch content-type dispatch on PATCH). What remains for production readiness: HA/clustering, broader eBPF program types (sockops/cgroup), additional threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets management, ingress rate limiting, and a VLAN-shaper controller on top of the Ticket 39 infrastructure. See `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening".
 
 ## Verification Snapshot
 
@@ -62,7 +62,7 @@ Sprint 30 (tickets 38-46) is fully merged. The next phase is **Sprint 31 (placeh
 Candidate Sprint 31 workstreams (in rough priority order):
 
 1. **HA / clustering** — single-node Elasticsearch, Prometheus, Grafana, Alertmanager today. Controllers run single-replica with no leader election. Largest residual production blocker.
-2. **Write-path REST API** — Ticket 41 shipped read-only `/v1/filter-policies`. Mutating verbs, watch/streaming endpoints, and additional resource families (NAT, routing, DPI, zones) remain.
+2. **Watch/streaming + additional resource families on REST API** — Ticket 48 extended FilterPolicy to full CRUD. Watch/streaming endpoints and additional resource families (NAT, routing, DPI, zones) remain.
 3. **Broader eBPF program types** — add sockops and cgroup loaders alongside the Ticket 38 XDP + Ticket 39 TC path.
 4. **Performance coverage beyond one hot path** — NAT policy apply is baselined; DPI event → Cilium policy, routing sync, DHCP control socket, DNS zone update remain unbenchmarked.
 5. **Inter-controller TLS + secrets management** — Ticket 41 added mTLS for the REST API only. Controller-to-controller service TLS and a documented secrets model are open.
@@ -396,7 +396,7 @@ Closed in Sprint 29:
 Closed in Sprint 30:
 - **eBPF compile + load** — XDP (`bpf/xdp_ddos_drop.c`) and TC (`bpf/tc_qos_shape.c`) programs compile via `make bpf-objects`, embed through `//go:embed`, and load via `github.com/cilium/ebpf`. TC bootstraps a clsact qdisc idempotently and attaches via `AttachTCX` (kernel ≥ 6.6). Linux-only integration tests skip without `CAP_BPF`/`CAP_NET_ADMIN` (Tickets 38, 39).
 - **Shared CRD status writeback helper** — `pkg/controllers/status.Writer` lifts the NAT `writeStatusToCRD` pattern. Adopted by FilterPolicy (closes the Sprint 29 in-memory-only caveat), NAT, MultiWAN. Round-trip tests assert retry-on-conflict (Ticket 40).
-- **Read-only REST API v0** — `cmd/api-server/` exposes `/v1/filter-policies` list+get, `/healthz`, `/readyz`, `/openapi.json` behind `tls.RequireAndVerifyClientCert` with a ConfigMap-backed Subject-CN allowlist. `pkg/api.TestMTLSEndToEnd` asserts 200/403/handshake-failure (Ticket 41).
+- **REST API** — Sprint 30 Ticket 41 shipped read-only `/v1/filter-policies` list+get, `/healthz`, `/readyz`, `/openapi.json` behind `tls.RequireAndVerifyClientCert` with a ConfigMap-backed Subject-CN allowlist. Sprint 31 Ticket 48 added the full CRUD surface (POST/PUT/PATCH/DELETE) for FilterPolicy with server-side validation (422 with structured causes), optimistic concurrency on PUT, and JSON Merge Patch + Strategic Merge Patch dispatch on PATCH. `pkg/api.TestMTLSEndToEnd` asserts 200/403/handshake/POST round-trip cases.
 - **Minimum-privilege RBAC** — `scripts/ci/prove-no-cluster-admin.sh` blocks any `ClusterRoleBinding` to `cluster-admin` without an explicit `fos1.io/rbac-exception` annotation. Per-controller verb/resource table at `docs/design/rbac-baseline.md` (Ticket 42).
 - **NAT policy apply performance baseline** — `tools/bench/nat_apply_bench_test.go` plus `docs/performance/baseline-2026-04.md`. Regressions flagged as warnings in CI (Ticket 43).
 - **Threat-intel feed ingestion v0** — URLhaus CSV → `ThreatFeed` CRD → Cilium deny policies with last-seen TTL (Ticket 44).
@@ -414,16 +414,22 @@ Still open for Sprint 31+:
 
 **Impact:** Single point of failure. Remains the largest residual production blocker after Sprint 30.
 
-### 2. Write-Path Management API ❌ (Sprint 31 candidate)
+### 2. REST API Surface Expansion ⚠️ (Sprint 31+)
 
-**What's Missing (on top of the Ticket 41 read-only v0):**
-- Write verbs (POST/PUT/PATCH/DELETE) — explicit non-goal for v0.
+**What's Shipped (Sprint 31 Ticket 48):**
+- Write verbs on FilterPolicy: POST, PUT (optimistic concurrency), PATCH (JSON Merge Patch + Strategic Merge Patch), DELETE (with propagationPolicy).
+- Server-side validation with structured 422 `Invalid` bodies.
+- Audit-shaped klog lines for every write attempt.
+- RBAC updated to grant create/update/patch/delete on `filterpolicies.security.fos1.io`.
+
+**Still Missing:**
 - Watch / streaming endpoints.
 - Resource families beyond FilterPolicy (NAT, routing, DPI, zones).
-- OAuth / OIDC / SPIFFE — v0 is mTLS only.
+- `application/apply-patch+yaml` (Server-Side Apply) and `application/json-patch+json` (RFC 6902) content types on PATCH.
+- OAuth / OIDC / SPIFFE — mTLS remains the single auth model.
 - No gRPC API server; no web UI backend.
 
-**Impact:** Operators can list and get FilterPolicy via the API but still mutate via `kubectl` + CRDs. Write-path extension is the natural next step.
+**Impact:** Operators can now fully manage FilterPolicy via the API (no more `kubectl` + CRD round-trips). Watch/streaming and the other resource families are the next natural steps.
 
 ### 3. Broader eBPF Program Types ❌ (Sprint 31 candidate)
 

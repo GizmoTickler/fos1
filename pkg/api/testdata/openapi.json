@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "fos1 Management API",
-    "version": "0.1.0",
-    "description": "Read-only REST management API v0 for the fos1 Kubernetes router/firewall. Authentication is mTLS client certificates whose Subject CN must appear in the server allowlist."
+    "version": "0.2.0",
+    "description": "REST management API for the fos1 Kubernetes router/firewall. Sprint 30 Ticket 41 shipped list/get (read-only v0); Sprint 31 Ticket 48 added Create, Replace (PUT), Patch (JSON Merge Patch / Strategic Merge Patch), and Delete. Authentication is mTLS client certificates whose Subject CN must appear in the server allowlist."
   },
   "servers": [
     {
@@ -24,11 +24,39 @@
         "required": ["kind", "status", "code", "reason", "message"],
         "properties": {
           "kind":    { "type": "string", "enum": ["Status"] },
-          "status":  { "type": "string", "enum": ["Failure"] },
+          "status":  { "type": "string", "enum": ["Failure", "Success"] },
           "code":    { "type": "integer", "format": "int32" },
           "reason":  { "type": "string" },
           "message": { "type": "string" },
-          "subject": { "type": "string" }
+          "subject": { "type": "string", "description": "Present on 403 responses to identify the denied Subject CN." },
+          "details": {
+            "type": "object",
+            "description": "Structured error detail. On 422 (reason=Invalid) this carries the field.ErrorList causes array."
+          }
+        }
+      },
+      "InvalidStatus": {
+        "allOf": [{ "$ref": "#/components/schemas/Status" }],
+        "description": "Status envelope emitted on 422 Unprocessable Entity. details.causes is the list of field-level validation errors.",
+        "properties": {
+          "details": {
+            "type": "object",
+            "properties": {
+              "group": { "type": "string" },
+              "kind":  { "type": "string" },
+              "causes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "reason":  { "type": "string" },
+                    "message": { "type": "string" },
+                    "field":   { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "FilterPolicy": {
@@ -79,18 +107,41 @@
               "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicyList" } }
             }
           },
+          "400": { "description": "Malformed query parameter.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
           "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      },
+      "post": {
+        "summary": "Create a new FilterPolicy.",
+        "description": "Requires Content-Type: application/json. Namespace and name come from the request body; the URL has no placeholders. The request body must NOT pre-populate metadata.resourceVersion.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicy" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "FilterPolicy created; response body carries the persisted object.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicy" } } }
+          },
+          "400": { "description": "Malformed request body or unsupported field (e.g. resourceVersion on create).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "409": { "description": "FilterPolicy with the same namespace/name already exists.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "415": { "description": "Unsupported Content-Type; must be application/json.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "422": { "description": "FilterPolicy spec failed server-side validation.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvalidStatus" } } } },
           "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
         }
       }
     },
     "/v1/filter-policies/{namespace}/{name}": {
+      "parameters": [
+        { "name": "namespace", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "name",      "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
       "get": {
         "summary": "Get a single FilterPolicy object.",
-        "parameters": [
-          { "name": "namespace", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "name",      "in": "path", "required": true, "schema": { "type": "string" } }
-        ],
         "responses": {
           "200": {
             "description": "The FilterPolicy object.",
@@ -100,6 +151,62 @@
           },
           "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
           "404": { "description": "Not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      },
+      "put": {
+        "summary": "Replace a FilterPolicy with optimistic concurrency.",
+        "description": "Requires Content-Type: application/json and a non-empty metadata.resourceVersion in the request body. The server returns 409 if the supplied resourceVersion is stale.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicy" } }
+          }
+        },
+        "responses": {
+          "200": { "description": "FilterPolicy replaced.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicy" } } } },
+          "400": { "description": "Missing resourceVersion, mismatched namespace/name, or malformed body.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "404": { "description": "FilterPolicy does not exist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "409": { "description": "Stale resourceVersion; fetch and retry.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "415": { "description": "Unsupported Content-Type.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "422": { "description": "FilterPolicy spec failed server-side validation.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvalidStatus" } } } },
+          "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      },
+      "patch": {
+        "summary": "Patch a FilterPolicy with a JSON Merge Patch or Strategic Merge Patch.",
+        "description": "Content-Type must be application/merge-patch+json (RFC 7396) or application/strategic-merge-patch+json. The server fetches the current object, merges the patch, re-runs spec validation, and issues an Update. Callers who want optimistic concurrency should include metadata.resourceVersion in the patch body — the apiserver honors it on Update. application/json-patch+json (RFC 6902) is not yet supported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/merge-patch+json":           { "schema": { "type": "object" } },
+            "application/strategic-merge-patch+json": { "schema": { "type": "object" } }
+          }
+        },
+        "responses": {
+          "200": { "description": "FilterPolicy patched.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FilterPolicy" } } } },
+          "400": { "description": "Malformed patch body or patch changed metadata.namespace/name.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "404": { "description": "FilterPolicy does not exist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "409": { "description": "Conflict applying the patch (stale resourceVersion in body).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "415": { "description": "Unsupported Content-Type; see Accept-Patch response header.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "422": { "description": "Merged FilterPolicy spec failed server-side validation.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InvalidStatus" } } } },
+          "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      },
+      "delete": {
+        "summary": "Delete a FilterPolicy.",
+        "parameters": [
+          { "name": "propagationPolicy", "in": "query", "required": false,
+            "schema": { "type": "string", "enum": ["Foreground", "Background", "Orphan"] },
+            "description": "Optional Kubernetes deletion propagation policy. Omit to use the server default (Background)." }
+        ],
+        "responses": {
+          "200": { "description": "Deletion accepted; body carries a Status envelope with status=Success.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "400": { "description": "Invalid propagationPolicy value.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "403": { "description": "Subject not in allowlist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "404": { "description": "FilterPolicy does not exist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
           "500": { "description": "Backend error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
         }
       }
