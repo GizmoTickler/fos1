@@ -311,12 +311,16 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 ## Sprint 31 Ticket 50 — Residual nftables NAT Imports Removed
 
 ### Status
-- `pkg/network/nat/kernel.go` deleted (dead `KernelNATManager`, no active callers).
-- `pkg/deprecated/nat/` deleted (dead `NAT66Manager`, no active callers).
+- `pkg/network/nat/kernel.go` deleted (dead `KernelNATManager`, no active callers) — feat `b6433fc`, merge `c78252f`.
+- `pkg/deprecated/nat/` deleted (dead `NAT66Manager`, no active callers) — same commits.
+- Cleanup commit `bac62b2` then dropped `github.com/google/nftables` from `go.mod` and `go.sum`. `grep -rn 'github.com/google/nftables' pkg/ cmd/` is empty post-Sprint-31.
 - Active NAT path remains `pkg/network/nat/manager.go` (Cilium-first, ADR-0001).
 
+### Plan correction recorded post-merge
+- The original Ticket 50 plan and the Sprint 30 Ticket 46 truth-up both claimed `pkg/security/firewall/kernel.go` was a "live consumer" of `github.com/google/nftables` and would block dependency removal until a Cilium-backed `FirewallManager` replacement was authored. **That was wrong.** `pkg/security/firewall/` (including `kernel.go`, the `PolicyTranslator`, and the `ZoneManager`) had already been removed in Sprint 29 Ticket 33 along with the `FirewallRule` CRD per ADR-0001. With the NAT-side imports gone in Ticket 50, the `github.com/google/nftables` dependency had no remaining live consumers, and cleanup commit `bac62b2` dropped it. Ticket 55 (this truth-up) records the correction so future readers don't re-introduce the stale "blocked on FirewallManager replacement" framing.
+
 ### Residual
-- `pkg/security/firewall/kernel.go` still imports `github.com/google/nftables` and remains the only production implementation of the `FirewallManager` interface consumed by `pkg/security/policy/{translator,zone_manager}.go`. Ticket 46 incorrectly reported it was gone; it is live interface code, not residual dead code, so removal is out of scope for Ticket 50 and requires a separate Cilium-backed `FirewallManager` implementation before it can be deleted. Until then, `github.com/google/nftables` remains in `go.mod`.
+- None. nftables is fully removed (not just non-goal). Cilium remains the sole enforcement backend per ADR-0001.
 
 ## Sprint 31 Ticket 47 — Controller HA via Leader Election
 
@@ -445,6 +449,158 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   the Secret as the renewal trigger; that path is slightly slower
   (cert-manager has to reconcile from scratch) but exercises the same
   reload code path.
+
+## Sprint 31 Ticket 48 — CRUD v1 REST API for FilterPolicy
+
+### Caveats
+
+- Write verbs are scoped to FilterPolicy only. Other resource families
+  (NAT, routing, DPI, zones, threat feeds) remain read-only or
+  `kubectl`-only. Adding a new resource family requires authoring a new
+  handler set under `pkg/api/`.
+- PATCH dispatches between `application/merge-patch+json` (JSON Merge
+  Patch, RFC 7396) and `application/strategic-merge-patch+json`
+  (Kubernetes Strategic Merge Patch) via the `Content-Type` header.
+  `application/json-patch+json` (RFC 6902) and
+  `application/apply-patch+yaml` (Server-Side Apply) are NOT wired —
+  callers that need them get 415 Unsupported Media Type.
+- PUT requires `metadata.resourceVersion` for optimistic concurrency.
+  Callers that omit it get 409 Conflict, not silent overwrite.
+- Server-side validation runs on the handler before forwarding to the
+  API server, so the 422 `Invalid` body the client sees is the
+  fos1-side validator's body, not Kubernetes admission. The two
+  validators may drift if a CRD-level OpenAPI schema field is added
+  without updating `pkg/api/`.
+- DELETE accepts a `propagationPolicy` query parameter
+  (`Foreground` / `Background` / `Orphan`); the default is `Background`.
+  Callers that want strict cascade should pass it explicitly.
+- Watch / streaming endpoints (chunked JSON-lines on `?watch=true`) are
+  NOT in this ticket. Sprint 32 candidate.
+- The OpenAPI spec at `/openapi.json` is hand-authored and was extended
+  in this ticket; it remains a manual artifact and can drift from the
+  CRD. A future ticket should generate it from `pkg/apis/`.
+
+## Sprint 31 Ticket 51 — eBPF sockops + cgroup Program Types
+
+### Caveats
+
+- The sockops loader at `pkg/hardware/ebpf/sockops_loader_linux.go`
+  attaches to a cgroup v2 path. The default in the program-manager
+  dispatch is `/sys/fs/cgroup`; per-scope cgroup paths require a
+  controller that talks to the loader directly. There is no in-tree
+  CRD-driven controller for sockops yet.
+- The cgroup loader at
+  `pkg/hardware/ebpf/cgroup_loader_linux.go` attaches the cgroup
+  egress counter program as `BPF_CGROUP_INET_EGRESS`. Other cgroup
+  attach types (`BPF_CGROUP_INET_INGRESS`, `BPF_CGROUP_SOCK_OPS`,
+  connect/bind hooks, etc.) are not implemented.
+- Linux integration tests for both loaders skip without a unified
+  cgroup v2 hierarchy at `/sys/fs/cgroup`. Hosts that still use cgroup
+  v1 (rare on modern kernels) will see all sockops/cgroup tests skip
+  even with `CAP_BPF` / `CAP_NET_ADMIN`.
+- The committed ELFs (`pkg/hardware/ebpf/bpf/sockops_redirect.o` and
+  `cgroup_egress_counter.o`) follow the Sprint 30 Tickets 38/39
+  pattern: contributors who edit `bpf/sockops_redirect.c` or
+  `bpf/cgroup_egress_counter.c` must re-run `make bpf-objects` on a
+  BPF-capable clang host and commit the regenerated objects. CI does
+  not currently diff committed ELFs against a fresh recompile.
+- Other program types (sk_msg, sk_lookup, lwt_in / lwt_out / lwt_xmit,
+  lwt_seg6local, raw_tracepoint, tracing, etc.) still return
+  `ErrEBPFProgramTypeUnsupported` from `pkg/hardware/ebpf/program_manager.go`.
+  Sprint 32 candidates.
+
+## Sprint 31 Ticket 52 — VLAN-Scoped TC Shaper Controller (TrafficShaper CRD)
+
+### Caveats
+
+- `trafficshaper-controller` runs at `replicas: 1` because it uses
+  `hostNetwork: true` to drive TC on the uplink; two replicas on the
+  same host conflict on the netdev. RBAC for the lease verbs was
+  extended in this ticket so an operator running the controller across
+  two nodes can flip the replica count without RBAC churn (see
+  Ticket 47 caveat).
+- The `TrafficShaper` CRD composes with the `QoSProfile` CRD from
+  Sprint 30 Ticket 45: pod egress caps come from `QoSProfile`
+  (Cilium Bandwidth Manager); uplink/VLAN shaping comes from
+  `TrafficShaper` (TC clsact qdisc + per-ifindex priority map). They
+  do NOT coordinate beyond the manifest level — two CRDs targeting
+  the same interface can produce confusing layered behavior.
+- The TC loader infrastructure is shared with Sprint 30 Ticket 39, so
+  all of Ticket 39's caveats apply (kernel ≥ 6.6 for `AttachTCX`,
+  first-writer-wins on the clsact qdisc, no legacy-attach fallback).
+- The controller uses the Sprint 30 Ticket 40 `pkg/controllers/status.Writer`
+  helper for Applied/Degraded/Invalid/Removed conditions; the helper's
+  caveats apply here too (retry-on-conflict bound, type-erased adapter
+  per CRD).
+
+## Sprint 31 Ticket 53 — MISP JSON Threat-Intel Feed
+
+### Caveats
+
+- Authentication is API-key only via `spec.authSecretRef` → Secret
+  `apiKey` data key. Certificate-based MISP auth, OAuth, and any other
+  auth scheme are explicit non-goals.
+- The MISP JSON parser handles domain / IP / URL indicators in the
+  `Event.Attribute` array. Other indicator types (file hashes,
+  registry keys, mutex names, etc.) are silently ignored — they do not
+  fail the feed but they do not produce Cilium policies either.
+- STIX / TAXII remains a non-goal. ADR-0001 would need to be revisited
+  to add either as a feed type.
+- The fake HTTP server in the test harness verifies the canned-response
+  fetch-parse-translate-apply cycle but does not exercise a real MISP
+  endpoint's pagination, rate limiting, or large-event behavior. A
+  follow-up integration test against a containerized MISP server is a
+  Sprint 32 candidate.
+- Missing Secret produces an `Invalid` condition on `ThreatFeed.Status`
+  rather than crashing the reconciler; same pattern as the URLhaus
+  feed (Ticket 44).
+
+## Sprint 31 Ticket 54 — Performance Baseline Coverage Expansion
+
+### Caveats
+
+- All four bench harnesses (`tools/bench/nat_apply_bench_test.go`,
+  `dpi_policy_bench_test.go`, `filterpolicy_translate_bench_test.go`,
+  `threatintel_translate_bench_test.go`) use in-process fakes. They do
+  not exercise the real Kubernetes API, real Cilium policy generation,
+  or the real network stack. The numbers measure CPU cost of the
+  in-process translator, not end-to-end latency.
+- All baselines in `docs/performance/baseline-2026-04.md` are still
+  measured on an Apple M3 Pro developer laptop, not a dedicated CI
+  runner (carryover from Ticket 43). Numbers are directionally reliable
+  for regression detection but should not be compared across machines
+  or OS builds.
+- CI regression detection remains a warning, not a failure (Ticket 43
+  envelope). Once the four hot-path baselines are stable across CI
+  runner generations, the gate can promote to blocking.
+- Remaining hot paths (routing sync, DHCP control socket, DNS zone
+  update) are still unbenchmarked. Adding them is a Sprint 32
+  candidate.
+- The benches run single-goroutine by design; p99 tail behavior under
+  contention is not measured.
+
+## Sprint 31 Ticket 55 — Post-Sprint-31 Truth-Up
+
+### Plan corrections recorded during this ticket
+
+- **Ticket 47 plan vs reality:** the plan suggested `dpi-manager` as the
+  failover-proof target, but `dpi-manager` is a DaemonSet (one pod per
+  node, node-local) and cannot run leader election without defeating
+  its purpose. The proof script targets `ids-controller` instead, which
+  is already deployed in the Kind harness and now scaled to two
+  replicas. Status docs across `Status.md`, `docs/project-tracker.md`,
+  and `docs/observability-architecture.md` reflect the actual target.
+- **Ticket 50 plan vs reality:** the plan said `pkg/security/firewall/kernel.go`
+  was a "live consumer" of `github.com/google/nftables`. That was wrong
+  — `pkg/security/firewall/` had been removed in Sprint 29 Ticket 33,
+  so the dependency had no live consumers. Cleanup commit `bac62b2`
+  dropped the unused dependency from `go.mod` and `go.sum` after the
+  Ticket 50 NAT-side delete merged. Caveat block above
+  (§"Sprint 31 Ticket 50 — Residual nftables NAT Imports Removed")
+  reflects the corrected story.
+- **Ticket 49 commit shape:** the plan called for a feat + merge pair.
+  In practice the agent committed directly to `main` as `c60f906`
+  without a merge commit. Truth-up records the direct commit.
 
 ## Notes for Review
 

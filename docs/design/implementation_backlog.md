@@ -1070,7 +1070,10 @@ Working rules for Sprint 31: same as prior sprints (no placeholder success paths
 
 #### Ticket 47: HA / Controller Leader Election Baseline
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `f16109a`, merge `f9188c5`
 
 Scope:
 - every custom controller currently runs single-replica; there is no leader election or failover story
@@ -1094,7 +1097,10 @@ Acceptance:
 
 ### Ticket 48: Write-Path REST API (POST / PUT / DELETE For FilterPolicy)
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `4efe669`, merge `69d3101`
 
 Scope:
 - extend `cmd/api-server/` and `pkg/api/` beyond the Ticket 41 read-only v0
@@ -1119,7 +1125,10 @@ Acceptance:
 
 ### Ticket 49: Inter-Controller TLS And Secrets Management Baseline
 Status:
-- open
+- completed (baseline only — see caveats; mTLS controller-to-controller and external-daemon TLS deferred to Sprint 32)
+
+Landed commits:
+- direct on main `c60f906` (agent committed without merge commit)
 
 Scope:
 - Ticket 41 wired mTLS for the REST API only. Every other controller-to-controller and controller-to-exporter path is unencrypted.
@@ -1144,7 +1153,10 @@ Acceptance:
 
 ### Ticket 50: Delete Residual `nftables` Go Imports
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `b6433fc`, merge `c78252f`, plus follow-up cleanup `bac62b2` (drop unused `github.com/google/nftables` from `go.mod`/`go.sum`; `pkg/security/firewall/` had already been removed in Sprint 29 Ticket 33, so the dependency had no live consumers)
 
 Scope:
 - `pkg/network/nat/kernel.go` and `pkg/deprecated/nat/nat66.go` still import `github.com/google/nftables` (flagged by the Ticket 46 agent as out of scope for that truth-up)
@@ -1165,7 +1177,10 @@ Acceptance:
 
 ### Ticket 51: eBPF sockops + cgroup Program Types
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `08e6514`, merge `5d8173e`
 
 Scope:
 - Sprint 30 Ticket 38 and 39 landed XDP and TC loaders. `pkg/hardware/ebpf/program_manager.go` returns `ErrEBPFProgramTypeUnsupported` for sockops and cgroup types.
@@ -1189,7 +1204,10 @@ Acceptance:
 
 ### Ticket 52: VLAN-Scoped TC Shaper Controller
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `2b64cdf`, merge `65e33df`
 
 Scope:
 - Ticket 39 shipped `pkg/hardware/ebpf/tc_loader_linux.go` with `SetPriority`/`ClearPriority` exposing the per-ifindex priority map as infrastructure. No CRD consumes it.
@@ -1213,7 +1231,10 @@ Acceptance:
 
 ### Ticket 53: MISP Threat-Intelligence Feed (Second Feed Type)
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `ea29076`, merge `7684dee`
 
 Scope:
 - Sprint 30 Ticket 44 landed URLhaus CSV ingestion. Extend `pkg/security/threatintel/` with a MISP feed type.
@@ -1236,7 +1257,10 @@ Acceptance:
 
 ### Ticket 54: Performance Baseline Coverage Expansion
 Status:
-- open
+- completed
+
+Landed commits:
+- feat `0f51278`, merge `b83f6e6`
 
 Scope:
 - Ticket 43 baselined NAT policy apply only. Extend `tools/bench/` with three additional hot paths:
@@ -1261,7 +1285,10 @@ Acceptance:
 
 ### Ticket 55: Post-Sprint-31 Truth-Up
 Status:
-- open
+- completed
+
+Landed commits:
+- this ticket
 
 Scope:
 - same pattern as Tickets 37 and 46
@@ -1301,6 +1328,28 @@ Engineer E:
 Shared stabilization:
 - ticket 54 runs alongside the above once the bench harness in Ticket 43 is warm.
 - ticket 55 lands last, after 47-54 are merged.
+
+## Sprint 32 (placeholder): Post-Sprint-31 Production Hardening
+
+Sprint 32 opens after Ticket 55 closed Sprint 31 with `make verify-mainline` green (43/43 packages pass) and production readiness raised from ~75-80% to ~82-87% (see `Status.md` §Production Readiness Assessment for the rationale). Detailed ticket definitions come in a separate planning session and are intentionally not duplicated here.
+
+Sprint 32 candidate workstreams, distilled from `Status.md` §Critical Gaps and the surviving caveats in `docs/design/implementation_caveats.md` after Sprint 31:
+
+- **mTLS for controller-to-controller calls** — Ticket 49 shipped server-only TLS on every owned listener except the API server. Other listeners run `ClientAuth = NoClientCert`. A follow-up should flip the remaining listeners to `RequireAndVerifyClientCert` and define the Subject-CN / SAN allowlist policy for cross-controller traffic.
+- **External-daemon TLS (FRR vtysh, Suricata socket, Kea control socket, Zeek Broker, chronyc)** — these still speak plaintext on in-pod loopback / Unix paths. Cross-host paths need a sidecar TLS terminator or a daemon-native TLS configuration.
+- **Prometheus rekey for `fos1-internal-ca`** — scrape configs still use plaintext fallbacks. Targets that flip to HTTPS will fail closed under default trust until `tls_config.ca_file` is wired in `manifests/base/monitoring/prometheus.yaml`.
+- **External-daemon HA (FRR / Suricata / Zeek / Kea singletons)** — Ticket 47 covered controller-tier failover only. External daemons run as single-pod / single-process with process-local state; per-daemon clustering (BFD for FRR, Kea HA hooks, parallel Suricata sensors) remains open.
+- **Shared-state HA (Elasticsearch / Prometheus / Grafana / Alertmanager)** — single-replica StatefulSets / Deployments hold persistent data. Multi-node clustering (ES cross-zone replication, Prometheus federation or Thanos) is a separate sprint.
+- **Write-path API for additional resource families** — Ticket 48 extended FilterPolicy to full CRUD. NAT, routing, DPI, zones, and threat feeds remain read-only or `kubectl`-only.
+- **Watch / streaming endpoints on the REST API** — not in Ticket 48 scope; chunked JSON-lines streaming was deferred.
+- **Broader eBPF program types** — Ticket 51 added sockops + cgroup; sk_msg, sk_lookup, lwt, and other program types still return `ErrEBPFProgramTypeUnsupported` from `pkg/hardware/ebpf/program_manager.go`.
+- **`trafficshaper-controller` HA** — kept at `replicas: 1` because it uses `hostNetwork: true` to drive TC on the uplink (Ticket 47 caveat). RBAC for the lease was extended in Ticket 52, so an operator running it across two nodes can flip the replica count without RBAC churn — but the in-tree default stays single-replica.
+- **Lease-acquisition metrics** — `pkg/leaderelection` logs structured klog events but does not export `leader_transitions_total`. Small follow-up.
+- **Snapshot / restore automation for Elasticsearch** — the single `30Gi` PVC has neither replica safety nor snapshot scheduling.
+- **Performance gate promotion** — bench regressions remain CI warnings (non-blocking) per Ticket 43 envelope; once the four hot-path baselines from Ticket 54 are stable across runners, the gate can promote to blocking.
+- **Trust-anchor replacement** — `fos1-internal-ca-root` is a self-signed root with the key in a Secret; production deployments that need HSM-backed signing must replace via overlay (Vault / cloud-KMS / external CA).
+
+Working rules for Sprint 32 will mirror prior sprints (no placeholder success paths, idempotent reconciliation, statusful conditions, tests updated with behavior changes, docs updated after behavior is verified).
 
 ## Architect Review Questions
 
