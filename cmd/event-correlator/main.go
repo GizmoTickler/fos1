@@ -23,10 +23,15 @@ func main() {
 		outputFormat string
 	)
 
+	var tlsCertDir string
+
 	flag.StringVar(&configPath, "config", "/etc/correlator/config.json", "Path to the correlator config file")
 	flag.IntVar(&maxEvents, "max-events", 0, "Override the maximum number of events kept in memory")
 	flag.StringVar(&maxAge, "max-age", "", "Override the maximum event age")
 	flag.StringVar(&outputFormat, "output-format", "", "Override the sink output format")
+	// Sprint 31 / Ticket 49: when set, the probe HTTP listener serves
+	// HTTPS using cert-manager-rotated material from this directory.
+	flag.StringVar(&tlsCertDir, "tls-cert-dir", "", "Directory containing tls.crt/tls.key/ca.crt for HTTPS probes (empty = plaintext)")
 	flag.Parse()
 
 	config, err := correlation.LoadConfig(configPath, correlation.ConfigOverrides{
@@ -39,7 +44,8 @@ func main() {
 	}
 
 	runtime, err := correlation.NewRuntime(config, correlation.RuntimeOptions{
-		HTTPAddr: ":8080",
+		HTTPAddr:   ":8080",
+		TLSCertDir: tlsCertDir,
 	})
 	if err != nil {
 		log.Fatalf("create runtime: %v", err)

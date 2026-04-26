@@ -8,6 +8,7 @@ resources:
   - crds/zeek.yaml
   - crds/eventcorrelation.yaml
   - ids-controller.yaml
+  - ids-controller-cert.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: fos1

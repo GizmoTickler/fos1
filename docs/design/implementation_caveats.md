@@ -220,9 +220,11 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 - Authentication is **mTLS only** — the API server enforces
   `tls.RequireAndVerifyClientCert` and checks the peer's Subject-CN against
   a ConfigMap-backed allowlist. OAuth / OIDC / SPIFFE are not wired.
-- Trust anchor is the cert-manager-issued CA bundle mounted at
-  `/etc/fos1/api/ca.crt`. Rotating the CA requires updating the mounted
-  ConfigMap; the server does not watch the ConfigMap for live reload in v0.
+- Trust anchor is the `fos1-internal-ca` ClusterIssuer (Sprint 31 /
+  Ticket 49). The same `ca.crt` is reused for client-cert verification —
+  every authorized caller carries a leaf cert minted by the same chain.
+  Mount path: `/var/run/secrets/fos1.io/tls/`. Rotation is in-place via
+  the shared TLS reloader; see `docs/design/internal-tls-secrets.md`.
 - The OpenAPI spec at `/openapi.json` is hand-authored, not generated.
   Schema drift between the CRD and the OpenAPI response is possible; a
   future ticket should generate it from `pkg/apis/`.
@@ -380,6 +382,69 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   structured klog events on transition but does not export Prometheus
   metrics. Adding `leader_transitions_total` is a small follow-up; not
   in scope for Ticket 47.
+
+## Ticket 49 — Inter-Controller TLS And Secrets Management Baseline
+
+### What this ticket actually does
+
+- Mints per-controller server certs from a single
+  `fos1-internal-ca` ClusterIssuer (CA-typed, chained from a 10y
+  self-signed root). Manifests live at
+  `manifests/base/certificates/cluster-issuer-internal.yaml`.
+- Adds a shared `pkg/security/certificates.LoadTLSConfig(certDir)` +
+  `WatchAndReload` helper. Every owned HTTP listener loads its cert
+  through it, so cert-manager renewals reload in place via fsnotify.
+- Migrates the existing API server (Ticket 41) to the same helper while
+  preserving the mTLS contract (`RequireAndVerifyClientCert`). The
+  per-file `--server-cert` / `--server-key` / `--client-ca` flags remain
+  for overlays that point at an external CA.
+
+### Caveats
+
+- **mTLS for controller-to-controller calls is NOT in this ticket.**
+  Only the API server enforces `RequireAndVerifyClientCert`. Other
+  owned listeners (NTP exporter, DPI metrics, correlator probes) serve
+  TLS with `ClientAuth = NoClientCert`. Adding mutual auth across the
+  entire mesh is a Sprint 32 follow-up; it requires both a deployment
+  shape decision (every client ships a leaf, or all-via-Envoy) and
+  authorization rules that this baseline deliberately does not specify.
+- **External daemons remain plaintext on in-pod sockets.** Suricata's
+  Unix socket, Zeek Broker, Kea's control socket, FRR's vtysh, and
+  chronyc all live inside the same pod as their controller and speak
+  plaintext on a loopback / Unix path. The threat model treats those
+  as same-trust-boundary; cross-host paths are scheduled for Sprint 32
+  with a sidecar TLS terminator.
+- **Trust anchor is a self-signed root, not an enterprise PKI.** The
+  `fos1-internal-ca-root` ClusterIssuer is selfSigned and the root key
+  lives in a Secret in the cert-manager namespace. Production
+  deployments that require HSM-backed signing should replace the root
+  via an overlay (Vault / cloud-KMS / external CA) — the rest of the
+  design is unchanged.
+- **Some controllers mount the Secret without serving TLS yet.**
+  `ids-controller`, `threatintel-controller`, `wireguard-controller`,
+  and `certificate-controller` all reconcile the cert and mount it but
+  do not yet expose a TLS listener. The mount is done now so the
+  follow-up that flips the listener can land without manifest churn.
+  The rotation proof exercises only the controllers that *do* serve
+  TLS today.
+- **Prometheus must trust `fos1-internal-ca`.** The scrape configs in
+  `manifests/base/monitoring/prometheus.yaml` need a `tls_config.ca_file`
+  pointing at the chain. This is **not** in this ticket — the existing
+  scrape configs use plaintext fallbacks and the targets that flip to
+  HTTPS will fail closed under default trust until the Prometheus side
+  is wired. A scrape-coverage follow-up ticket will land that wiring;
+  meanwhile the perf/scrape proofs in CI run against the controllers
+  that still serve plaintext.
+- **The CA `Secret` is read by cert-manager from its own namespace.**
+  We follow the cert-manager convention: a CA-typed ClusterIssuer
+  reads `spec.ca.secretName` from the cert-manager namespace. Anyone
+  who relocates cert-manager must re-point the issuer.
+- **`scripts/ci/prove-cert-rotation.sh` targets the API server.** That
+  controller is the one path under test that combines mTLS + the
+  shared loader. The script tolerates absence of `cmctl` by deleting
+  the Secret as the renewal trigger; that path is slightly slower
+  (cert-manager has to reconcile from scratch) but exercises the same
+  reload code path.
 
 ## Notes for Review
 

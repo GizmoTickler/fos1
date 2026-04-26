@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/GizmoTickler/fos1/pkg/ntp"
 	"github.com/GizmoTickler/fos1/pkg/ntp/chrony"
+	"github.com/GizmoTickler/fos1/pkg/security/certificates"
 )
 
 // Exporter manages exporting NTP metrics
@@ -17,6 +19,7 @@ type Exporter struct {
 	chronyManager *chrony.Manager
 	interval      time.Duration
 	port          int
+	tlsCertDir    string
 	server        *http.Server
 	metrics       ntp.Metrics
 	metricsMutex  sync.RWMutex
@@ -28,6 +31,11 @@ type Config struct {
 	Port          int
 	Interval      time.Duration
 	ChronyManager *chrony.Manager
+
+	// TLSCertDir, when non-empty, switches the metrics endpoint to HTTPS
+	// using the shared cert-manager-rotated material from
+	// pkg/security/certificates. Sprint 31 / Ticket 49.
+	TLSCertDir string
 }
 
 // NewExporter creates a new NTP metrics exporter
@@ -48,6 +56,7 @@ func NewExporter(config *Config) (*Exporter, error) {
 		chronyManager: config.ChronyManager,
 		interval:      config.Interval,
 		port:          config.Port,
+		tlsCertDir:    config.TLSCertDir,
 		stopCh:        make(chan struct{}),
 	}, nil
 }
@@ -64,13 +73,43 @@ func (e *Exporter) Start() error {
 		Handler: mux,
 	}
 
-	// Start HTTP server in a goroutine
-	go func() {
-		klog.Infof("Starting NTP metrics server on port %d", e.port)
-		if err := e.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			klog.Errorf("Error starting NTP metrics server: %v", err)
+	// Sprint 31 / Ticket 49: when configured with a TLS cert dir, serve
+	// HTTPS with rotation-aware material from cert-manager. Otherwise
+	// keep the plaintext path for environments that have not yet been
+	// migrated.
+	if e.tlsCertDir != "" {
+		tlsCfg, reloader, err := certificates.LoadTLSConfig(e.tlsCertDir)
+		if err != nil {
+			return fmt.Errorf("load TLS config from %s: %w", e.tlsCertDir, err)
 		}
-	}()
+		e.server.TLSConfig = tlsCfg
+		go func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			go func() {
+				<-e.stopCh
+				cancel()
+			}()
+			if werr := reloader.WatchAndReload(ctx, nil, tlsCfg, nil); werr != nil {
+				klog.Errorf("NTP metrics: TLS watcher exited: %v", werr)
+			}
+		}()
+		go func() {
+			klog.Infof("Starting NTP metrics server on port %d (TLS)", e.port)
+			// Cert/key files are empty here because GetCertificate
+			// on tls.Config is the source of truth — see
+			// pkg/security/certificates/tlsconfig.go.
+			if err := e.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				klog.Errorf("Error starting NTP metrics server: %v", err)
+			}
+		}()
+	} else {
+		go func() {
+			klog.Infof("Starting NTP metrics server on port %d", e.port)
+			if err := e.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				klog.Errorf("Error starting NTP metrics server: %v", err)
+			}
+		}()
+	}
 
 	// Start metrics collection loop in a goroutine
 	go e.collectMetricsLoop()

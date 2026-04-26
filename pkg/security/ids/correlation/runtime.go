@@ -3,6 +3,7 @@ package correlation
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,12 +16,17 @@ import (
 	"time"
 
 	securityv1alpha1 "github.com/GizmoTickler/fos1/pkg/apis/security/v1alpha1"
+	"github.com/GizmoTickler/fos1/pkg/security/certificates"
 )
 
 type RuntimeOptions struct {
 	PollInterval time.Duration
 	HTTPAddr     string
 	Stdout       io.Writer
+
+	// TLSCertDir, when non-empty, switches the probe HTTP listener to
+	// HTTPS using cert-manager-rotated material. Sprint 31 / Ticket 49.
+	TLSCertDir string
 }
 
 type Runtime struct {
@@ -98,6 +104,30 @@ func (r *Runtime) Run(ctx context.Context) error {
 	server := &http.Server{
 		Handler: NewProbeHandler(r.probes),
 	}
+
+	// Sprint 31 / Ticket 49: when TLS material is mounted, wrap the
+	// listener in TLS using the shared rotation-aware loader.
+	var tlsCancel context.CancelFunc
+	if r.options.TLSCertDir != "" {
+		tlsCfg, reloader, lerr := certificates.LoadTLSConfig(r.options.TLSCertDir)
+		if lerr != nil {
+			_ = listener.Close()
+			return fmt.Errorf("load TLS config from %s: %w", r.options.TLSCertDir, lerr)
+		}
+		server.TLSConfig = tlsCfg
+		listener = tls.NewListener(listener, tlsCfg)
+
+		watchCtx, cancel := context.WithCancel(ctx)
+		tlsCancel = cancel
+		go func() {
+			if werr := reloader.WatchAndReload(watchCtx, nil, tlsCfg, nil); werr != nil {
+				// Non-fatal — the server keeps using the cert in
+				// memory. Logged via stderr because the runtime
+				// here doesn't carry a klog handle.
+				fmt.Fprintf(os.Stderr, "correlator: TLS watcher exited: %v\n", werr)
+			}
+		}()
+	}
 	serverErrCh := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -112,6 +142,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		if tlsCancel != nil {
+			tlsCancel()
+		}
 		<-serverErrCh
 	}()
 

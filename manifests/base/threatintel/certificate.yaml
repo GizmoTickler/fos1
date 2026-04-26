@@ -1,0 +1,37 @@
+---
+# Sprint 31 / Ticket 49 — server cert for the threatintel-controller.
+# The controller does not currently expose an HTTP listener (it runs
+# the reconcile loop only) but a server cert is provisioned now so
+# that:
+#   1. The fos1-internal-ca chain is fully populated for the rotation
+#      proof (scripts/ci/prove-cert-rotation.sh).
+#   2. Future read endpoints (admin status, debug) can serve TLS
+#      without another manifest churn.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: threatintel-controller-tls
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: tls-server
+spec:
+  secretName: threatintel-controller-tls
+  duration: 2160h    # 90d
+  renewBefore: 360h  # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  commonName: threatintel-controller
+  dnsNames:
+    - threatintel-controller.security.svc
+    - threatintel-controller.security.svc.cluster.local
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: fos1-internal-ca
+    kind: ClusterIssuer
+    group: cert-manager.io

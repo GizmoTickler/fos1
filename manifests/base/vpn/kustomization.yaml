@@ -6,6 +6,7 @@ namespace: network
 resources:
   - crds/wireguard.yaml
   - wireguard-controller.yaml
+  - wireguard-controller-cert.yaml
   - wireguard-daemon.yaml
 
 commonLabels:

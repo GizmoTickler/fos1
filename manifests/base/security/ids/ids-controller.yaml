@@ -75,6 +75,24 @@ spec:
         ports:
         - name: metrics
           containerPort: 8080
+        # Sprint 31 / Ticket 49: cert-manager-rotated material is
+        # mounted for future TLS adoption on the controller-runtime
+        # manager's metrics + probe listener. The current ids-controller
+        # binary does not yet wire this directory into a TLS listener;
+        # once it does, the probes flip to scheme: HTTPS in the same
+        # commit. Mounting now avoids a manifest churn at that point.
+        volumeMounts:
+        - name: tls
+          mountPath: /var/run/secrets/fos1.io/tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: ids-controller-tls
+          # optional=true prevents pod startup failure if the
+          # Certificate has not yet reconciled — kubelet picks up the
+          # new mount without a restart once it does.
+          optional: true
 ---
 apiVersion: v1
 kind: ServiceAccount

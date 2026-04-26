@@ -46,18 +46,22 @@ type Controller struct {
 
 // Config holds controller configuration
 type Config struct {
-	ResyncPeriod       time.Duration
-	Workers            int
-	ChronyConfigPath   string
-	ChronyKeysPath     string
-	ChronyCommand      string
-	EnableIntegration  bool
-	EnableMetrics      bool
-	MetricsPort        int
-	MetricsInterval    time.Duration
-	LeaderElection     bool
-	LeaderElectionID   string
-	LeaderElectionNS   string
+	ResyncPeriod      time.Duration
+	Workers           int
+	ChronyConfigPath  string
+	ChronyKeysPath    string
+	ChronyCommand     string
+	EnableIntegration bool
+	EnableMetrics     bool
+	MetricsPort       int
+	MetricsInterval   time.Duration
+	LeaderElection    bool
+	LeaderElectionID  string
+	LeaderElectionNS  string
+
+	// TLSCertDir, when non-empty, switches the metrics exporter and API
+	// listener to HTTPS. Sprint 31 / Ticket 49.
+	TLSCertDir string
 }
 
 // NewController creates a new NTP controller
@@ -69,18 +73,18 @@ func NewController(
 
 	if config == nil {
 		config = &Config{
-			ResyncPeriod:     30 * time.Minute,
-			Workers:          2,
-			ChronyConfigPath: "/etc/chrony/chrony.conf",
-			ChronyKeysPath:   "/etc/chrony/chrony.keys",
-			ChronyCommand:    "chronyc",
+			ResyncPeriod:      30 * time.Minute,
+			Workers:           2,
+			ChronyConfigPath:  "/etc/chrony/chrony.conf",
+			ChronyKeysPath:    "/etc/chrony/chrony.keys",
+			ChronyCommand:     "chronyc",
 			EnableIntegration: true,
-			EnableMetrics:    true,
-			MetricsPort:      9559,
-			MetricsInterval:  15 * time.Second,
-			LeaderElection:   true,
-			LeaderElectionID: "ntp-controller",
-			LeaderElectionNS: "kube-system",
+			EnableMetrics:     true,
+			MetricsPort:       9559,
+			MetricsInterval:   15 * time.Second,
+			LeaderElection:    true,
+			LeaderElectionID:  "ntp-controller",
+			LeaderElectionNS:  "kube-system",
 		}
 	}
 
@@ -105,6 +109,7 @@ func NewController(
 		ChronyCommand:         config.ChronyCommand,
 		MetricsPort:           config.MetricsPort,
 		MetricsInterval:       config.MetricsInterval,
+		TLSCertDir:            config.TLSCertDir,
 	}
 
 	ntpManager, err := manager.NewManager(kubeClient, managerConfig)
@@ -113,16 +118,16 @@ func NewController(
 	}
 
 	controller := &Controller{
-		kubeClient:       kubeClient,
-		ntpClient:        ntpClient,
-		ntpInformer:      ntpInformer,
-		ntpLister:        ntpclient.NewNTPServiceLister(ntpInformer.GetIndexer()),
-		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "ntpservice"),
-		chronyManager:    chronyManager,
-		configGenerator:  configGenerator,
-		ntpManager:       ntpManager,
-		resyncPeriod:     config.ResyncPeriod,
-		workers:          config.Workers,
+		kubeClient:      kubeClient,
+		ntpClient:       ntpClient,
+		ntpInformer:     ntpInformer,
+		ntpLister:       ntpclient.NewNTPServiceLister(ntpInformer.GetIndexer()),
+		queue:           workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "ntpservice"),
+		chronyManager:   chronyManager,
+		configGenerator: configGenerator,
+		ntpManager:      ntpManager,
+		resyncPeriod:    config.ResyncPeriod,
+		workers:         config.Workers,
 	}
 
 	// Set up event handlers

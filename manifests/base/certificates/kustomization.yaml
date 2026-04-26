@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Sprint 31 / Ticket 49 — fos1-internal-ca chain.
+#
+# Listed first in manifests/base/kustomization.yaml so the
+# ClusterIssuers exist before any per-controller Certificate is
+# applied. cert-manager will requeue Certificate reconciles until the
+# referenced issuer is ready, so the ordering is best-effort but not
+# strictly required.
+
+resources:
+  - cluster-issuer-internal.yaml

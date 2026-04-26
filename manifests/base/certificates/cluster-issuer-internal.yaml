@@ -1,0 +1,69 @@
+---
+# Sprint 31 / Ticket 49 — internal trust anchor.
+#
+# Two-tier issuer chain:
+#
+#   1. fos1-internal-ca-root (selfsigned, 10y) — bootstraps the chain.
+#      We never issue leaf certs from this directly so its private key
+#      can be rotated independently of in-flight controller certs.
+#
+#   2. fos1-internal-ca (CA-typed, 10y) — every per-controller
+#      Certificate object references this. cert-manager reads the CA
+#      key/cert from the Secret named at .spec.ca.secretName in the
+#      cert-manager namespace (the default for CA-typed ClusterIssuers).
+#
+# Compromise / rotation playbook lives in
+# docs/design/internal-tls-secrets.md.
+#
+# This file is namespace-agnostic on purpose: ClusterIssuer is cluster-
+# scoped, and the Certificate that backs the root lives in cert-manager's
+# own namespace where its CA-typed sibling expects to read the Secret.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: fos1-internal-ca-root
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: pki
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fos1-internal-ca-root
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: pki
+spec:
+  isCA: true
+  commonName: fos1-internal-ca-root
+  secretName: fos1-internal-ca-root
+  duration: 87600h    # 10y — rotation is a manual operator event.
+  renewBefore: 720h   # 30d — alarm well before expiry, even though we
+                      # do not auto-rotate the root.
+  privateKey:
+    algorithm: RSA
+    size: 4096
+    rotationPolicy: Never
+  usages:
+    - digital signature
+    - key encipherment
+    - cert sign
+    - crl sign
+  issuerRef:
+    name: fos1-internal-ca-root
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: fos1-internal-ca
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: pki
+spec:
+  ca:
+    secretName: fos1-internal-ca-root

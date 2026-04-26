@@ -48,9 +48,15 @@ func main() {
 	defer klog.Flush()
 
 	addr := flag.String("address", api.DefaultListenAddress, "TCP address to listen on.")
-	certFile := flag.String("server-cert", "/etc/fos1/api/tls.crt", "Path to the server TLS certificate (PEM).")
-	keyFile := flag.String("server-key", "/etc/fos1/api/tls.key", "Path to the server TLS private key (PEM).")
-	caFile := flag.String("client-ca", "/etc/fos1/api/ca.crt", "Path to the client-cert CA bundle (PEM).")
+	// Sprint 31 / Ticket 49: when --cert-dir is set, the server loads
+	// tls.crt/tls.key/ca.crt from that directory through the shared
+	// cert-manager rotation-aware loader and the per-file flags below
+	// are ignored. cert-manager mounts at /var/run/secrets/fos1.io/tls/
+	// by convention.
+	certDir := flag.String("cert-dir", "", "Directory with tls.crt/tls.key/ca.crt (cert-manager mount). Takes precedence over per-file flags.")
+	certFile := flag.String("server-cert", "/etc/fos1/api/tls.crt", "Path to the server TLS certificate (PEM). Ignored when --cert-dir is set.")
+	keyFile := flag.String("server-key", "/etc/fos1/api/tls.key", "Path to the server TLS private key (PEM). Ignored when --cert-dir is set.")
+	caFile := flag.String("client-ca", "/etc/fos1/api/ca.crt", "Path to the client-cert CA bundle (PEM). Ignored when --cert-dir is set.")
 	allowlist := flag.String("allowlist", "", "Comma-separated list of authorized client-cert Subject CNs.")
 	allowlistFile := flag.String("allowlist-file", "", "Optional path to a file containing one Subject CN per line. Overrides --allowlist if set.")
 	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig. If empty and --in-cluster is set, the in-cluster config is used.")
@@ -115,6 +121,7 @@ func main() {
 
 	cfg := api.ServerConfig{
 		Address:        *addr,
+		CertDir:        *certDir,
 		ServerCertFile: *certFile,
 		ServerKeyFile:  *keyFile,
 		ClientCAFile:   *caFile,

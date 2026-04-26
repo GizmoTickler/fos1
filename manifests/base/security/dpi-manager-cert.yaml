@@ -1,0 +1,34 @@
+---
+# Sprint 31 / Ticket 49 — server cert for the dpi-manager metrics +
+# probe HTTP listener. The Secret is mounted into the deployment at
+# /var/run/secrets/fos1.io/tls/ (see dpi-manager.yaml). cert-manager
+# rotates this 15d before expiry; the controller picks up the new
+# material via fsnotify on the mount, so no pod restart is required.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dpi-manager-tls
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: tls-server
+spec:
+  secretName: dpi-manager-tls
+  duration: 2160h    # 90d
+  renewBefore: 360h  # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  commonName: dpi-manager
+  dnsNames:
+    - dpi-manager.security.svc
+    - dpi-manager.security.svc.cluster.local
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: fos1-internal-ca
+    kind: ClusterIssuer
+    group: cert-manager.io

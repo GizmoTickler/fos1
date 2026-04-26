@@ -3,6 +3,10 @@ kind: Kustomization
 
 resources:
   - namespaces.yaml
+  # Sprint 31 / Ticket 49 — internal CA chain. Listed before any
+  # consumers so cert-manager has the ClusterIssuers ready when
+  # per-controller Certificate objects reconcile.
+  - certificates
   - cilium
   - core
   - security

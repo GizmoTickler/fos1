@@ -1,0 +1,31 @@
+---
+# Sprint 31 / Ticket 49 — server cert for the ids-controller.
+# Issued from fos1-internal-ca and mounted at /var/run/secrets/fos1.io/tls/.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ids-controller-tls
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: tls-server
+spec:
+  secretName: ids-controller-tls
+  duration: 2160h    # 90d
+  renewBefore: 360h  # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  commonName: ids-controller
+  dnsNames:
+    - ids-controller.security.svc
+    - ids-controller.security.svc.cluster.local
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: fos1-internal-ca
+    kind: ClusterIssuer
+    group: cert-manager.io

@@ -46,9 +46,10 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "--address=:8443"
-            - "--server-cert=/etc/fos1/api/tls.crt"
-            - "--server-key=/etc/fos1/api/tls.key"
-            - "--client-ca=/etc/fos1/api/ca.crt"
+            # Sprint 31 / Ticket 49: load tls.crt/tls.key/ca.crt from a
+            # single mount and let pkg/security/certificates handle
+            # cert-manager rotation in place.
+            - "--cert-dir=/var/run/secrets/fos1.io/tls"
             - "--allowlist-file=/etc/fos1/api/allowlist"
             - "--in-cluster=true"
             - "--v=2"
@@ -70,7 +71,7 @@ spec:
               protocol: TCP
           volumeMounts:
             - name: tls
-              mountPath: /etc/fos1/api
+              mountPath: /var/run/secrets/fos1.io/tls
               readOnly: true
             - name: allowlist
               mountPath: /etc/fos1/api/allowlist

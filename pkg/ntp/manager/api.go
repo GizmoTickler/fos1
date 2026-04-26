@@ -1,13 +1,18 @@
 package manager
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 
 	"k8s.io/klog/v2"
+
+	"github.com/GizmoTickler/fos1/pkg/security/certificates"
 )
 
 // APIServer provides a REST API for the NTP service
@@ -15,6 +20,8 @@ type APIServer struct {
 	ntpManager *Manager
 	server     *http.Server
 	port       int
+	tlsCertDir string
+	tlsCancel  context.CancelFunc
 	mutex      sync.Mutex
 	running    bool
 }
@@ -29,6 +36,15 @@ func NewAPIServer(ntpManager *Manager) (*APIServer, error) {
 		ntpManager: ntpManager,
 		port:       8080, // Default port, could be configurable
 	}, nil
+}
+
+// SetTLSCertDir enables HTTPS on the API server using cert-manager-rotated
+// material from the given directory. Must be called before Start.
+// Sprint 31 / Ticket 49.
+func (a *APIServer) SetTLSCertDir(dir string) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	a.tlsCertDir = dir
 }
 
 // Start starts the API server
@@ -50,6 +66,37 @@ func (a *APIServer) Start() error {
 	a.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", a.port),
 		Handler: mux,
+	}
+
+	if a.tlsCertDir != "" {
+		tlsCfg, reloader, err := certificates.LoadTLSConfig(a.tlsCertDir)
+		if err != nil {
+			return fmt.Errorf("load TLS config from %s: %w", a.tlsCertDir, err)
+		}
+		a.server.TLSConfig = tlsCfg
+
+		watchCtx, cancel := context.WithCancel(context.Background())
+		a.tlsCancel = cancel
+		go func() {
+			if werr := reloader.WatchAndReload(watchCtx, nil, tlsCfg, nil); werr != nil {
+				klog.Errorf("NTP API: TLS watcher exited: %v", werr)
+			}
+		}()
+
+		klog.Infof("Starting NTP API server on port %d (TLS)", a.port)
+		a.running = true
+		go func() {
+			ln, err := net.Listen("tcp", a.server.Addr)
+			if err != nil {
+				klog.Errorf("Error binding NTP API listener: %v", err)
+				return
+			}
+			tlsLn := tls.NewListener(ln, tlsCfg)
+			if err := a.server.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
+				klog.Errorf("Error starting NTP API server: %v", err)
+			}
+		}()
+		return nil
 	}
 
 	klog.Infof("Starting NTP API server on port %d", a.port)
@@ -79,6 +126,9 @@ func (a *APIServer) Stop() error {
 		if err := a.server.Close(); err != nil {
 			return fmt.Errorf("error closing API server: %w", err)
 		}
+	}
+	if a.tlsCancel != nil {
+		a.tlsCancel()
 	}
 
 	a.running = false

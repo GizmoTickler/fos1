@@ -353,6 +353,30 @@ jobs:
           # rolled out by the previous step in this workflow.
           bash scripts/ci/prove-leader-failover.sh
 
+      - name: Prove cert-manager rotation is hot-reloaded
+        run: |
+          set -euo pipefail
+
+          # Sprint 31 / Ticket 49: force a Certificate renewal via cmctl
+          # and assert the controller's /healthz stays 200 throughout
+          # while the served leaf cert's NotBefore advances. Targets
+          # the api-server by default (already deployed for the
+          # readiness checks above). The script tolerates absence of
+          # cmctl by falling back to a Secret-delete trigger.
+          if ! command -v cmctl >/dev/null 2>&1; then
+            curl -fsSL -o /tmp/cmctl.tar.gz \
+              https://github.com/cert-manager/cmctl/releases/latest/download/cmctl_linux_amd64.tar.gz \
+              || true
+            if [ -s /tmp/cmctl.tar.gz ]; then
+              tar -xzf /tmp/cmctl.tar.gz -C /tmp || true
+              if [ -x /tmp/cmctl ]; then
+                sudo install -m 0755 /tmp/cmctl /usr/local/bin/cmctl || true
+              fi
+            fi
+          fi
+
+          bash scripts/ci/prove-cert-rotation.sh
+
       - name: Validate dashboard + alert-rule PromQL against live series
         run: |
           set -euo pipefail

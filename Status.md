@@ -707,7 +707,16 @@ Rationale: Sprint 29 closed the "advertised but unshipped" surfaces (FilterPolic
   binding without an explicit `fos1.io/rbac-exception` annotation.
   See `docs/design/rbac-baseline.md` for the per-controller verb/resource
   table.
-- No TLS for internal communication
+- Internal TLS via `fos1-internal-ca` with cert-manager rotation
+  (Sprint 31 / Ticket 49): every owned controller mounts a
+  cert-manager-issued server cert at `/var/run/secrets/fos1.io/tls/`.
+  The shared `pkg/security/certificates.LoadTLSConfig` helper plus
+  fsnotify watcher reload renewals in place — no pod restart, no
+  listener bounce. `scripts/ci/prove-cert-rotation.sh` asserts
+  `/healthz` stays 200 across `cmctl renew`. Secrets model documented in
+  `docs/design/internal-tls-secrets.md`.
+- mTLS for controller-to-controller calls and TLS for external daemons
+  (FRR / Suricata / Kea) deferred to Sprint 32.
 - Secrets management not implemented
 - No security audit performed
 

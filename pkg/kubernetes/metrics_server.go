@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/GizmoTickler/fos1/pkg/security/certificates"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -70,15 +72,43 @@ func init() {
 
 // MetricsServer provides Prometheus metrics for the DPI system
 type MetricsServer struct {
-	addr     string
-	mux      *http.ServeMux
-	server   *http.Server
-	listener net.Listener
-	mu       sync.Mutex
+	addr      string
+	mux       *http.ServeMux
+	server    *http.Server
+	listener  net.Listener
+	tlsConfig *tls.Config
+	tlsStop   context.CancelFunc
+	mu        sync.Mutex
 }
 
-// NewMetricsServer creates a new metrics server
+// NewMetricsServer creates a new plaintext metrics server.
 func NewMetricsServer(addr string) *MetricsServer {
+	return newMetricsServer(addr, nil)
+}
+
+// NewTLSMetricsServer creates a metrics server that serves HTTPS using
+// material loaded from certDir (Sprint 31 / Ticket 49). The shared
+// certificates.TLSReloader handles cert-manager rotation; the caller is
+// responsible for invoking Stop on shutdown.
+func NewTLSMetricsServer(addr, certDir string) (*MetricsServer, error) {
+	tlsCfg, reloader, err := certificates.LoadTLSConfig(certDir)
+	if err != nil {
+		return nil, err
+	}
+	srv := newMetricsServer(addr, tlsCfg)
+
+	// Run the watcher under a context the server can cancel from Stop.
+	watchCtx, cancel := context.WithCancel(context.Background())
+	srv.tlsStop = cancel
+	go func() {
+		if werr := reloader.WatchAndReload(watchCtx, nil, tlsCfg, nil); werr != nil {
+			log.Printf("metrics server: TLS watcher exited: %v", werr)
+		}
+	}()
+	return srv, nil
+}
+
+func newMetricsServer(addr string, tlsCfg *tls.Config) *MetricsServer {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -94,9 +124,11 @@ func NewMetricsServer(addr string) *MetricsServer {
 		addr: addr,
 		mux:  mux,
 		server: &http.Server{
-			Addr:    addr,
-			Handler: mux,
+			Addr:      addr,
+			Handler:   mux,
+			TLSConfig: tlsCfg,
 		},
+		tlsConfig: tlsCfg,
 	}
 }
 
@@ -140,7 +172,8 @@ func (s *MetricsServer) HandleCommonDPIEvent(event common.DPIEvent) {
 	}
 }
 
-// Start starts the metrics server.
+// Start starts the metrics server. When the server was constructed via
+// NewTLSMetricsServer it serves HTTPS; otherwise plaintext HTTP.
 func (s *MetricsServer) Start() error {
 	s.mu.Lock()
 	if s.listener != nil {
@@ -153,10 +186,19 @@ func (s *MetricsServer) Start() error {
 		return err
 	}
 	s.listener = listener
+	tlsCfg := s.tlsConfig
 	s.mu.Unlock()
 
-	log.Printf("Starting metrics server on %s", listener.Addr().String())
-	err = s.server.Serve(listener)
+	if tlsCfg != nil {
+		log.Printf("Starting metrics server on %s (TLS)", listener.Addr().String())
+		// Wrap the listener; the embedded tls.Config.GetCertificate
+		// handles cert rotation transparently.
+		tlsListener := tls.NewListener(listener, tlsCfg)
+		err = s.server.Serve(tlsListener)
+	} else {
+		log.Printf("Starting metrics server on %s", listener.Addr().String())
+		err = s.server.Serve(listener)
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -168,6 +210,7 @@ func (s *MetricsServer) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	server := s.server
 	listener := s.listener
+	tlsStop := s.tlsStop
 	s.mu.Unlock()
 
 	if server == nil || listener == nil {
@@ -179,6 +222,10 @@ func (s *MetricsServer) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	s.listener = nil
 	s.mu.Unlock()
+
+	if tlsStop != nil {
+		tlsStop()
+	}
 
 	return err
 }

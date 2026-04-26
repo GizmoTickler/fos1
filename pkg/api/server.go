@@ -25,6 +25,8 @@ import (
 
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/GizmoTickler/fos1/pkg/security/certificates"
 )
 
 // DefaultListenAddress is the mTLS listen socket used when the caller does
@@ -55,19 +57,30 @@ type ServerConfig struct {
 	// DefaultListenAddress is used.
 	Address string
 
+	// CertDir is the directory holding tls.crt / tls.key / ca.crt as
+	// written by cert-manager. When set it takes precedence over the
+	// per-file ServerCertFile/ServerKeyFile/ClientCAFile fields and the
+	// server picks up rotation via certificates.WatchAndReload. This is
+	// the Sprint 31 / Ticket 49 path; the per-file fields remain for
+	// backward-compatibility with overlays that point at custom paths.
+	CertDir string
+
 	// ServerCertFile is the path to the PEM-encoded server certificate.
 	// cert-manager typically mounts it as tls.crt inside a Secret.
+	// Ignored when CertDir is set.
 	ServerCertFile string
 
 	// ServerKeyFile is the path to the PEM-encoded server private key.
 	// cert-manager typically mounts it as tls.key inside a Secret.
+	// Ignored when CertDir is set.
 	ServerKeyFile string
 
 	// ClientCAFile is the path to the PEM-encoded CA bundle used to verify
 	// client certificates. The bundle identifies the trust anchor for
 	// accepted callers; every client presenting a cert chain rooted in this
 	// bundle is authenticated at the TLS layer. Authorization still requires
-	// the subject to appear in Allowlist.
+	// the subject to appear in Allowlist. Ignored when CertDir is set —
+	// in that case ca.crt under CertDir is used as the client CA bundle.
 	ClientCAFile string
 
 	// Allowlist is the set of client-cert Subject Common Names authorized to
@@ -112,14 +125,17 @@ func NewServer(c client.Client, cfg ServerConfig) (*Server, error) {
 	if c == nil {
 		return nil, errors.New("api: nil controller-runtime client")
 	}
-	if cfg.ServerCertFile == "" {
-		return nil, errors.New("api: ServerCertFile is required")
-	}
-	if cfg.ServerKeyFile == "" {
-		return nil, errors.New("api: ServerKeyFile is required")
-	}
-	if cfg.ClientCAFile == "" {
-		return nil, errors.New("api: ClientCAFile is required")
+	if cfg.CertDir == "" {
+		// Backward-compat path: every per-file field must be set.
+		if cfg.ServerCertFile == "" {
+			return nil, errors.New("api: ServerCertFile is required (or set CertDir)")
+		}
+		if cfg.ServerKeyFile == "" {
+			return nil, errors.New("api: ServerKeyFile is required (or set CertDir)")
+		}
+		if cfg.ClientCAFile == "" {
+			return nil, errors.New("api: ClientCAFile is required (or set CertDir)")
+		}
 	}
 	if cfg.Address == "" {
 		cfg.Address = DefaultListenAddress
@@ -165,9 +181,23 @@ func (s *Server) Handler() http.Handler {
 // Run starts the HTTPS server and blocks until ctx is canceled or a fatal
 // error occurs. It performs graceful shutdown on context cancellation.
 func (s *Server) Run(ctx context.Context) error {
-	tlsConfig, err := buildTLSConfig(s.Config)
+	tlsConfig, reloader, err := buildTLSConfig(s.Config)
 	if err != nil {
 		return fmt.Errorf("api: build TLS config: %w", err)
+	}
+
+	// Sprint 31 / Ticket 49: when CertDir is configured the shared
+	// certificates.TLSReloader watches the mount for cert-manager
+	// rotation and swaps the active certificate in place. The HTTP
+	// listener never bounces; in-flight handshakes always observe a
+	// valid cert because tls.Config.GetCertificate is the single source
+	// of truth.
+	if reloader != nil {
+		go func() {
+			if werr := reloader.WatchAndReload(ctx, nil, tlsConfig, nil); werr != nil {
+				klog.ErrorS(werr, "api server: TLS watcher exited")
+			}
+		}()
 	}
 
 	srv := &http.Server{
@@ -219,19 +249,50 @@ func (s *Server) Run(ctx context.Context) error {
 // buildTLSConfig loads the server identity and client-CA bundle and
 // constructs a tls.Config that requires and verifies a client certificate on
 // every connection. This is the mTLS contract for v0.
-func buildTLSConfig(cfg ServerConfig) (*tls.Config, error) {
+//
+// Two loading paths are supported:
+//
+//  1. CertDir set — the Sprint 31 / Ticket 49 path. Material is loaded via
+//     the shared certificates.TLSReloader so renewals rotate in place.
+//     ca.crt is reused as the client-CA bundle (the fos1-internal-ca chain
+//     signs both server and client identities for inter-controller mTLS).
+//  2. Per-file paths set — backward-compatible v0 path. Used by overlays
+//     that point at an external CA distinct from the controller's server
+//     trust anchor.
+//
+// In both paths ClientAuth is RequireAndVerifyClientCert; layering the mTLS
+// requirement on top of the shared helper is the deliberate design.
+//
+// The returned *certificates.TLSReloader is non-nil only on the CertDir
+// path — the caller starts WatchAndReload to pick up rotation.
+func buildTLSConfig(cfg ServerConfig) (*tls.Config, *certificates.TLSReloader, error) {
+	if cfg.CertDir != "" {
+		base, reloader, err := certificates.LoadTLSConfig(cfg.CertDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load TLS material from %s: %w", cfg.CertDir, err)
+		}
+		// Layer mTLS on top of the shared helper. ClientCAs comes from
+		// the same ca.crt the server cert chains to: every owned
+		// controller and every authorized client carries a cert minted
+		// by fos1-internal-ca, so the same pool authenticates both
+		// directions.
+		base.ClientCAs = reloader.CABundle()
+		base.ClientAuth = tls.RequireAndVerifyClientCert
+		return base, reloader, nil
+	}
+
 	serverCert, err := tls.LoadX509KeyPair(cfg.ServerCertFile, cfg.ServerKeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("load server key pair: %w", err)
+		return nil, nil, fmt.Errorf("load server key pair: %w", err)
 	}
 
 	caPEM, err := os.ReadFile(cfg.ClientCAFile)
 	if err != nil {
-		return nil, fmt.Errorf("read client CA bundle: %w", err)
+		return nil, nil, fmt.Errorf("read client CA bundle: %w", err)
 	}
 	caPool := x509.NewCertPool()
 	if !caPool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("client CA bundle %s did not contain any PEM certs", cfg.ClientCAFile)
+		return nil, nil, fmt.Errorf("client CA bundle %s did not contain any PEM certs", cfg.ClientCAFile)
 	}
 
 	return &tls.Config{
@@ -239,7 +300,7 @@ func buildTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 		ClientCAs:    caPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS12,
-	}, nil
+	}, nil, nil
 }
 
 // listenAddr returns the actual address the server is listening on. It is

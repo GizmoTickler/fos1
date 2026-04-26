@@ -104,6 +104,10 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
         prometheus.io/path: /metrics
+        # Sprint 31 / Ticket 49: scrape over HTTPS using the
+        # cert-manager-issued server cert. Prometheus must trust
+        # fos1-internal-ca via its scrape_configs.tls_config.
+        prometheus.io/scheme: https
     spec:
       serviceAccountName: security-manager
       containers:
@@ -113,6 +117,11 @@ spec:
         args:
           - "--config=/etc/dpi-manager/config.yaml"
           - "--kubernetes"
+          # Sprint 31 / Ticket 49: serve metrics over HTTPS using
+          # cert-manager-rotated material. The mount path is the
+          # canonical fos1 TLS path; pkg/security/certificates picks
+          # up renewals via fsnotify with no pod restart.
+          - "--tls-cert-dir=/var/run/secrets/fos1.io/tls"
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -142,19 +151,24 @@ spec:
           readOnly: true
         - name: rules-volume
           mountPath: /etc/rules
+        - name: tls
+          mountPath: /var/run/secrets/fos1.io/tls
+          readOnly: true
         ports:
         - containerPort: 8080
-          name: http
+          name: https
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8080
+            scheme: HTTPS
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /readyz
             port: 8080
+            scheme: HTTPS
           initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
@@ -171,6 +185,9 @@ spec:
           type: DirectoryOrCreate
       - name: rules-volume
         emptyDir: {}
+      - name: tls
+        secret:
+          secretName: dpi-manager-tls
 ---
 apiVersion: v1
 kind: Service

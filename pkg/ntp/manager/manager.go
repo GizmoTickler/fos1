@@ -49,6 +49,11 @@ type Config struct {
 	ChronyCommand         string
 	MetricsPort           int
 	MetricsInterval       time.Duration
+
+	// TLSCertDir, when non-empty, switches both the metrics exporter and
+	// the API server to HTTPS using cert-manager-rotated material.
+	// Sprint 31 / Ticket 49.
+	TLSCertDir string
 }
 
 // NewManager creates a new NTP Manager
@@ -102,6 +107,7 @@ func NewManager(
 			Port:          config.MetricsPort,
 			Interval:      config.MetricsInterval,
 			ChronyManager: chronyManager,
+			TLSCertDir:    config.TLSCertDir,
 		}
 
 		exporter, err := metrics.NewExporter(exporterConfig)
@@ -138,6 +144,9 @@ func NewManager(
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to initialize API server: %w", err)
+		}
+		if config.TLSCertDir != "" {
+			apiServer.SetTLSCertDir(config.TLSCertDir)
 		}
 		manager.apiServer = apiServer
 	}

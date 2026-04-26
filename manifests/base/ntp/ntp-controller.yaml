@@ -20,6 +20,10 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9559"
         prometheus.io/path: /metrics
+        # Sprint 31 / Ticket 49: scrape over HTTPS using cert-manager
+        # rotation-aware material. Prometheus must trust
+        # fos1-internal-ca.
+        prometheus.io/scheme: https
     spec:
       serviceAccountName: ntp-controller
       containers:
@@ -36,6 +40,9 @@ spec:
         - "--integration=true"
         - "--workers=2"
         - "--resync-period=30m"
+        # Sprint 31 / Ticket 49: serve metrics + API over HTTPS using
+        # cert-manager-rotated material from fos1-internal-ca.
+        - "--tls-cert-dir=/var/run/secrets/fos1.io/tls"
         - "--v=2"
         resources:
           limits:
@@ -54,16 +61,21 @@ spec:
           mountPath: /etc/ntp-controller
         - name: chrony-config
           mountPath: /etc/chrony
+        - name: tls
+          mountPath: /var/run/secrets/fos1.io/tls
+          readOnly: true
         livenessProbe:
           httpGet:
             path: /healthz
             port: 8080
+            scheme: HTTPS
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /readyz
             port: 8080
+            scheme: HTTPS
           initialDelaySeconds: 5
           periodSeconds: 10
       volumes:
@@ -73,6 +85,10 @@ spec:
       - name: chrony-config
         configMap:
           name: chrony-config
+      - name: tls
+        secret:
+          secretName: ntp-controller-tls
+          optional: true
 ---
 apiVersion: v1
 kind: ServiceAccount

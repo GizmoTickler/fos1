@@ -49,6 +49,10 @@ func main() {
 	kubeMode := flag.Bool("kubernetes", false, "Run in Kubernetes mode")
 	zeekLogsPath := flag.String("zeek-logs", "", "Path to Zeek logs directory")
 	zeekPolicyPath := flag.String("zeek-policy", "", "Path to Zeek policy directory")
+	// Sprint 31 / Ticket 49: directory containing tls.crt/tls.key/ca.crt
+	// for HTTPS-served metrics. Empty preserves the historical plaintext
+	// behavior so existing test rigs are unaffected.
+	tlsCertDir := flag.String("tls-cert-dir", "", "Directory with cert-manager-rotated TLS material (empty = plaintext metrics)")
 	flag.Parse()
 
 	// Load configuration
@@ -245,13 +249,26 @@ func main() {
 			go policyController.Run(leaderCtx)
 
 			// Start metrics server for Prometheus only on the leader so
-			// the scrape target is deterministic.
-			metricsServer = kubernetes.NewMetricsServer(":8080")
-			go func() {
-				if err := metricsServer.Start(); err != nil {
-					log.Printf("Metrics server exited with error: %v", err)
+			// the scrape target is deterministic. Sprint 31 / Ticket 49:
+			// when --tls-cert-dir is set, serve HTTPS using cert-manager
+			// rotation-aware material.
+			if *tlsCertDir != "" {
+				ms, err := kubernetes.NewTLSMetricsServer(":8080", *tlsCertDir)
+				if err != nil {
+					log.Printf("metrics server (TLS) init failed: %v", err)
+				} else {
+					metricsServer = ms
 				}
-			}()
+			} else {
+				metricsServer = kubernetes.NewMetricsServer(":8080")
+			}
+			if metricsServer != nil {
+				go func() {
+					if err := metricsServer.Start(); err != nil {
+						log.Printf("Metrics server exited with error: %v", err)
+					}
+				}()
+			}
 
 			<-leaderCtx.Done()
 		})

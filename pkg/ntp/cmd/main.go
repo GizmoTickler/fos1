@@ -30,6 +30,7 @@ func main() {
 	var integrationEnabled bool
 	var workers int
 	var resyncPeriod time.Duration
+	var tlsCertDir string
 
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	flag.StringVar(&chronyConfigPath, "chrony-config", "/etc/chrony/chrony.conf", "Path to Chrony config file")
@@ -41,6 +42,10 @@ func main() {
 	flag.BoolVar(&integrationEnabled, "integration", true, "Enable DHCP and DNS integration")
 	flag.IntVar(&workers, "workers", 2, "Number of worker threads")
 	flag.DurationVar(&resyncPeriod, "resync-period", 30*time.Minute, "Informer resync period")
+	// Sprint 31 / Ticket 49: directory containing tls.crt/tls.key/ca.crt
+	// for HTTPS-served metrics + API endpoints. Empty preserves the
+	// historical plaintext behavior.
+	flag.StringVar(&tlsCertDir, "tls-cert-dir", "", "Directory with cert-manager-rotated TLS material (empty = plaintext)")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -104,6 +109,7 @@ func main() {
 		LeaderElection:    true,
 		LeaderElectionID:  "ntp-controller",
 		LeaderElectionNS:  "kube-system",
+		TLSCertDir:        tlsCertDir,
 	}
 
 	// Create and run controller

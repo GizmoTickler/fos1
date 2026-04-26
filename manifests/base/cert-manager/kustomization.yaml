@@ -5,6 +5,7 @@ namespace: cert-manager
 
 resources:
   - certificate-controller.yaml
+  - certificate-controller-cert.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: fos1

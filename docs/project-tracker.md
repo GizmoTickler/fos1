@@ -27,7 +27,14 @@ Current verified status:
   - Ticket 44: URLhaus threat-intel v0 ingestion. `ThreatFeed` CRD, `cmd/threatintel-controller/`, `pkg/security/threatintel/` parses URLhaus CSV and translates into Cilium deny policies with last-seen TTL. `ThreatFeed.Status` reports last-fetch time, entry count, expiry state. STIX remains a non-goal; MISP JSON support followed in Sprint 31 Ticket 53.
   - Ticket 45: QoS enforcement via Cilium Bandwidth Manager. `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation → BPF TBF rate limiter at pod admission. Per-pod egress enforcement only in v1; classful/uplink TC shaping remains future work on top of the Ticket 39 infrastructure.
   - Ticket 46: post-Sprint-30 status truth-up (this update).
-- The next phase is Sprint 31 (placeholder scope only; ticket-level definitions are a separate planning session). Candidate focus: HA/clustering, write-path REST API, broader eBPF program types (sockops / cgroup), more threat feeds, performance coverage beyond NAT policy apply, inter-controller TLS + secrets, and ingress / VLAN-scoped TC shaping. See `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening".
+- Sprint 31 in flight; closures so far:
+  - Ticket 47: HA / leader election baseline across owned controllers via `pkg/leaderelection` (CR controllers) and controller-runtime manager-level leases (api-server, certificate-controller). RTO ≤ 30s proved by `scripts/ci/prove-leader-failover.sh` against `ids-controller`.
+  - Ticket 48: write-verb v1 REST API for `FilterPolicy` (POST / PUT / PATCH / DELETE) with strategic-merge / JSON-merge patch handling.
+  - Ticket 49: inter-controller TLS baseline. `fos1-internal-ca` ClusterIssuer (chained from a 10y self-signed root) mints per-controller server certs; shared `pkg/security/certificates.LoadTLSConfig` + fsnotify watcher reload renewals in place. Rotation proof at `scripts/ci/prove-cert-rotation.sh`. mTLS for controller-to-controller calls and TLS for external daemons (FRR / Suricata / Kea) deferred to Sprint 32. See `docs/design/internal-tls-secrets.md`.
+  - Ticket 51: eBPF sockops + cgroup program types added behind a feature flag.
+  - Ticket 52: VLAN-scoped TC shaper controller via `TrafficShaper` CRD on top of the Sprint 30 Ticket 39 TC infrastructure.
+  - Ticket 53: MISP JSON threat-intel feed support alongside the URLhaus CSV path from Ticket 44.
+  - Ticket 54: hot-path performance baselines extended to DPI / FilterPolicy / threat-intel translate.
 - For the current implementation snapshot and next workstreams, use [Status.md](../Status.md) and [docs/implementation-plan.md](docs/implementation-plan.md).
 
 ## Phase 1: Environment Setup & Documentation Structure (Weeks 1-2)

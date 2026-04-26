@@ -4,6 +4,7 @@ resources:
   - crd.yaml
   - rbac.yaml
   - deployment.yaml
+  - certificate.yaml
 commonLabels:
   app.kubernetes.io/part-of: fos1
   app.kubernetes.io/component: threatintel

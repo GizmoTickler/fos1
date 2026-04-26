@@ -1,0 +1,34 @@
+---
+# Sprint 31 / Ticket 49 — server cert for the certificate-controller's
+# metrics + probe listener. This is a slightly recursive arrangement:
+# cert-manager itself signs the cert that fronts the controller that
+# manages cert-manager Certificates. Bootstrap order is fine because
+# the self-signed root issuer is independent of any controller.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: certificate-controller-tls
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: tls-server
+spec:
+  secretName: certificate-controller-tls
+  duration: 2160h    # 90d
+  renewBefore: 360h  # 15d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  commonName: certificate-controller
+  dnsNames:
+    - certificate-controller.cert-manager.svc
+    - certificate-controller.cert-manager.svc.cluster.local
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: fos1-internal-ca
+    kind: ClusterIssuer
+    group: cert-manager.io

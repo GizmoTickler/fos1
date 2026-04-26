@@ -61,6 +61,19 @@ spec:
               command: ["/bin/sh", "-c", "pgrep -f threatintel-controller >/dev/null"]
             initialDelaySeconds: 10
             periodSeconds: 30
+          # Sprint 31 / Ticket 49: cert-manager-rotated material is
+          # mounted for future TLS adoption (read-only debug endpoints,
+          # Prometheus metrics). The reconcile loop itself does not yet
+          # serve HTTP.
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/secrets/fos1.io/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: threatintel-controller-tls
+            optional: true
 ---
 apiVersion: v1
 kind: Service

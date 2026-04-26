@@ -1,23 +1,20 @@
 ---
-# Issuer for the API-server trust domain. In production this should be a
-# ClusterIssuer (or an Issuer referencing a cluster-wide CA) — the concrete
-# implementation is overridden per-environment in manifests/overlays/*.
-# The in-tree Issuer here provides a default for kubeconform validation and
-# for development clusters bootstrapped via scripts/.
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: fos1-api-server-ca
-  namespace: security
-spec:
-  ca:
-    secretName: fos1-api-server-ca-key-pair
----
+# Sprint 31 / Ticket 49 migration: the per-environment Issuer was
+# replaced by the cluster-wide fos1-internal-ca ClusterIssuer defined
+# at manifests/base/certificates/cluster-issuer-internal.yaml. The
+# Secret name is preserved (fos1-api-server-tls) so the existing
+# Deployment volume mount keeps working without churn.
+#
+# Overlays that need a different trust anchor (e.g. an external CA)
+# can replace this Certificate by patching the issuerRef field.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: fos1-api-server-tls
   namespace: security
+  labels:
+    app.kubernetes.io/part-of: fos1
+    app.kubernetes.io/component: tls-server
 spec:
   secretName: fos1-api-server-tls
   duration: 2160h   # 90d
@@ -33,8 +30,9 @@ spec:
     - fos1-api-server.security.svc
     - fos1-api-server.security.svc.cluster.local
   issuerRef:
-    name: fos1-api-server-ca
-    kind: Issuer
+    name: fos1-internal-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
   usages:
     - server auth
     - digital signature
