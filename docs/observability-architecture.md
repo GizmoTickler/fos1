@@ -267,18 +267,61 @@ What this gate does NOT prove:
 - that exception annotations are scoped correctly — the annotation is a free-text reason field
 - that RBAC is actually enforced at runtime against an API server; that is a cluster-level policy concern outside this repo
 
-## Performance Baseline CI Job (Sprint 30 / Ticket 43)
+## Performance Baseline CI Job (Sprint 30 / Ticket 43 + Sprint 31 / Ticket 54)
 
 ### Implemented and verified in code
 
-Sprint 30 Ticket 43 adds a non-blocking performance baseline harness. [`tools/bench/nat_apply_bench_test.go`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/nat_apply_bench_test.go) uses `go test -bench` to measure `pkg/network/nat.Manager.ApplyNATPolicy` against an in-process fake `cilium.Client` (no Kubernetes API, no real Cilium). The [`scripts/ci/run-bench.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/run-bench.sh) harness runs the bench in CI, compares results against [`docs/performance/baseline-2026-04.md`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/docs/performance/baseline-2026-04.md), and prints warnings (non-failing) for regressions beyond a configurable threshold.
+Sprint 30 Ticket 43 adds a non-blocking performance baseline harness; Sprint 31 Ticket 54 expands it to four hot paths total. The bench harness lives in [`tools/bench/`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/) and uses `go test -bench` against in-process fakes (no Kubernetes API, no real Cilium):
 
-The baseline file records ops/s, p50/p95/p99 latency, memory allocation per op, machine details, and git commit. Regressions flagged in CI output are explicitly warnings in v0; a future ticket can promote the gate to blocking once the signal is understood on the real CI runner.
+- [`tools/bench/nat_apply_bench_test.go`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/nat_apply_bench_test.go) — `pkg/network/nat.Manager.ApplyNATPolicy` (Ticket 43)
+- [`tools/bench/dpi_policy_bench_test.go`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/dpi_policy_bench_test.go) — DPI event → Cilium policy (Ticket 54)
+- [`tools/bench/filterpolicy_translate_bench_test.go`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/filterpolicy_translate_bench_test.go) — FilterPolicy → CiliumNetworkPolicy translator (Ticket 54)
+- [`tools/bench/threatintel_translate_bench_test.go`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/tools/bench/threatintel_translate_bench_test.go) — Threat-intel indicator → CiliumPolicy translator (Ticket 54)
 
-What this bench does NOT prove:
-- throughput under real Cilium policy apply (the harness uses a fake client to isolate the hot path)
-- performance of any other hot path — DPI event → Cilium policy, routing sync, DHCP control socket, DNS zone update all remain unbenchmarked in Sprint 30
-- p99 tail behavior under contention — the bench runs single-goroutine by design
+The [`scripts/ci/run-bench.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/run-bench.sh) harness runs all four benches in CI, compares results against [`docs/performance/baseline-2026-04.md`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/docs/performance/baseline-2026-04.md), and prints warnings (non-failing) for regressions beyond a configurable threshold.
+
+The baseline file records ops/s, p50/p95/p99 latency, memory allocation per op, machine details, and git commit. Regressions flagged in CI output are explicitly warnings; a future ticket can promote the gate to blocking once the signal is understood on the real CI runner.
+
+What these benches do NOT prove:
+- throughput under real Cilium policy apply (each harness uses an in-process fake to isolate the hot path)
+- performance of remaining hot paths — routing sync, DHCP control socket, DNS zone update all remain unbenchmarked
+- p99 tail behavior under contention — the benches run single-goroutine by design
+
+## Leader Failover CI Proof (Sprint 31 / Ticket 47)
+
+### Implemented and verified in code
+
+Sprint 31 Ticket 47 adds [`scripts/ci/prove-leader-failover.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-leader-failover.sh) as a Kind harness step wired into `.github/workflows/test-bootstrap.yml` after the IDS controller is rolled out. The script targets `ids-controller` (selected because it is already deployed in the Kind harness and now scaled to two replicas; the original Ticket 47 plan suggested `dpi-manager`, but `dpi-manager` is a DaemonSet and cannot run leader election without defeating its node-local purpose).
+
+The script:
+- reads the active leader's pod identity from the `ids-controller` Lease (`coordination.k8s.io/v1` in the `security` namespace)
+- deletes that pod and starts a stopwatch
+- polls the Lease until the `holderIdentity` flips to the standby pod
+- asserts the transition completes within the documented RTO (target: ≤ 30s under the default lease config of 15s lease duration / 10s renew deadline / 2s retry period)
+
+What this proof does NOT cover:
+- multi-leader split-brain — the proof is a single failover cycle, not a network-partition scenario
+- repeated failover under churn — the proof runs once per CI invocation
+- HA for external daemons (FRR / Suricata / Zeek / Kea singletons) or shared-state observability (Elasticsearch / Prometheus / Grafana / Alertmanager single-replica) — these are Sprint 32 candidates
+- DaemonSets like `dpi-manager` are intentionally per-node and excluded from leader election
+
+## Cert Rotation CI Proof (Sprint 31 / Ticket 49)
+
+### Implemented and verified in code
+
+Sprint 31 Ticket 49 adds [`scripts/ci/prove-cert-rotation.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-cert-rotation.sh) as a Kind harness step. The script targets the API server because it is the one path under test that combines mTLS (`RequireAndVerifyClientCert`) with the shared `pkg/security/certificates.LoadTLSConfig` + fsnotify reload helper.
+
+The script:
+- captures the current API server cert serial via `openssl s_client`
+- triggers a renewal — preferred path is `cmctl renew` against the `Certificate` object; fallback is to delete the underlying Secret so cert-manager reconciles a fresh one (slightly slower but exercises the same reload code path)
+- polls the API server `/healthz` endpoint at a tight cadence and asserts every probe returns HTTP 200 across the rotation window (the listener must not bounce; in-place fsnotify reload is required)
+- captures the new cert serial via `openssl s_client` and asserts it differs from the pre-rotation serial
+
+What this proof does NOT cover:
+- mutual auth across the controller mesh — only the API server enforces `RequireAndVerifyClientCert`; other owned listeners run `ClientAuth = NoClientCert` and are not exercised by this script
+- TLS for external daemons (FRR vtysh, Suricata socket, Kea control socket, Zeek Broker, chronyc) — these still speak plaintext on in-pod loopback / Unix paths
+- Prometheus scrape rekey for the `fos1-internal-ca` chain — scrape configs still use plaintext fallbacks; targets that flip to HTTPS will fail closed under default trust until `tls_config.ca_file` is wired
+- trust-anchor compromise / replacement — the proof exercises rotation of leaf certs, not root replacement
 
 ## Operational Reading Guide
 
