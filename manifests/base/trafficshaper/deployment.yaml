@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trafficshaper-controller
+  namespace: network
+  labels:
+    app: trafficshaper-controller
+    component: network
+spec:
+  # Single replica today. Sprint 31 Ticket 47 introduces leader election
+  # for cross-controller HA; once that lands the operator can scale this
+  # to 2 without changing the RBAC (the lease verbs are already granted).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trafficshaper-controller
+  template:
+    metadata:
+      labels:
+        app: trafficshaper-controller
+        component: network
+    spec:
+      serviceAccountName: trafficshaper-controller
+      # The controller drives the TC loader, which needs CAP_BPF /
+      # CAP_NET_ADMIN on the host. hostNetwork is required so the
+      # ifindex resolution sees the same network namespace as the
+      # uplink it is shaping.
+      hostNetwork: true
+      containers:
+        - name: controller
+          image: ghcr.io/varuntirumala1/fos1-trafficshaper-controller:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add:
+                - BPF
+                - NET_ADMIN
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f trafficshaper-controller >/dev/null"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
