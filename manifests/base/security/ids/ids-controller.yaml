@@ -7,7 +7,16 @@ metadata:
     app: ids-controller
     component: security
 spec:
-  replicas: 1
+  # Sprint 31 / Ticket 47: HA active/standby with leader election. The
+  # ids-controller is the target of the leader-failover CI proof
+  # (scripts/ci/prove-leader-failover.sh) — it's a Deployment (not a
+  # DaemonSet) and the Kind harness already deploys it.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: ids-controller
@@ -18,12 +27,32 @@ spec:
         component: security
     spec:
       serviceAccountName: ids-controller
+      affinity:
+        podAntiAffinity:
+          # Single-node Kind requires `preferred` so both replicas can
+          # co-schedule. Multi-node clusters get the spread for free.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: ids-controller
       containers:
       - name: controller
         image: fos1/ids-controller:latest
         imagePullPolicy: IfNotPresent
         args:
         - "--v=2"
+        env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
         resources:
           limits:
             cpu: 200m
@@ -82,6 +111,31 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: ids-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+# Sprint 31 / Ticket 47: namespace-scoped lease verbs for leader election.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ids-controller-leaderelection
+  namespace: security
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ids-controller-leaderelection
+  namespace: security
+subjects:
+- kind: ServiceAccount
+  name: ids-controller
+  namespace: security
+roleRef:
+  kind: Role
+  name: ids-controller-leaderelection
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1

@@ -13,6 +13,7 @@ import (
 
 	"github.com/GizmoTickler/fos1/pkg/cilium"
 	"github.com/GizmoTickler/fos1/pkg/kubernetes"
+	"github.com/GizmoTickler/fos1/pkg/leaderelection"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi/common"
 	"github.com/GizmoTickler/fos1/pkg/security/dpi/connectors"
@@ -207,29 +208,61 @@ func main() {
 		log.Fatalf("Failed to start DPI manager: %v", err)
 	}
 
-	// Start Kubernetes controller for policy management if in Kubernetes mode
-	if config.Kubernetes.Enabled {
-		k8sClient, _ := kubernetes.NewClient(*kubeconfig)
-		controller := kubernetes.NewPolicyController(k8sClient)
-		go controller.Run(context.Background())
+	// Sprint 31 / Ticket 47: HA via client-go leader election. The DPI
+	// framework's policy reconciler mutates Cilium policies and the
+	// embedded metrics server must run on a single active leader so the
+	// scrape target is deterministic. In non-Kubernetes (test) mode we
+	// skip leader election entirely.
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
 
-		// Start metrics server for Prometheus
-		metricsServer = kubernetes.NewMetricsServer(":8080")
-		go func() {
-			if err := metricsServer.Start(); err != nil {
-				log.Printf("Metrics server exited with error: %v", err)
-			}
-		}()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("Received signal %v, shutting down", sig)
+		rootCancel()
+	}()
+
+	if config.Kubernetes.Enabled {
+		k8sClient, err := kubernetes.NewClient(*kubeconfig)
+		if err != nil {
+			log.Fatalf("Failed to create Kubernetes client for leader election: %v", err)
+		}
+
+		leNamespace := leaderelection.NamespaceFromEnv()
+		if leNamespace == "" {
+			log.Fatal("POD_NAMESPACE must be set (downward API) for leader election")
+		}
+
+		leErr := leaderelection.Run(rootCtx, leaderelection.Config{
+			LockName:      "dpi-framework.fos1.io",
+			LockNamespace: leNamespace,
+			Identity:      leaderelection.IdentityFromEnv(),
+			Client:        k8sClient.Clientset,
+		}, func(leaderCtx context.Context) {
+			policyController := kubernetes.NewPolicyController(k8sClient)
+			go policyController.Run(leaderCtx)
+
+			// Start metrics server for Prometheus only on the leader so
+			// the scrape target is deterministic.
+			metricsServer = kubernetes.NewMetricsServer(":8080")
+			go func() {
+				if err := metricsServer.Start(); err != nil {
+					log.Printf("Metrics server exited with error: %v", err)
+				}
+			}()
+
+			<-leaderCtx.Done()
+		})
+		if leErr != nil {
+			log.Printf("leader election: %v", leErr)
+		}
 	} else {
 		// Simulate some events for testing in non-Kubernetes mode
 		go simulateEvents(manager)
+		<-rootCtx.Done()
 	}
-
-	// Wait for interrupt signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Printf("Received signal %v, shutting down", sig)
 
 	if metricsServer != nil {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

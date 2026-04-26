@@ -342,6 +342,17 @@ jobs:
           # imagePullPolicy=Never before asserting readiness.
           bash scripts/ci/prove-event-correlation-e2e.sh
 
+      - name: Prove controller leader-election failover
+        run: |
+          set -euo pipefail
+
+          # Sprint 31 / Ticket 47: kill the active leader pod of a target
+          # controller (default ids-controller) and assert the standby
+          # acquires the Lease within RTO ≤ 30s. ids-controller is the
+          # target because it's a Deployment with replicas=2 already
+          # rolled out by the previous step in this workflow.
+          bash scripts/ci/prove-leader-failover.sh
+
       - name: Validate dashboard + alert-rule PromQL against live series
         run: |
           set -euo pipefail

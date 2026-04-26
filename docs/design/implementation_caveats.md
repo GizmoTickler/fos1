@@ -316,6 +316,71 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 ### Residual
 - `pkg/security/firewall/kernel.go` still imports `github.com/google/nftables` and remains the only production implementation of the `FirewallManager` interface consumed by `pkg/security/policy/{translator,zone_manager}.go`. Ticket 46 incorrectly reported it was gone; it is live interface code, not residual dead code, so removal is out of scope for Ticket 50 and requires a separate Cilium-backed `FirewallManager` implementation before it can be deleted. Until then, `github.com/google/nftables` remains in `go.mod`.
 
+## Sprint 31 Ticket 47 — Controller HA via Leader Election
+
+### Status
+
+- Every owned controller under `cmd/` now wires leader election against
+  `coordination.k8s.io/v1` Leases:
+  - `cmd/api-server/` uses `sigs.k8s.io/controller-runtime/pkg/manager`
+    LeaderElection with the lease in the `security` namespace.
+  - `cmd/certificate-controller/`, `cmd/cilium-controller/`,
+    `cmd/dpi-framework/`, `cmd/event-correlator/`,
+    `cmd/ids-controller/`, `cmd/threatintel-controller/`, and
+    `cmd/wireguard-controller/` use `pkg/leaderelection` (a thin
+    wrapper over `k8s.io/client-go/tools/leaderelection` with the
+    fos1-standard 15s/10s/2s timings).
+- Every owned controller `Deployment` runs `replicas: 2`,
+  `maxUnavailable: 1`, and `preferredDuringSchedulingIgnoredDuringExecution`
+  podAntiAffinity on `kubernetes.io/hostname`. Each gets a
+  namespace-scoped `Role` + `RoleBinding` for `coordination.k8s.io/leases`
+  (no new `ClusterRoleBinding`).
+- `scripts/ci/prove-leader-failover.sh` proves one Kind failover cycle on
+  `ids-controller` (the failover-proof target — see Caveats below). Wired
+  into `.github/workflows/test-bootstrap.yml` after the IDS controller is
+  rolled out.
+
+### Caveats — what HA does NOT cover
+
+- **External daemon singletons remain single-process.** FRR (BGP/OSPF),
+  Suricata (IDS), Zeek (IDS), and Kea (DHCP) are shipped as single-pod
+  / single-process daemons with process-local state. They do not
+  participate in the leader-election contract; failover for these is a
+  per-daemon design (FRR has BFD, Kea has a HA hooks library, Suricata
+  can run as parallel sensors). Sprint 32 candidate.
+- **Shared-state observability remains single-replica.** Elasticsearch
+  and Prometheus run as single-replica StatefulSets and hold real
+  persistent data; leader election alone does not replicate that
+  state. Multi-node clustering (ES cross-zone replication, Prometheus
+  federation or Thanos) is a separate sprint.
+- **DaemonSets are intentionally excluded.** `dpi-manager` is a
+  `DaemonSet` (one pod per node, node-local). The plan suggested
+  `dpi-manager` as the failover-proof target; this was a plan-level
+  inconsistency (you cannot run leader election on a node-local
+  DaemonSet without defeating its purpose). The proof script targets
+  `ids-controller` instead — also already deployed in the Kind harness
+  and now scaled to two replicas.
+- **`trafficshaper-controller` stays at `replicas: 1`.** It uses
+  `hostNetwork: true` to drive TC on the uplink; two replicas on the
+  same host conflict on the netdev. Its RBAC was already extended to
+  include the lease verbs in Sprint 31 Ticket 52, so once an operator
+  runs it across two nodes a follow-up can flip the replica count
+  without RBAC churn.
+- **Each non-CR controller exits on missing `POD_NAMESPACE`.** Operators
+  who build their own Deployment manifests must set `POD_NAMESPACE` and
+  `POD_NAME` from the downward API or the binary will fail fast on
+  startup. This is a deliberate fail-closed design.
+- **`dpi-framework` `main.go` is wired but unused in the deployed
+  manifest set.** There is no `manifests/base/*/dpi-framework`
+  Deployment in tree; `dpi-manager` is the production path. The wiring
+  is preserved in the binary so any operator who ships their own
+  Deployment for it gets HA out of the box. RBAC for the lease is
+  the operator's responsibility in that case.
+- **No metrics on lease acquisition / loss.** The wrapper logs
+  structured klog events on transition but does not export Prometheus
+  metrics. Adding `leader_transitions_total` is a small follow-up; not
+  in scope for Ticket 47.
+
 ## Notes for Review
 
 - Anything listed here should be treated as a deliberate tradeoff, not a hidden bug.

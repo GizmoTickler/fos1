@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
+	"github.com/GizmoTickler/fos1/pkg/leaderelection"
 	"github.com/GizmoTickler/fos1/pkg/security/certificates"
 )
 
@@ -108,13 +109,33 @@ func main() {
 		cancel()
 	}()
 
-	// Initialize the certificate manager
-	if err := certManager.Initialize(ctx); err != nil {
-		klog.Fatalf("Failed to initialize certificate manager: %v", err)
+	// Sprint 31 / Ticket 47: HA via client-go leader election. The standby
+	// pod blocks here until it acquires the Lease, then runs the controller
+	// loop. POD_NAMESPACE / POD_NAME come from the downward API on the
+	// Deployment so the lease lives in the controller's own namespace.
+	leNamespace := leaderelection.NamespaceFromEnv()
+	if leNamespace == "" {
+		klog.Fatal("POD_NAMESPACE must be set (downward API) for leader election")
 	}
 
-	// Run the controller
-	if err := controller.Run(ctx); err != nil {
-		klog.Fatalf("Failed to run certificate controller: %v", err)
+	leErr := leaderelection.Run(ctx, leaderelection.Config{
+		LockName:      "certificate-controller.fos1.io",
+		LockNamespace: leNamespace,
+		Identity:      leaderelection.IdentityFromEnv(),
+		Client:        kubeClient,
+	}, func(leaderCtx context.Context) {
+		// Initialize the certificate manager
+		if err := certManager.Initialize(leaderCtx); err != nil {
+			klog.Errorf("Failed to initialize certificate manager: %v", err)
+			return
+		}
+
+		// Run the controller — blocks until leaderCtx is cancelled.
+		if err := controller.Run(leaderCtx); err != nil && leaderCtx.Err() == nil {
+			klog.Errorf("certificate controller exited: %v", err)
+		}
+	})
+	if leErr != nil {
+		klog.Fatalf("leader election: %v", leErr)
 	}
 }
