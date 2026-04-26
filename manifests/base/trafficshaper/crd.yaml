@@ -1,0 +1,126 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: trafficshapers.network.fos1.io
+spec:
+  group: network.fos1.io
+  names:
+    kind: TrafficShaper
+    listKind: TrafficShaperList
+    plural: trafficshapers
+    singular: trafficshaper
+    shortNames:
+      - tsh
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Interface
+          type: string
+          jsonPath: .spec.interface
+        - name: Direction
+          type: string
+          jsonPath: .spec.direction
+        - name: Rules
+          type: integer
+          jsonPath: .status.appliedRuleCount
+        - name: Hash
+          type: string
+          jsonPath: .status.lastAppliedHash
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - interface
+              properties:
+                interface:
+                  type: string
+                  description: >-
+                    Host network interface this shaper attaches to (e.g.
+                    "eth0", "vlan100", "bond0"). Resolved at reconcile time;
+                    an unresolvable interface yields Invalid=True.
+                direction:
+                  type: string
+                  description: >-
+                    TC hook direction. Defaults to "egress" when omitted.
+                  enum:
+                    - egress
+                    - ingress
+                    - both
+                rules:
+                  type: array
+                  description: >-
+                    Priority rules to install. v1 collapses these into a
+                    single per-interface priority via the lowest Priority
+                    value across all rules (matching 802.1p PCP semantics
+                    where lower value = higher priority).
+                  items:
+                    type: object
+                    required:
+                      - priority
+                    properties:
+                      matchCIDR:
+                        type: string
+                        description: Destination CIDR to match (forward-compatible).
+                      matchDSCP:
+                        type: integer
+                        format: int32
+                        description: DSCP value to match (forward-compatible).
+                        minimum: 0
+                        maximum: 63
+                      priority:
+                        type: integer
+                        format: int32
+                        description: TC priority class (1-7, 802.1p PCP range).
+                        minimum: 1
+                        maximum: 7
+                      rate:
+                        type: string
+                        description: >-
+                          Optional rate cap in TC format (e.g. "100Mbit").
+                          Parsed but not enforced by the v1 data path.
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                lastAppliedHash:
+                  type: string
+                lastUpdated:
+                  type: string
+                  format: date-time
+                appliedRuleCount:
+                  type: integer
+                  format: int32
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

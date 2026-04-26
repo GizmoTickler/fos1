@@ -1,0 +1,59 @@
+---
+# Example TrafficShaper that prioritises voice/video DSCP traffic on the
+# uplink interface eth0 (Sprint 31 / Ticket 52).
+#
+# Composition with QoSProfile (Sprint 30 / Ticket 45):
+#
+#   * QoSProfile  → per-pod egress rate limit via Cilium Bandwidth Manager
+#                   (annotations on the pod's veth).
+#   * TrafficShaper (this CR) → per-interface priority marking via the
+#                   tc_qos_shape BPF program attached to the host's
+#                   uplink. Writes skb->priority for downstream classful
+#                   qdiscs to honour.
+#
+# The two CRDs are orthogonal — they enforce at different scopes and do
+# not share state. An operator wanting both per-pod caps AND uplink-side
+# prioritisation should author both.
+#
+# Apply with:
+#   kubectl apply -f manifests/examples/qos/trafficshaper-example.yaml
+#
+# Verify status:
+#   kubectl -n network get trafficshaper uplink-priority -o yaml
+#   # expect status.conditions[?(@.type=='Applied')].status == "True"
+#
+# v1 caveats:
+#   * The BPF program currently stores a single per-ifindex priority,
+#     so the controller collapses the rules slice to the lowest
+#     Priority value across all rules (matching 802.1p PCP semantics).
+#     Per-flow classification is on the roadmap.
+#   * `rate` is parsed but not enforced by the v1 data path — kept on
+#     the spec so a future TBF/HTB layer can pick it up without a
+#     CRD change.
+apiVersion: network.fos1.io/v1alpha1
+kind: TrafficShaper
+metadata:
+  name: uplink-priority
+  namespace: network
+spec:
+  # The host network interface this shaper attaches to. The controller
+  # resolves the ifindex at reconcile time; an unresolvable interface
+  # yields Invalid=True without crashing the controller.
+  interface: eth0
+
+  # TC hook direction. "egress" is the default and the most common case
+  # (uplink shaping). Set to "both" to also mark inbound traffic.
+  direction: egress
+
+  rules:
+    # DSCP 46 (EF — Expedited Forwarding, voice) → priority 1 (highest
+    # 802.1p PCP). Lower PCP values are higher priority.
+    - matchDSCP: 46
+      priority: 1
+
+    # Bulk LAN-to-LAN traffic (10.0.0.0/8) → priority 5 (mid-PCP).
+    # Optional rate cap at 100Mbit (parsed but not yet enforced; see
+    # caveats above).
+    - matchCIDR: "10.0.0.0/8"
+      priority: 5
+      rate: "100Mbit"

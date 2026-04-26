@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trafficshaper-controller
+  namespace: network
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trafficshaper-controller
+rules:
+  - apiGroups: ["network.fos1.io"]
+    resources: ["trafficshapers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["network.fos1.io"]
+    resources: ["trafficshapers/status"]
+    verbs: ["get", "update", "patch"]
+  # Sprint 31 Ticket 47 leader election lease — included up-front so a
+  # later scale-to-2 (after Ticket 47 lands in production) does not
+  # require a follow-up RBAC change.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trafficshaper-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trafficshaper-controller
+subjects:
+  - kind: ServiceAccount
+    name: trafficshaper-controller
+    namespace: network
