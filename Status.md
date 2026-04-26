@@ -15,7 +15,7 @@ Sprint 30 closed the critical-path production gaps that Sprint 29 had deferred:
 - **URLhaus + MISP threat-intel v1** — `ThreatFeed` CRD + `cmd/threatintel-controller/` + `pkg/security/threatintel/` parses URLhaus CSV and MISP JSON, translates into Cilium deny policies with last-seen TTL. MISP authentication via `spec.authSecretRef` → Secret `apiKey` data key. `ThreatFeed.Status` reports last-fetch time, entry count, expiry state. STIX/TAXII remains a non-goal (Tickets 44 + 53).
 - **QoS via Cilium Bandwidth Manager** — `QoSProfile` CR → `kubernetes.io/egress-bandwidth` pod annotation → BPF TBF rate limiter at pod admission via `pkg/security/qos.BandwidthManager`. Per-pod egress only in v1; ingress enforcement and classful/uplink TC shaping remain future work (Ticket 45).
 
-Sprint 31 is in flight — Ticket 48 landed write-path CRUD v1 on the REST API for FilterPolicy (POST/PUT/PATCH/DELETE with server-side validation, optimistic concurrency on PUT, JSON Merge Patch + Strategic Merge Patch content-type dispatch on PATCH). What remains for production readiness: HA/clustering, broader eBPF program types (sockops/cgroup), additional threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets management, ingress rate limiting, and a VLAN-shaper controller on top of the Ticket 39 infrastructure. See `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening".
+Sprint 31 is in flight — Ticket 47 landed controller leader election with hot standby (RTO ≤ 30s) backed by `coordination.k8s.io/v1` Leases, every owned controller now runs `replicas: 2` with `preferredDuringSchedulingIgnoredDuringExecution` podAntiAffinity, and a Kind failover proof runs in CI. Ticket 48 landed write-path CRUD v1 on the REST API for FilterPolicy (POST/PUT/PATCH/DELETE with server-side validation, optimistic concurrency on PUT, JSON Merge Patch + Strategic Merge Patch content-type dispatch on PATCH). What remains for production readiness: data-tier HA (ES/Prometheus single-replica today), broader eBPF program types (sockops/cgroup), additional threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets management, ingress rate limiting, and a VLAN-shaper controller on top of the Ticket 39 infrastructure. See `docs/design/implementation_backlog.md` §"Sprint 31 (placeholder): Post-Sprint-30 Production Hardening".
 
 ## Verification Snapshot
 
@@ -48,7 +48,7 @@ Owned observability contract as of 2026-04-22:
 | Lines of Go Code | ~90,000+ | Significant implementation |
 | CRD Kinds Defined | 41+ | Comprehensive API coverage; Sprint 30 added `ThreatFeed` (Ticket 44). FirewallRule CRD removed per ADR-0001; SAML/RADIUS/Cert auth configs removed |
 | Primary Ticket Track | Tickets 1-46 complete (Sprints 29 and 30 both fully merged) | Core path plus observability proof depth, FilterPolicy enforcement (with persisted status), auth closeout, NIC/capture reporting, coverage bumps, eBPF compile+load (XDP+TC), shared status writeback helper, REST API v0, RBAC baseline, NAT perf baseline, URLhaus threat-intel, QoS enforcement |
-| Remaining Work Shape | Sprint 31 (placeholder) post-Sprint-30 production hardening | HA/clustering, write-path API, broader eBPF (sockops/cgroup), more threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets, ingress rate limiting, VLAN-scoped TC shaper controller |
+| Remaining Work Shape | Sprint 31 (placeholder) post-Sprint-30 production hardening | Controller HA via leader election shipped (Ticket 47); residual: data-tier HA (ES/Prometheus single-replica), write-path API breadth, broader eBPF (sockops/cgroup), more threat feeds, performance coverage beyond one hot path, inter-controller TLS + secrets, ingress rate limiting, VLAN-scoped TC shaper controller |
 | Verification Status | `make verify-mainline` green, 42/42 test packages pass; Kind harness proves event correlator E2E, accelerated ILM rollover, natural-traffic DPI, dashboard/alert PromQL validity; RBAC no-cluster-admin gate enforced; NAT perf bench runs as non-blocking CI | Docs, manifests, and the bootstrap harness agree on the current proof envelope |
 | Testing Coverage (Sprint 29 Ticket 36 measurements, still accurate post-Sprint-30) | `pkg/traffic` 51.4%, `pkg/hardware/wan` 57.6%, `pkg/network/ebpf` 93.2%, `pkg/security/policy` 51.1% | Thin packages have reconciliation-style coverage; Sprint 30's new packages (`pkg/api/`, `pkg/controllers/status/`, `pkg/security/threatintel/`, `pkg/security/qos/`) all ship with dedicated tests |
 | Documentation Files | 70 | Strong documentation; Sprint 30 added `docs/design/api-server.md`, `docs/design/rbac-baseline.md`, `docs/performance/baseline-2026-04.md`, `docs/performance/README.md` |
@@ -60,7 +60,7 @@ Sprint 30 (tickets 38-46) is fully merged. The next phase is **Sprint 31 (placeh
 
 Candidate Sprint 31 workstreams (in rough priority order):
 
-1. **HA / clustering** — single-node Elasticsearch, Prometheus, Grafana, Alertmanager today. Controllers run single-replica with no leader election. Largest residual production blocker.
+1. **HA / clustering** — controller-tier covered (Sprint 31 Ticket 47: leader election with hot standby; RTO ≤ 30s; CI failover proof). Data tier remains single-replica: Elasticsearch, Prometheus, Grafana, Alertmanager all hold persistent state and need a separate replication strategy. External daemon singletons (FRR, Suricata, Zeek, Kea) are also Sprint 32 candidates.
 2. **Watch/streaming + additional resource families on REST API** — Ticket 48 extended FilterPolicy to full CRUD. Watch/streaming endpoints and additional resource families (NAT, routing, DPI, zones) remain.
 3. **Broader eBPF program types** — add sockops and cgroup loaders alongside the Ticket 38 XDP + Ticket 39 TC path.
 4. **Performance coverage beyond one hot path** — NAT policy apply is baselined; DPI event → Cilium policy, routing sync, DHCP control socket, DNS zone update remain unbenchmarked.
@@ -403,15 +403,30 @@ Closed in Sprint 30:
 
 Still open for Sprint 31+:
 
-### 1. HA / Clustering ❌ (not yet scoped)
+### 1. HA / Clustering ⚠️ (controllers covered; data tier still single-replica)
 
-**What's Missing:**
-- Single-node posture for Elasticsearch, Prometheus, Grafana, Alertmanager
-- No controller replica coordination or leader election
-- No state replication
-- No snapshot/restore automation
+**What's Shipped (Sprint 31 Ticket 47):**
+- Controller leader election with hot standby; RTO ≤ 30s.
+  Every owned controller runs `replicas: 2` with `preferredDuringSchedulingIgnoredDuringExecution`
+  podAntiAffinity on `kubernetes.io/hostname`.
+- `pkg/leaderelection` helper wraps `k8s.io/client-go/tools/leaderelection` (15s/10s/2s timings)
+  for non-controller-runtime mains; the api-server uses controller-runtime manager-level LE.
+- Namespace-scoped `Role` + `RoleBinding` for `coordination.k8s.io/leases` per controller —
+  **no new `ClusterRoleBinding`** so `scripts/ci/prove-no-cluster-admin.sh` keeps passing.
+- `scripts/ci/prove-leader-failover.sh` proves one Kind failover cycle in CI
+  (target: `ids-controller`); wired into `.github/workflows/test-bootstrap.yml`.
 
-**Impact:** Single point of failure. Remains the largest residual production blocker after Sprint 30.
+**Still Missing:**
+- Single-node Elasticsearch, Prometheus, Grafana, Alertmanager — these hold persistent
+  data and cannot be replicated by leader election alone (Sprint 32 candidate).
+- External daemon singletons: FRR, Suricata, Zeek, Kea remain single-pod / single-process
+  with no in-tree HA contract. Operators must layer per-daemon clustering (BFD for FRR,
+  Kea HA hooks, parallel Suricata sensors).
+- DaemonSets (`dpi-manager`) are intentionally per-node and excluded from leader election.
+
+**Impact:** Controller-tier failure is no longer a single point of failure. The data tier
+and the external daemons remain single-instance — see `docs/design/high-availability.md`
+for the explicit scope and Sprint 32 candidates.
 
 ### 2. REST API Surface Expansion ⚠️ (Sprint 31+)
 
@@ -537,7 +552,7 @@ Still open for Sprint 31+:
 3. **Ingress Rate Limiting + VLAN-Scoped Shaping** - Per-pod egress shipped in Sprint 30 Ticket 45 via Cilium Bandwidth Manager. Ingress enforcement is unsupported by Bandwidth Manager; a VLAN-shaper controller on top of the Ticket 39 TC loader infrastructure is still to be scoped.
 4. **Additional Threat Feeds** - URLhaus CSV landed in Sprint 30 Ticket 44; IP-reputation / MISP / STIX remain future work (MISP/STIX currently non-goals).
 5. **Performance Coverage Beyond One Hot Path** - NAT policy apply baselined in Sprint 30 Ticket 43; DPI event → Cilium policy, routing sync, DHCP control socket, DNS zone update remain unbenchmarked.
-6. **HA / Clustering** - Single-node posture for observability stack and single-replica controllers. Largest residual production blocker.
+6. **HA / Clustering** - Controller tier covered (Sprint 31 Ticket 47: leader election with hot standby; RTO ≤ 30s; CI failover proof). Data tier (Elasticsearch, Prometheus, Grafana, Alertmanager) and external daemon singletons (FRR, Suricata, Zeek, Kea) remain single-instance — Sprint 32 candidates.
 7. **Inter-Controller TLS + Secrets Management** - Ticket 41 shipped mTLS for the REST API only; controller-to-controller TLS and a documented secrets model are open.
 
 ### Non-goals (explicit per ADR-0001 / Sprint 29)
@@ -593,7 +608,7 @@ Still open for Sprint 31+:
 12. ~~No Threat Intelligence~~ - **Resolved (v0):** URLhaus CSV ingestion via `ThreatFeed` CRD per Sprint 30 Ticket 44. MISP/STIX remain non-goals.
 13. **Partial Kernel Integration** - Direct interface manipulation still missing (non-goal per ADR-0001 for enforcement paths)
 14. **Uneven Test Coverage** - Four targeted packages at 50%+ (Sprint 29 Ticket 36); aggregate still uneven. Sprint 30's new packages (`pkg/api/`, `pkg/controllers/status/`, `pkg/security/threatintel/`, `pkg/security/qos/`) all ship with dedicated tests.
-15. **No HA / Clustering** - Single point of failure; Sprint 31 candidate. Largest residual production blocker.
+15. **HA / Clustering (controller tier shipped; data tier open)** - Sprint 31 Ticket 47 ships controller leader election with hot standby and a CI failover proof; RTO ≤ 30s. Data tier (Elasticsearch / Prometheus / Grafana / Alertmanager) and external daemon singletons (FRR / Suricata / Zeek / Kea) remain single-instance and are Sprint 32 candidates. See `docs/design/high-availability.md` for the explicit scope.
 16. **No Write-Path API** - Ticket 41's REST v0 is read-only; write verbs, watch streams, and resource families beyond FilterPolicy remain Sprint 31 candidates.
 17. **Broader eBPF Program Types** - Sockops / cgroup loaders return `ErrEBPFProgramTypeUnsupported`; Sprint 31 candidate.
 18. **Inter-Controller TLS + Secrets Management** - Ticket 41 shipped mTLS for the REST API only; inter-controller TLS and a secrets management model remain open.

@@ -78,11 +78,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Sprint 31 / Ticket 47: HA via controller-runtime manager-level leader
+	// election. Two replicas run; the standby blocks at mgr.Start until it
+	// becomes leader. POD_NAMESPACE comes from the downward API on the
+	// Deployment so the lease lives in this controller's own namespace and
+	// the RBAC stays namespace-scoped. Lease timings target RTO ≤ 30s.
+	leaderNamespace := os.Getenv("POD_NAMESPACE")
+	if leaderNamespace == "" {
+		klog.ErrorS(nil, "POD_NAMESPACE must be set (downward API) for leader election")
+		os.Exit(1)
+	}
+	leaseDuration := 15 * time.Second
+	renewDeadline := 10 * time.Second
+	retryPeriod := 2 * time.Second
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
-		Scheme: scheme,
-		// Bind a metrics server lazily; the default "0" disables it. We
-		// keep the manager minimal — no leader election, no webhooks.
-		LeaderElection: false,
+		Scheme:                        scheme,
+		LeaderElection:                true,
+		LeaderElectionID:              "fos1-api-server.fos1.io",
+		LeaderElectionNamespace:       leaderNamespace,
+		LeaderElectionResourceLock:    "leases",
+		LeaderElectionReleaseOnCancel: true,
+		LeaseDuration:                 &leaseDuration,
+		RenewDeadline:                 &renewDeadline,
+		RetryPeriod:                   &retryPeriod,
 	})
 	if err != nil {
 		klog.ErrorS(err, "build controller-runtime manager")

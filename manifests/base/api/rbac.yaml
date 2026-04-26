@@ -41,6 +41,34 @@ subjects:
     name: fos1-api-server
     namespace: security
 ---
+# Sprint 31 / Ticket 47: namespace-scoped Role granting the lease verbs the
+# controller-runtime manager needs for leader election. The Lease object
+# lives in this controller's namespace (security); a Role + RoleBinding is
+# enough — no ClusterRole / ClusterRoleBinding required.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fos1-api-server-leaderelection
+  namespace: security
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fos1-api-server-leaderelection
+  namespace: security
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fos1-api-server-leaderelection
+subjects:
+  - kind: ServiceAccount
+    name: fos1-api-server
+    namespace: security
+---
 # Default (empty) allowlist ConfigMap. Operators override this with their
 # own list of authorized client-cert Subject CNs, one per line. Lines
 # starting with '#' are ignored.

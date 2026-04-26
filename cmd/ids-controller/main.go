@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
+	"github.com/GizmoTickler/fos1/pkg/leaderelection"
 	"github.com/GizmoTickler/fos1/pkg/security/ids"
 )
 
@@ -67,18 +68,38 @@ func main() {
 		cancel()
 	}()
 
-	// Initialize the IDS/IPS manager
-	if err := idsManager.Initialize(ctx); err != nil {
-		klog.Fatalf("Failed to initialize IDS/IPS manager: %v", err)
+	// Sprint 31 / Ticket 47: HA via client-go leader election. The IDS
+	// controller reconciles SuricataInstance/ZeekInstance/EventCorrelation
+	// CRs into Deployments and must run as a single active leader so the
+	// generated workloads do not flap between two writers.
+	leNamespace := leaderelection.NamespaceFromEnv()
+	if leNamespace == "" {
+		klog.Fatal("POD_NAMESPACE must be set (downward API) for leader election")
 	}
 
-	// Wait for context cancellation
-	<-ctx.Done()
+	leErr := leaderelection.Run(ctx, leaderelection.Config{
+		LockName:      "ids-controller.fos1.io",
+		LockNamespace: leNamespace,
+		Identity:      leaderelection.IdentityFromEnv(),
+		Client:        kubeClient,
+	}, func(leaderCtx context.Context) {
+		// Initialize the IDS/IPS manager
+		if err := idsManager.Initialize(leaderCtx); err != nil {
+			klog.Errorf("Failed to initialize IDS/IPS manager: %v", err)
+			return
+		}
 
-	// Shutdown the IDS/IPS manager
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := idsManager.Shutdown(shutdownCtx); err != nil {
-		klog.Errorf("Failed to shutdown IDS/IPS manager: %v", err)
+		// Wait for leadership loss / shutdown
+		<-leaderCtx.Done()
+
+		// Shutdown the IDS/IPS manager
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := idsManager.Shutdown(shutdownCtx); err != nil {
+			klog.Errorf("Failed to shutdown IDS/IPS manager: %v", err)
+		}
+	})
+	if leErr != nil {
+		klog.Fatalf("leader election: %v", leErr)
 	}
 }

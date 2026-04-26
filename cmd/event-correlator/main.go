@@ -8,6 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	"github.com/GizmoTickler/fos1/pkg/leaderelection"
 	"github.com/GizmoTickler/fos1/pkg/security/ids/correlation"
 )
 
@@ -43,6 +47,37 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Sprint 31 / Ticket 47: HA via client-go leader election when the
+	// in-cluster config is available. If the binary is invoked outside a
+	// Pod (no service-account token) we run the runtime directly without
+	// leader election so the unit/integration test harness still works.
+	if restCfg, err := rest.InClusterConfig(); err == nil {
+		kubeClient, err := kubernetes.NewForConfig(restCfg)
+		if err != nil {
+			log.Fatalf("build kube client: %v", err)
+		}
+
+		leNamespace := leaderelection.NamespaceFromEnv()
+		if leNamespace == "" {
+			log.Fatal("POD_NAMESPACE must be set (downward API) for leader election")
+		}
+
+		leErr := leaderelection.Run(ctx, leaderelection.Config{
+			LockName:      "event-correlator.fos1.io",
+			LockNamespace: leNamespace,
+			Identity:      leaderelection.IdentityFromEnv(),
+			Client:        kubeClient,
+		}, func(leaderCtx context.Context) {
+			if err := runtime.Run(leaderCtx); err != nil && leaderCtx.Err() == nil {
+				log.Printf("run correlator: %v", err)
+			}
+		})
+		if leErr != nil {
+			log.Fatalf("leader election: %v", leErr)
+		}
+		return
+	}
 
 	if err := runtime.Run(ctx); err != nil {
 		log.Fatalf("run correlator: %v", err)

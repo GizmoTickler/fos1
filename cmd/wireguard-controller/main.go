@@ -9,13 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GizmoTickler/fos1/pkg/leaderelection"
 	wgcontroller "github.com/GizmoTickler/fos1/pkg/vpn/controller"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 )
 
@@ -82,7 +83,7 @@ func main() {
 	if err != nil {
 		klog.Fatalf("Failed to create WireGuard controller: %v", err)
 	}
-	
+
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,15 +97,30 @@ func main() {
 		cancel()
 	}()
 
-	klog.Info("Starting WireGuard controller")
-	go func() {
-		if err := controller.Run(ctx); err != nil && ctx.Err() == nil {
-			klog.Errorf("WireGuard controller exited with error: %v", err)
-			cancel()
-		}
-	}()
+	// Sprint 31 / Ticket 47: HA via client-go leader election. The
+	// WireGuard controller mutates per-host wg interfaces / config files,
+	// which must be driven by a single active leader to avoid two writers
+	// fighting over the same kernel state.
+	leNamespace := leaderelection.NamespaceFromEnv()
+	if leNamespace == "" {
+		klog.Fatal("POD_NAMESPACE must be set (downward API) for leader election")
+	}
 
-	// Wait for context cancellation
-	<-ctx.Done()
-	klog.Info(fmt.Sprintf("Shutting down"))
+	klog.Info("WireGuard controller waiting for leader election")
+	leErr := leaderelection.Run(ctx, leaderelection.Config{
+		LockName:      "wireguard-controller.fos1.io",
+		LockNamespace: leNamespace,
+		Identity:      leaderelection.IdentityFromEnv(),
+		Client:        kubeClient,
+	}, func(leaderCtx context.Context) {
+		klog.Info("Starting WireGuard controller")
+		runErr := controller.Run(leaderCtx)
+		if runErr != nil && leaderCtx.Err() == nil {
+			klog.Errorf("WireGuard controller exited with error: %v", runErr)
+		}
+		klog.Info(fmt.Sprintf("Shutting down"))
+	})
+	if leErr != nil {
+		klog.Fatalf("leader election: %v", leErr)
+	}
 }

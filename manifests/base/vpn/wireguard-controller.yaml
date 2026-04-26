@@ -7,7 +7,16 @@ metadata:
     app: wireguard-controller
     component: vpn
 spec:
-  replicas: 1
+  # Sprint 31 / Ticket 47: HA active/standby with leader election. Note
+  # the WireGuard controller mutates per-host wg interfaces via the kernel
+  # netlink API; the leader is the writer. Standby polls the Lease and
+  # takes over if the leader's RenewDeadline expires.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: wireguard-controller
@@ -18,6 +27,15 @@ spec:
         component: vpn
     spec:
       serviceAccountName: wireguard-controller
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: wireguard-controller
       containers:
       - name: controller
         image: fos1/wireguard-controller:latest
@@ -26,6 +44,15 @@ spec:
         - "--v=2"
         - "--workers=2"
         - "--resync-period=30m"
+        env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
         resources:
           limits:
             cpu: 200m
@@ -104,6 +131,31 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: wireguard-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+# Sprint 31 / Ticket 47: namespace-scoped lease verbs for leader election.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wireguard-controller-leaderelection
+  namespace: network
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wireguard-controller-leaderelection
+  namespace: network
+subjects:
+- kind: ServiceAccount
+  name: wireguard-controller
+  namespace: network
+roleRef:
+  kind: Role
+  name: wireguard-controller-leaderelection
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
