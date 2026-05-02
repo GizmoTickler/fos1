@@ -267,17 +267,10 @@ func (s *Server) Run(ctx context.Context) error {
 // path — the caller starts WatchAndReload to pick up rotation.
 func buildTLSConfig(cfg ServerConfig) (*tls.Config, *certificates.TLSReloader, error) {
 	if cfg.CertDir != "" {
-		base, reloader, err := certificates.LoadTLSConfig(cfg.CertDir)
+		base, reloader, err := certificates.LoadMutualTLSConfig(cfg.CertDir)
 		if err != nil {
 			return nil, nil, fmt.Errorf("load TLS material from %s: %w", cfg.CertDir, err)
 		}
-		// Layer mTLS on top of the shared helper. ClientCAs comes from
-		// the same ca.crt the server cert chains to: every owned
-		// controller and every authorized client carries a cert minted
-		// by fos1-internal-ca, so the same pool authenticates both
-		// directions.
-		base.ClientCAs = reloader.CABundle()
-		base.ClientAuth = tls.RequireAndVerifyClientCert
 		return base, reloader, nil
 	}
 

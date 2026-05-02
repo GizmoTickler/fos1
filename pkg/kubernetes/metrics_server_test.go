@@ -2,9 +2,13 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +40,34 @@ func TestMetricsServerUsesIndependentMuxes(t *testing.T) {
 	}
 	if second.server.Handler != second.mux {
 		t.Fatal("expected second server handler to use its own mux")
+	}
+}
+
+func TestTLSMetricsServerWrapsHandlerWithPeerSubjectAllowlist(t *testing.T) {
+	server := newMetricsServer("127.0.0.1:0", &tls.Config{}, "controller-a")
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/healthz", nil)
+	req.TLS = &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{
+			{Subject: pkix.Name{CommonName: "controller-a"}},
+		}},
+	}
+	resp := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("allowed subject status = %d, want %d", resp.Code, http.StatusOK)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "https://example.test/healthz", nil)
+	req.TLS = &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{
+			{Subject: pkix.Name{CommonName: "unknown-controller"}},
+		}},
+	}
+	resp = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("unknown subject status = %d, want %d", resp.Code, http.StatusForbidden)
 	}
 }
 

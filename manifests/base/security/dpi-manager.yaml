@@ -117,11 +117,12 @@ spec:
         args:
           - "--config=/etc/dpi-manager/config.yaml"
           - "--kubernetes"
-          # Sprint 31 / Ticket 49: serve metrics over HTTPS using
+          # Sprint 32 / Ticket 56: serve metrics over mTLS using
           # cert-manager-rotated material. The mount path is the
           # canonical fos1 TLS path; pkg/security/certificates picks
           # up renewals via fsnotify with no pod restart.
           - "--tls-cert-dir=/var/run/secrets/fos1.io/tls"
+          - "--mtls-allowlist=prometheus"
         env:
         - name: POD_NAMESPACE
           valueFrom:

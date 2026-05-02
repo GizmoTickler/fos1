@@ -1125,7 +1125,7 @@ Acceptance:
 
 ### Ticket 49: Inter-Controller TLS And Secrets Management Baseline
 Status:
-- completed (baseline only — see caveats; mTLS controller-to-controller and external-daemon TLS deferred to Sprint 32)
+- completed (server-TLS baseline only — see caveats; Ticket 56 started mTLS controller-to-controller, while external-daemon TLS remains Sprint 32 work)
 
 Landed commits:
 - direct on main `c60f906` (agent committed without merge commit)
@@ -1329,15 +1329,15 @@ Shared stabilization:
 - ticket 54 runs alongside the above once the bench harness in Ticket 43 is warm.
 - ticket 55 lands last, after 47-54 are merged.
 
-## Sprint 32 (placeholder): Post-Sprint-31 Production Hardening
+## Sprint 32 (active): mTLS Mesh + External-Daemon TLS
 
-Sprint 32 opens after Ticket 55 closed Sprint 31 with `make verify-mainline` green (43/43 packages pass) and production readiness raised from ~75-80% to ~82-87% (see `Status.md` §Production Readiness Assessment for the rationale). Detailed ticket definitions come in a separate planning session and are intentionally not duplicated here.
+Sprint 32 opened after Ticket 55 closed Sprint 31 with `make verify-mainline` green (43/43 packages pass) and production readiness raised from ~75-80% to ~82-87% (see `Status.md` §Production Readiness Assessment for the rationale). Ticket 56 is now in progress from Linear.
 
 Sprint 32 candidate workstreams, distilled from `Status.md` §Critical Gaps and the surviving caveats in `docs/design/implementation_caveats.md` after Sprint 31:
 
-- **mTLS for controller-to-controller calls** — Ticket 49 shipped server-only TLS on every owned listener except the API server. Other listeners run `ClientAuth = NoClientCert`. A follow-up should flip the remaining listeners to `RequireAndVerifyClientCert` and define the Subject-CN / SAN allowlist policy for cross-controller traffic.
+- **mTLS for controller-to-controller calls** — Ticket 56 is in progress. The shared mutual-TLS loader, client helper, receiver Subject-CN allowlist middleware, and currently owned listener wiring have landed. Prometheus client-cert scrape wiring remains Ticket 57, and external-daemon TLS remains Tickets 58-62.
 - **External-daemon TLS (FRR vtysh, Suricata socket, Kea control socket, Zeek Broker, chronyc)** — these still speak plaintext on in-pod loopback / Unix paths. Cross-host paths need a sidecar TLS terminator or a daemon-native TLS configuration.
-- **Prometheus rekey for `fos1-internal-ca`** — scrape configs still use plaintext fallbacks. Targets that flip to HTTPS will fail closed under default trust until `tls_config.ca_file` is wired in `manifests/base/monitoring/prometheus.yaml`.
+- **Prometheus rekey for `fos1-internal-ca`** — scrape configs need `ca_file`, `cert_file`, and `key_file` for the `prometheus` client identity. mTLS targets fail closed until Ticket 57 wires this in `manifests/base/monitoring/prometheus.yaml`.
 - **External-daemon HA (FRR / Suricata / Zeek / Kea singletons)** — Ticket 47 covered controller-tier failover only. External daemons run as single-pod / single-process with process-local state; per-daemon clustering (BFD for FRR, Kea HA hooks, parallel Suricata sensors) remains open.
 - **Shared-state HA (Elasticsearch / Prometheus / Grafana / Alertmanager)** — single-replica StatefulSets / Deployments hold persistent data. Multi-node clustering (ES cross-zone replication, Prometheus federation or Thanos) is a separate sprint.
 - **Write-path API for additional resource families** — Ticket 48 extended FilterPolicy to full CRUD. NAT, routing, DPI, zones, and threat feeds remain read-only or `kubectl`-only.

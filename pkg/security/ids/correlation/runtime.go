@@ -25,8 +25,13 @@ type RuntimeOptions struct {
 	Stdout       io.Writer
 
 	// TLSCertDir, when non-empty, switches the probe HTTP listener to
-	// HTTPS using cert-manager-rotated material. Sprint 31 / Ticket 49.
+	// HTTPS using cert-manager-rotated material. Sprint 32 / Ticket 56
+	// layers mTLS and Subject-CN allowlists on top.
 	TLSCertDir string
+
+	// MTLSAllowedSubjects is the Subject-CN allowlist enforced when
+	// TLSCertDir is set. Empty means deny all mTLS callers.
+	MTLSAllowedSubjects []string
 }
 
 type Runtime struct {
@@ -109,11 +114,12 @@ func (r *Runtime) Run(ctx context.Context) error {
 	// listener in TLS using the shared rotation-aware loader.
 	var tlsCancel context.CancelFunc
 	if r.options.TLSCertDir != "" {
-		tlsCfg, reloader, lerr := certificates.LoadTLSConfig(r.options.TLSCertDir)
+		tlsCfg, reloader, lerr := certificates.LoadMutualTLSConfig(r.options.TLSCertDir)
 		if lerr != nil {
 			_ = listener.Close()
 			return fmt.Errorf("load TLS config from %s: %w", r.options.TLSCertDir, lerr)
 		}
+		server.Handler = certificates.RequireAllowedPeerSubject(r.options.MTLSAllowedSubjects, server.Handler)
 		server.TLSConfig = tlsCfg
 		listener = tls.NewListener(listener, tlsCfg)
 

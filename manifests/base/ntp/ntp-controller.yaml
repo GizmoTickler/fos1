@@ -40,9 +40,10 @@ spec:
         - "--integration=true"
         - "--workers=2"
         - "--resync-period=30m"
-        # Sprint 31 / Ticket 49: serve metrics + API over HTTPS using
+        # Sprint 32 / Ticket 56: serve metrics + API over mTLS using
         # cert-manager-rotated material from fos1-internal-ca.
         - "--tls-cert-dir=/var/run/secrets/fos1.io/tls"
+        - "--mtls-allowlist=prometheus"
         - "--v=2"
         resources:
           limits:

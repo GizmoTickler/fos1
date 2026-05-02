@@ -318,9 +318,9 @@ The script:
 - captures the new cert serial via `openssl s_client` and asserts it differs from the pre-rotation serial
 
 What this proof does NOT cover:
-- mutual auth across the controller mesh — only the API server enforces `RequireAndVerifyClientCert`; other owned listeners run `ClientAuth = NoClientCert` and are not exercised by this script
+- mutual auth across the controller mesh — this is now covered separately by [`scripts/ci/prove-mtls-mesh.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-mtls-mesh.sh), which exercises the shared mTLS helper and owned-listener Subject-CN allowlist behavior
 - TLS for external daemons (FRR vtysh, Suricata socket, Kea control socket, Zeek Broker, chronyc) — these still speak plaintext on in-pod loopback / Unix paths
-- Prometheus scrape rekey for the `fos1-internal-ca` chain — scrape configs still use plaintext fallbacks; targets that flip to HTTPS will fail closed under default trust until `tls_config.ca_file` is wired
+- Prometheus scrape rekey for the `fos1-internal-ca` chain — scrape configs still need `tls_config.ca_file`, `cert_file`, and `key_file`; mTLS-enabled targets fail closed under default trust until Ticket 57 lands
 - trust-anchor compromise / replacement — the proof exercises rotation of leaf certs, not root replacement
 
 ## Operational Reading Guide

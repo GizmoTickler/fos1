@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +54,7 @@ func main() {
 	// for HTTPS-served metrics. Empty preserves the historical plaintext
 	// behavior so existing test rigs are unaffected.
 	tlsCertDir := flag.String("tls-cert-dir", "", "Directory with cert-manager-rotated TLS material (empty = plaintext metrics)")
+	mtlsAllowlist := flag.String("mtls-allowlist", "", "Comma-separated client certificate Subject CNs allowed to scrape HTTPS metrics")
 	flag.Parse()
 
 	// Load configuration
@@ -253,7 +255,7 @@ func main() {
 			// when --tls-cert-dir is set, serve HTTPS using cert-manager
 			// rotation-aware material.
 			if *tlsCertDir != "" {
-				ms, err := kubernetes.NewTLSMetricsServer(":8080", *tlsCertDir)
+				ms, err := kubernetes.NewTLSMetricsServer(":8080", *tlsCertDir, splitCSV(*mtlsAllowlist)...)
 				if err != nil {
 					log.Printf("metrics server (TLS) init failed: %v", err)
 				} else {
@@ -422,4 +424,19 @@ func simulateEvents(manager *dpi.DPIManager) {
 			log.Println("Sent periodic flow event")
 		}
 	}
+}
+
+func splitCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

@@ -17,25 +17,25 @@ import (
 // Manager coordinates all NTP services
 type Manager struct {
 	// Component controllers
-	chronyManager    *chrony.Manager
-	configGenerator  *chrony.ConfigGenerator
-	exporterManager  *metrics.Exporter
+	chronyManager   *chrony.Manager
+	configGenerator *chrony.ConfigGenerator
+	exporterManager *metrics.Exporter
 
 	// Integration
-	dhcpIntegration  *DHCPIntegration
-	dnsIntegration   *DNSIntegration
+	dhcpIntegration *DHCPIntegration
+	dnsIntegration  *DNSIntegration
 
 	// API and status
-	apiServer       *APIServer
+	apiServer *APIServer
 
 	// Control
-	k8sClient       kubernetes.Interface
-	ctx             context.Context
-	cancel          context.CancelFunc
-	mutex           sync.RWMutex
+	k8sClient kubernetes.Interface
+	ctx       context.Context
+	cancel    context.CancelFunc
+	mutex     sync.RWMutex
 
 	// currentConfig holds the last-applied NTP service configuration
-	currentConfig   *ntp.NTPService
+	currentConfig *ntp.NTPService
 }
 
 // Config holds NTP Manager configuration
@@ -52,8 +52,12 @@ type Config struct {
 
 	// TLSCertDir, when non-empty, switches both the metrics exporter and
 	// the API server to HTTPS using cert-manager-rotated material.
-	// Sprint 31 / Ticket 49.
+	// Sprint 32 / Ticket 56 layers mTLS and Subject-CN allowlists on top.
 	TLSCertDir string
+
+	// MTLSAllowedSubjects is the Subject-CN allowlist for NTP's owned HTTP
+	// listeners when TLSCertDir is set. Empty means deny all mTLS callers.
+	MTLSAllowedSubjects []string
 }
 
 // NewManager creates a new NTP Manager
@@ -104,10 +108,11 @@ func NewManager(
 	// Initialize metrics exporter if enabled
 	if config.MetricsEnabled {
 		exporterConfig := &metrics.Config{
-			Port:          config.MetricsPort,
-			Interval:      config.MetricsInterval,
-			ChronyManager: chronyManager,
-			TLSCertDir:    config.TLSCertDir,
+			Port:                config.MetricsPort,
+			Interval:            config.MetricsInterval,
+			ChronyManager:       chronyManager,
+			TLSCertDir:          config.TLSCertDir,
+			MTLSAllowedSubjects: config.MTLSAllowedSubjects,
 		}
 
 		exporter, err := metrics.NewExporter(exporterConfig)
@@ -147,6 +152,7 @@ func NewManager(
 		}
 		if config.TLSCertDir != "" {
 			apiServer.SetTLSCertDir(config.TLSCertDir)
+			apiServer.SetMTLSAllowlist(config.MTLSAllowedSubjects)
 		}
 		manager.apiServer = apiServer
 	}

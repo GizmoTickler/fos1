@@ -60,8 +60,12 @@ type Config struct {
 	LeaderElectionNS  string
 
 	// TLSCertDir, when non-empty, switches the metrics exporter and API
-	// listener to HTTPS. Sprint 31 / Ticket 49.
+	// listener to HTTPS with mTLS. Sprint 32 / Ticket 56.
 	TLSCertDir string
+
+	// MTLSAllowedSubjects is the Subject-CN allowlist for owned NTP HTTP
+	// listeners when TLSCertDir is set. Empty means deny all mTLS callers.
+	MTLSAllowedSubjects []string
 }
 
 // NewController creates a new NTP controller
@@ -110,6 +114,7 @@ func NewController(
 		MetricsPort:           config.MetricsPort,
 		MetricsInterval:       config.MetricsInterval,
 		TLSCertDir:            config.TLSCertDir,
+		MTLSAllowedSubjects:   config.MTLSAllowedSubjects,
 	}
 
 	ntpManager, err := manager.NewManager(kubeClient, managerConfig)

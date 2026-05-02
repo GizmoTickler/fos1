@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ func main() {
 	var workers int
 	var resyncPeriod time.Duration
 	var tlsCertDir string
+	var mtlsAllowlist string
 
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	flag.StringVar(&chronyConfigPath, "chrony-config", "/etc/chrony/chrony.conf", "Path to Chrony config file")
@@ -46,6 +48,7 @@ func main() {
 	// for HTTPS-served metrics + API endpoints. Empty preserves the
 	// historical plaintext behavior.
 	flag.StringVar(&tlsCertDir, "tls-cert-dir", "", "Directory with cert-manager-rotated TLS material (empty = plaintext)")
+	flag.StringVar(&mtlsAllowlist, "mtls-allowlist", "", "Comma-separated client certificate Subject CNs allowed to call HTTPS endpoints")
 
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -97,19 +100,20 @@ func main() {
 
 	// Create controller config
 	controllerConfig := &controller.Config{
-		ResyncPeriod:      resyncPeriod,
-		Workers:           workers,
-		ChronyConfigPath:  chronyConfigPath,
-		ChronyKeysPath:    chronyKeysPath,
-		ChronyCommand:     chronyCommand,
-		EnableIntegration: integrationEnabled,
-		EnableMetrics:     metricsEnabled,
-		MetricsPort:       metricsPort,
-		MetricsInterval:   metricsInterval,
-		LeaderElection:    true,
-		LeaderElectionID:  "ntp-controller",
-		LeaderElectionNS:  "kube-system",
-		TLSCertDir:        tlsCertDir,
+		ResyncPeriod:        resyncPeriod,
+		Workers:             workers,
+		ChronyConfigPath:    chronyConfigPath,
+		ChronyKeysPath:      chronyKeysPath,
+		ChronyCommand:       chronyCommand,
+		EnableIntegration:   integrationEnabled,
+		EnableMetrics:       metricsEnabled,
+		MetricsPort:         metricsPort,
+		MetricsInterval:     metricsInterval,
+		LeaderElection:      true,
+		LeaderElectionID:    "ntp-controller",
+		LeaderElectionNS:    "kube-system",
+		TLSCertDir:          tlsCertDir,
+		MTLSAllowedSubjects: splitCSV(mtlsAllowlist),
 	}
 
 	// Create and run controller
@@ -124,4 +128,19 @@ func main() {
 
 	// Wait for context to be cancelled
 	<-ctx.Done()
+}
+
+func splitCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

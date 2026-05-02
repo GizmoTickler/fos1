@@ -20,6 +20,7 @@ type Exporter struct {
 	interval      time.Duration
 	port          int
 	tlsCertDir    string
+	mtlsAllowlist []string
 	server        *http.Server
 	metrics       ntp.Metrics
 	metricsMutex  sync.RWMutex
@@ -36,6 +37,10 @@ type Config struct {
 	// using the shared cert-manager-rotated material from
 	// pkg/security/certificates. Sprint 31 / Ticket 49.
 	TLSCertDir string
+
+	// MTLSAllowedSubjects is the Subject-CN allowlist enforced when
+	// TLSCertDir is set. Empty means deny all mTLS callers.
+	MTLSAllowedSubjects []string
 }
 
 // NewExporter creates a new NTP metrics exporter
@@ -57,6 +62,7 @@ func NewExporter(config *Config) (*Exporter, error) {
 		interval:      config.Interval,
 		port:          config.Port,
 		tlsCertDir:    config.TLSCertDir,
+		mtlsAllowlist: append([]string(nil), config.MTLSAllowedSubjects...),
 		stopCh:        make(chan struct{}),
 	}, nil
 }
@@ -68,9 +74,14 @@ func (e *Exporter) Start() error {
 	mux.HandleFunc("/metrics", e.handleMetrics)
 	mux.HandleFunc("/healthz", e.handleHealthz)
 
+	var handler http.Handler = mux
+	if e.tlsCertDir != "" {
+		handler = certificates.RequireAllowedPeerSubject(e.mtlsAllowlist, mux)
+	}
+
 	e.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", e.port),
-		Handler: mux,
+		Handler: handler,
 	}
 
 	// Sprint 31 / Ticket 49: when configured with a TLS cert dir, serve
@@ -78,7 +89,7 @@ func (e *Exporter) Start() error {
 	// keep the plaintext path for environments that have not yet been
 	// migrated.
 	if e.tlsCertDir != "" {
-		tlsCfg, reloader, err := certificates.LoadTLSConfig(e.tlsCertDir)
+		tlsCfg, reloader, err := certificates.LoadMutualTLSConfig(e.tlsCertDir)
 		if err != nil {
 			return fmt.Errorf("load TLS config from %s: %w", e.tlsCertDir, err)
 		}
@@ -174,7 +185,7 @@ func (e *Exporter) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	e.metricsMutex.RUnlock()
 
 	w.Header().Set("Content-Type", "text/plain")
-	
+
 	// Write metrics in Prometheus format
 	fmt.Fprintf(w, "# HELP ntp_offset_milliseconds Offset of the system clock from NTP time in milliseconds\n")
 	fmt.Fprintf(w, "# TYPE ntp_offset_milliseconds gauge\n")

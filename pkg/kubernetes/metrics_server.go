@@ -87,15 +87,17 @@ func NewMetricsServer(addr string) *MetricsServer {
 }
 
 // NewTLSMetricsServer creates a metrics server that serves HTTPS using
-// material loaded from certDir (Sprint 31 / Ticket 49). The shared
-// certificates.TLSReloader handles cert-manager rotation; the caller is
-// responsible for invoking Stop on shutdown.
-func NewTLSMetricsServer(addr, certDir string) (*MetricsServer, error) {
-	tlsCfg, reloader, err := certificates.LoadTLSConfig(certDir)
+// material loaded from certDir. Sprint 32 / Ticket 56 requires mTLS and a
+// Subject-CN allowlist for every owned controller listener; allowedSubjects
+// is deny-by-default when omitted. The shared certificates.TLSReloader
+// handles cert-manager rotation; the caller is responsible for invoking Stop
+// on shutdown.
+func NewTLSMetricsServer(addr, certDir string, allowedSubjects ...string) (*MetricsServer, error) {
+	tlsCfg, reloader, err := certificates.LoadMutualTLSConfig(certDir)
 	if err != nil {
 		return nil, err
 	}
-	srv := newMetricsServer(addr, tlsCfg)
+	srv := newMetricsServer(addr, tlsCfg, allowedSubjects...)
 
 	// Run the watcher under a context the server can cancel from Stop.
 	watchCtx, cancel := context.WithCancel(context.Background())
@@ -108,7 +110,7 @@ func NewTLSMetricsServer(addr, certDir string) (*MetricsServer, error) {
 	return srv, nil
 }
 
-func newMetricsServer(addr string, tlsCfg *tls.Config) *MetricsServer {
+func newMetricsServer(addr string, tlsCfg *tls.Config, allowedSubjects ...string) *MetricsServer {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -120,12 +122,17 @@ func newMetricsServer(addr string, tlsCfg *tls.Config) *MetricsServer {
 		_, _ = io.WriteString(w, "ready")
 	})
 
+	var handler http.Handler = mux
+	if tlsCfg != nil {
+		handler = certificates.RequireAllowedPeerSubject(allowedSubjects, mux)
+	}
+
 	return &MetricsServer{
 		addr: addr,
 		mux:  mux,
 		server: &http.Server{
 			Addr:      addr,
-			Handler:   mux,
+			Handler:   handler,
 			TLSConfig: tlsCfg,
 		},
 		tlsConfig: tlsCfg,

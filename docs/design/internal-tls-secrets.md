@@ -12,8 +12,10 @@ happen with cert-manager rotation; the controller swaps its in-memory
 certificate via fsnotify on the mount path, with no pod restart and no
 listener bounce.
 
-This is the baseline. mTLS for controller-to-controller calls and TLS for
-external daemons (FRR, Suricata, Kea) are explicit follow-ups (see
+This is the Sprint 31 baseline. Sprint 32 / Ticket 56 adds the shared
+mutual-TLS mesh helper and moves currently owned HTTP listeners to
+client-cert verification with deny-by-default Subject-CN allowlists. TLS for
+external daemons (FRR, Suricata, Kea, Zeek, chrony) remains a follow-up (see
 [Out Of Scope](#out-of-scope)).
 
 ## Trust anchor
@@ -134,12 +136,12 @@ is far inside the safety margin.
 
 ## Controllers wired up by this ticket
 
-| Controller | Cert object | Mount | TLS now? |
+| Controller | Cert object | Mount | TLS / mTLS now? |
 |---|---|---|---|
 | `fos1-api-server` (security/api) | `fos1-api-server-tls` | yes | yes (mTLS) |
-| `dpi-manager` | `dpi-manager-tls` | yes | yes |
-| `ntp-controller` | `ntp-controller-tls` | yes | yes |
-| `event-correlator` | (per-instance via `EventCorrelation`) | optional | flag-gated |
+| `dpi-manager` | `dpi-manager-tls` | yes | yes (mTLS metrics when `--tls-cert-dir` is set) |
+| `ntp-controller` | `ntp-controller-tls` | yes | yes (mTLS metrics/API when `--tls-cert-dir` is set) |
+| `event-correlator` | (per-instance via `EventCorrelation`) | optional | mTLS flag-gated |
 | `ids-controller` | `ids-controller-tls` | yes | mounted, listener pending |
 | `threatintel-controller` | `threatintel-controller-tls` | yes | mounted, listener pending |
 | `wireguard-controller` | `wireguard-controller-tls` | future | mounted, listener pending |
@@ -207,13 +209,14 @@ ops should never need to touch it.
 
 ## Out of scope
 
-This ticket is explicitly limited to **server TLS for owned controllers**.
-The following are deferred:
+Ticket 49 was explicitly limited to **server TLS for owned controllers**.
+Ticket 56 has since added mTLS for the owned HTTP listener mesh. The following
+remain deferred:
 
-- **mTLS for controller-to-controller calls.** Controllers today reach
-  the Kubernetes API via their service-account token; that path keeps
-  using kubelet's TLS. Direct controller-to-controller HTTP calls do not
-  exist in the codebase yet.
+- **Prometheus client-cert scrape wiring.** DPI and NTP metrics listeners now
+  require client certs when TLS is enabled. Ticket 57 must mount a
+  `fos1-internal-ca` client cert into Prometheus and configure scrape
+  `tls_config` before live scrapes can pass.
 - **External-daemon TLS.** Suricata's Unix socket, Zeek Broker, Kea's
   control socket, FRR's vtysh, chronyc — these still speak plaintext on
   in-pod sockets. Sprint 32 will wrap each in a sidecar or pin a

@@ -405,13 +405,13 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
 
 ### Caveats
 
-- **mTLS for controller-to-controller calls is NOT in this ticket.**
-  Only the API server enforces `RequireAndVerifyClientCert`. Other
-  owned listeners (NTP exporter, DPI metrics, correlator probes) serve
-  TLS with `ClientAuth = NoClientCert`. Adding mutual auth across the
-  entire mesh is a Sprint 32 follow-up; it requires both a deployment
-  shape decision (every client ships a leaf, or all-via-Envoy) and
-  authorization rules that this baseline deliberately does not specify.
+- **Ticket 56 now owns mTLS for the current HTTP listener mesh.**
+  The shared `LoadMutualTLSConfig` helper installs mounted cert material
+  for both server and client auth, and currently owned non-API listeners
+  (NTP exporter/API, DPI metrics, correlator probes when TLS is enabled)
+  enforce deny-by-default Subject-CN allowlists. Live Prometheus scrape
+  compatibility still depends on Ticket 57 because Prometheus must mount
+  a client cert and trust the `fos1-internal-ca` chain.
 - **External daemons remain plaintext on in-pod sockets.** Suricata's
   Unix socket, Zeek Broker, Kea's control socket, FRR's vtysh, and
   chronyc all live inside the same pod as their controller and speak
@@ -431,14 +431,11 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   follow-up that flips the listener can land without manifest churn.
   The rotation proof exercises only the controllers that *do* serve
   TLS today.
-- **Prometheus must trust `fos1-internal-ca`.** The scrape configs in
-  `manifests/base/monitoring/prometheus.yaml` need a `tls_config.ca_file`
-  pointing at the chain. This is **not** in this ticket — the existing
-  scrape configs use plaintext fallbacks and the targets that flip to
-  HTTPS will fail closed under default trust until the Prometheus side
-  is wired. A scrape-coverage follow-up ticket will land that wiring;
-  meanwhile the perf/scrape proofs in CI run against the controllers
-  that still serve plaintext.
+- **Prometheus must trust `fos1-internal-ca` and present a client cert.**
+  The scrape configs in `manifests/base/monitoring/prometheus.yaml` need a
+  `tls_config.ca_file`, `cert_file`, and `key_file` for the chain and
+  Prometheus client identity. This is Ticket 57; until then, mTLS-enabled
+  owned metrics targets fail closed under default Prometheus config.
 - **The CA `Secret` is read by cert-manager from its own namespace.**
   We follow the cert-manager convention: a CA-typed ClusterIssuer
   reads `spec.ca.secretName` from the cert-manager namespace. Anyone

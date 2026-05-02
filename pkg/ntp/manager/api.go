@@ -17,13 +17,14 @@ import (
 
 // APIServer provides a REST API for the NTP service
 type APIServer struct {
-	ntpManager *Manager
-	server     *http.Server
-	port       int
-	tlsCertDir string
-	tlsCancel  context.CancelFunc
-	mutex      sync.Mutex
-	running    bool
+	ntpManager    *Manager
+	server        *http.Server
+	port          int
+	tlsCertDir    string
+	mtlsAllowlist []string
+	tlsCancel     context.CancelFunc
+	mutex         sync.Mutex
+	running       bool
 }
 
 // NewAPIServer creates a new API server for NTP
@@ -47,6 +48,14 @@ func (a *APIServer) SetTLSCertDir(dir string) {
 	a.tlsCertDir = dir
 }
 
+// SetMTLSAllowlist configures the Subject-CN allowlist enforced when the API
+// server is running with TLS material. Empty means deny all mTLS callers.
+func (a *APIServer) SetMTLSAllowlist(subjects []string) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	a.mtlsAllowlist = append([]string(nil), subjects...)
+}
+
 // Start starts the API server
 func (a *APIServer) Start() error {
 	a.mutex.Lock()
@@ -63,13 +72,18 @@ func (a *APIServer) Start() error {
 	mux.HandleFunc("/healthz", a.handleLiveness)
 	mux.HandleFunc("/readyz", a.handleReadiness)
 
+	var handler http.Handler = mux
+	if a.tlsCertDir != "" {
+		handler = certificates.RequireAllowedPeerSubject(a.mtlsAllowlist, mux)
+	}
+
 	a.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", a.port),
-		Handler: mux,
+		Handler: handler,
 	}
 
 	if a.tlsCertDir != "" {
-		tlsCfg, reloader, err := certificates.LoadTLSConfig(a.tlsCertDir)
+		tlsCfg, reloader, err := certificates.LoadMutualTLSConfig(a.tlsCertDir)
 		if err != nil {
 			return fmt.Errorf("load TLS config from %s: %w", a.tlsCertDir, err)
 		}

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"k8s.io/client-go/kubernetes"
@@ -24,6 +25,7 @@ func main() {
 	)
 
 	var tlsCertDir string
+	var mtlsAllowlist string
 
 	flag.StringVar(&configPath, "config", "/etc/correlator/config.json", "Path to the correlator config file")
 	flag.IntVar(&maxEvents, "max-events", 0, "Override the maximum number of events kept in memory")
@@ -32,6 +34,7 @@ func main() {
 	// Sprint 31 / Ticket 49: when set, the probe HTTP listener serves
 	// HTTPS using cert-manager-rotated material from this directory.
 	flag.StringVar(&tlsCertDir, "tls-cert-dir", "", "Directory containing tls.crt/tls.key/ca.crt for HTTPS probes (empty = plaintext)")
+	flag.StringVar(&mtlsAllowlist, "mtls-allowlist", "", "Comma-separated client certificate Subject CNs allowed to call HTTPS probes")
 	flag.Parse()
 
 	config, err := correlation.LoadConfig(configPath, correlation.ConfigOverrides{
@@ -44,8 +47,9 @@ func main() {
 	}
 
 	runtime, err := correlation.NewRuntime(config, correlation.RuntimeOptions{
-		HTTPAddr:   ":8080",
-		TLSCertDir: tlsCertDir,
+		HTTPAddr:            ":8080",
+		TLSCertDir:          tlsCertDir,
+		MTLSAllowedSubjects: splitCSV(mtlsAllowlist),
 	})
 	if err != nil {
 		log.Fatalf("create runtime: %v", err)
@@ -88,4 +92,19 @@ func main() {
 	if err := runtime.Run(ctx); err != nil {
 		log.Fatalf("run correlator: %v", err)
 	}
+}
+
+func splitCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
