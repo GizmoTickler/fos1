@@ -11,7 +11,7 @@ active_targets_json="$(cat <<'EOF'
   "data": {
     "activeTargets": [
       {
-        "scrapePool": "kubernetes-pods",
+        "scrapePool": "fos1-dpi-manager-pods",
         "health": "up",
         "labels": {
           "app": "dpi-manager",
@@ -20,7 +20,7 @@ active_targets_json="$(cat <<'EOF'
         }
       },
       {
-        "scrapePool": "kubernetes-pods",
+        "scrapePool": "fos1-dpi-manager-pods",
         "health": "up",
         "labels": {
           "app": "dpi-manager",
@@ -29,7 +29,7 @@ active_targets_json="$(cat <<'EOF'
         }
       },
       {
-        "scrapePool": "kubernetes-pods",
+        "scrapePool": "fos1-ntp-controller-pods",
         "health": "up",
         "labels": {
           "app": "ntp-controller",
@@ -79,8 +79,8 @@ up_query_json="$(cat <<'EOF'
 EOF
 )"
 
-JSON_INPUT="${active_targets_json}" assert_active_targets_json security dpi-manager "dpi-manager-node-a,dpi-manager-node-b"
-JSON_INPUT="${active_targets_json}" assert_active_targets_json network ntp-controller "ntp-controller-abc123"
+JSON_INPUT="${active_targets_json}" assert_active_targets_json security dpi-manager "dpi-manager-node-a,dpi-manager-node-b" "fos1-dpi-manager-pods"
+JSON_INPUT="${active_targets_json}" assert_active_targets_json network ntp-controller "ntp-controller-abc123" "fos1-ntp-controller-pods"
 JSON_INPUT="${up_query_json}" assert_up_query_json security dpi-manager "dpi-manager-node-a,dpi-manager-node-b"
 JSON_INPUT="${up_query_json}" assert_up_query_json network ntp-controller "ntp-controller-abc123"
 

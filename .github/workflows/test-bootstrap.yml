@@ -299,6 +299,7 @@ jobs:
           echo "Service dpi-manager endpoints: ${dpi_endpoints}"
 
           bash scripts/ci/prove-security-log-pipeline.sh
+          bash scripts/ci/test-prometheus-internal-ca-rekey.sh
           bash scripts/ci/prove-prometheus-scrapes.sh
           bash scripts/ci/prove-dpi-natural-traffic.sh
 

@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - prometheus.yaml
+  - prometheus-client-cert.yaml
   - grafana.yaml
   - alertmanager.yaml
   - alert-rules.yaml

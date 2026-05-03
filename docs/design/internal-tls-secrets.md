@@ -214,9 +214,10 @@ Ticket 56 has since added mTLS for the owned HTTP listener mesh. The following
 remain deferred:
 
 - **Prometheus client-cert scrape wiring.** DPI and NTP metrics listeners now
-  require client certs when TLS is enabled. Ticket 57 must mount a
-  `fos1-internal-ca` client cert into Prometheus and configure scrape
-  `tls_config` before live scrapes can pass.
+  require client certs when TLS is enabled. Ticket 57 mounts the
+  `prometheus-client-tls` Secret into Prometheus and configures dedicated
+  scrape `tls_config` blocks that trust `fos1-internal-ca` and present the
+  Prometheus client identity.
 - **External-daemon TLS.** Suricata's Unix socket, Zeek Broker, Kea's
   control socket, FRR's vtysh, chronyc — these still speak plaintext on
   in-pod sockets. Sprint 32 will wrap each in a sidecar or pin a

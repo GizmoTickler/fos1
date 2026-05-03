@@ -23,17 +23,60 @@ data:
 
     scrape_configs:
       # Repository-owned exporter baseline:
-      # annotate pods and let kubernetes-pods discover them.
-      # Current in-repo exporters using this path:
-      # - dpi-manager on :8080/metrics
-      # - ntp-controller on :9559/metrics
-      - job_name: 'kubernetes-pods'
+      # annotate owned pods and let dedicated pod-SD scrape jobs discover them.
+      # The jobs are split by workload so Prometheus can verify each server
+      # certificate with the correct fos1-internal-ca DNS name while presenting
+      # its own prometheus client certificate to the mTLS allowlist.
+      - job_name: 'fos1-dpi-manager-pods'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/fos1.io/prometheus-client/ca.crt
+          cert_file: /var/run/secrets/fos1.io/prometheus-client/tls.crt
+          key_file: /var/run/secrets/fos1.io/prometheus-client/tls.key
+          server_name: dpi-manager.security.svc
         kubernetes_sd_configs:
         - role: pod
         relabel_configs:
         - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
           action: keep
           regex: true
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_label_app]
+          action: keep
+          regex: security;dpi-manager
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+
+      - job_name: 'fos1-ntp-controller-pods'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/fos1.io/prometheus-client/ca.crt
+          cert_file: /var/run/secrets/fos1.io/prometheus-client/tls.crt
+          key_file: /var/run/secrets/fos1.io/prometheus-client/tls.key
+          server_name: ntp-controller.network.svc
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_label_app]
+          action: keep
+          regex: network;ntp-controller
         - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
           action: replace
           target_label: __metrics_path__
@@ -140,6 +183,9 @@ spec:
           mountPath: /etc/prometheus
         - name: rules-volume
           mountPath: /etc/prometheus/rules
+        - name: prometheus-client-tls
+          mountPath: /var/run/secrets/fos1.io/prometheus-client
+          readOnly: true
         - name: data-volume
           mountPath: /prometheus
       volumes:
@@ -149,6 +195,9 @@ spec:
       - name: rules-volume
         configMap:
           name: prometheus-alert-rules
+      - name: prometheus-client-tls
+        secret:
+          secretName: prometheus-client-tls
       - name: data-volume
         persistentVolumeClaim:
           claimName: prometheus-data

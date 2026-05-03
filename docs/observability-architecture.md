@@ -63,19 +63,20 @@ The proof intentionally exercises a single canary event and a threshold-1 rule s
 
 The repository also contains observability-related code paths that should be treated as implemented building blocks rather than as a verified platform contract:
 
-- `pkg/ntp/metrics/exporter.go` exposes an NTP Prometheus-style `/metrics` endpoint plus `/healthz`, and the owned manifest baseline now expects pod-annotation scraping on `ntp-controller` pods at `:9559/metrics`
-- `pkg/kubernetes/metrics_server.go` exposes DPI and Zeek Prometheus metrics plus simple probe endpoints, and the owned manifest baseline now expects pod-annotation scraping on `dpi-manager` pods at `:8080/metrics`
+- `pkg/ntp/metrics/exporter.go` exposes an NTP Prometheus-style `/metrics` endpoint plus `/healthz`, and the owned manifest baseline now expects mTLS pod-annotation scraping on `ntp-controller` pods at `:9559/metrics`
+- `pkg/kubernetes/metrics_server.go` exposes DPI and Zeek Prometheus metrics plus simple probe endpoints, and the owned manifest baseline now expects mTLS pod-annotation scraping on `dpi-manager` pods at `:8080/metrics`
 
 Those manifest contracts now have a narrow live-cluster proof in the Kind harness. The proof is intentionally limited to discovery and successful scraping of the owned pod-annotation targets; it does not prove every downstream rule, dashboard, or operator-driven integration.
 
 ### Repository-owned baseline scrape path
 
-The baseline metrics collection path owned by this repository is the `kubernetes-pods` job in [manifests/base/monitoring/prometheus.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/monitoring/prometheus.yaml). That job discovers pods only when they carry standard Prometheus pod annotations.
+The baseline metrics collection path owned by this repository is the pair of `fos1-dpi-manager-pods` and `fos1-ntp-controller-pods` jobs in [manifests/base/monitoring/prometheus.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/monitoring/prometheus.yaml). Those jobs discover pods only when they carry standard Prometheus pod annotations, trust the `fos1-internal-ca` bundle, and present the `prometheus-client-tls` client certificate for the owned mTLS metrics allowlists.
 
 After the Ticket 2 manifest changes, the owned exporter contract is:
 
-- [manifests/base/security/dpi-manager.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/security/dpi-manager.yaml): `dpi-manager` is now a node-local `DaemonSet`; each pod exposes `/metrics`, `/healthz`, and `/readyz` on the single HTTP listener at port `8080`, and the pod template is annotated for pod-based scraping on `:8080/metrics`
-- [manifests/base/ntp/ntp-controller.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/ntp/ntp-controller.yaml): the active `ntp-controller` deployment in the `network` namespace exposes the exporter on port `9559`, carries the pod annotations for scraping on `:9559/metrics`, and exposes the API listener on `8080`
+- [manifests/base/security/dpi-manager.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/security/dpi-manager.yaml): `dpi-manager` is now a node-local `DaemonSet`; each pod exposes `/metrics`, `/healthz`, and `/readyz` on the single HTTPS listener at port `8080`, and the pod template is annotated for pod-based scraping on `:8080/metrics`
+- [manifests/base/ntp/ntp-controller.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/ntp/ntp-controller.yaml): the active `ntp-controller` deployment in the `network` namespace exposes the HTTPS exporter on port `9559`, carries the pod annotations for scraping on `:9559/metrics`, and exposes the HTTPS API listener on `8080`
+- [manifests/base/monitoring/prometheus-client-cert.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/monitoring/prometheus-client-cert.yaml): cert-manager issues the `prometheus-client-tls` Secret with Subject CN `prometheus`, which is the client identity allowed by the owned metrics endpoints
 - [manifests/base/ntp/service.yaml](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/manifests/base/ntp/service.yaml): the active `ntp-controller` service is the service-level endpoint used by optional operator resources such as the `ServiceMonitor`
 
 This is the exact repository-owned path. It does not depend on a `ServiceMonitor`, and it does not require Prometheus Operator CRDs.
@@ -85,11 +86,11 @@ This is the exact repository-owned path. It does not depend on a `ServiceMonitor
 The bootstrap harness now proves that the owned pod-annotation scrape path is active in a live Kind cluster:
 
 - harness source: [scripts/ci/prove-prometheus-scrapes.sh](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-prometheus-scrapes.sh) port-forwards Prometheus, inspects `/api/v1/targets`, and queries `up{...}` through `/api/v1/query`
-- proof target 1: every ready `security/dpi-manager` pod discovered by the node-local `DaemonSet` must appear as an active `kubernetes-pods` target with `health="up"` and an `up=1` sample
-- proof target 2: every ready `network/ntp-controller` pod must appear as an active `kubernetes-pods` target with `health="up"` and an `up=1` sample
+- proof target 1: every ready `security/dpi-manager` pod discovered by the node-local `DaemonSet` must appear as an active `fos1-dpi-manager-pods` target with `health="up"` and an `up=1` sample
+- proof target 2: every ready `network/ntp-controller` pod must appear as an active `fos1-ntp-controller-pods` target with `health="up"` and an `up=1` sample
 - Kind scope narrowing: [`.github/workflows/test-bootstrap.yml`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/.github/workflows/test-bootstrap.yml) rewrites the copied `test-manifests/base/ntp/kustomization.yaml` so the proof deploys only `ntp-crd.yaml`, `ntp-controller.yaml`, and `service.yaml`; optional operator add-ons and the chrony daemonset/runtime slice are intentionally excluded because they are not required to prove the repository-owned Prometheus path
 
-If those checks pass, the repository has proven the baseline it actually owns: Prometheus discovers the annotated pods, scrapes the active exporters, and records a live `up=1` series for both the node-local DPI manager path and the NTP controller path.
+If those checks pass, the repository has proven the baseline it actually owns: Prometheus discovers the annotated pods, verifies the owned server certs against `fos1-internal-ca`, presents its client certificate, scrapes the active exporters, and records a live `up=1` series for both the node-local DPI manager path and the NTP controller path.
 
 ## Dashboard And Alert Query Validation
 

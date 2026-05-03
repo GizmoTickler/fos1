@@ -431,11 +431,11 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   follow-up that flips the listener can land without manifest churn.
   The rotation proof exercises only the controllers that *do* serve
   TLS today.
-- **Prometheus must trust `fos1-internal-ca` and present a client cert.**
-  The scrape configs in `manifests/base/monitoring/prometheus.yaml` need a
-  `tls_config.ca_file`, `cert_file`, and `key_file` for the chain and
-  Prometheus client identity. This is Ticket 57; until then, mTLS-enabled
-  owned metrics targets fail closed under default Prometheus config.
+- **Prometheus now scrapes owned metrics through `fos1-internal-ca` mTLS.**
+  Ticket 57 adds the `prometheus-client-tls` client certificate plus
+  dedicated HTTPS pod-SD jobs for `dpi-manager` and `ntp-controller`.
+  Production overlays that replace the internal CA must keep Prometheus'
+  mounted CA bundle and client identity in sync with the replacement issuer.
 - **The CA `Secret` is read by cert-manager from its own namespace.**
   We follow the cert-manager convention: a CA-typed ClusterIssuer
   reads `spec.ca.secretName` from the cert-manager namespace. Anyone

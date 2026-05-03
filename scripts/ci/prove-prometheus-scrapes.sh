@@ -106,12 +106,12 @@ PY
 }
 
 assert_active_targets_json() {
-  if (($# != 3)); then
-    echo "usage: assert_active_targets_json <namespace> <app> <expected_pods_csv>" >&2
+  if (($# != 4)); then
+    echo "usage: assert_active_targets_json <namespace> <app> <expected_pods_csv> <scrape_pool>" >&2
     return 1
   fi
 
-  JSON_INPUT="${JSON_INPUT:?JSON_INPUT must be set}" python3 - "$1" "$2" "$3" <<'PY'
+  JSON_INPUT="${JSON_INPUT:?JSON_INPUT must be set}" python3 - "$1" "$2" "$3" "$4" <<'PY'
 import json
 import os
 import sys
@@ -119,6 +119,7 @@ import sys
 namespace = sys.argv[1]
 app = sys.argv[2]
 expected_pods = {pod for pod in sys.argv[3].split(",") if pod}
+scrape_pool = sys.argv[4]
 data = json.loads(os.environ["JSON_INPUT"])
 
 targets = data.get("data", {}).get("activeTargets", [])
@@ -126,7 +127,7 @@ healthy_pods = set()
 
 for target in targets:
     labels = target.get("labels", {})
-    if target.get("scrapePool") != "kubernetes-pods":
+    if target.get("scrapePool") != scrape_pool:
         continue
     if target.get("health") != "up":
         continue
@@ -191,6 +192,7 @@ prove_scrape_path() {
   local namespace="$1"
   local app="$2"
   local selector="$3"
+  local scrape_pool="$4"
   local attempt
   local targets_json
   local query_json
@@ -205,7 +207,7 @@ prove_scrape_path() {
   fi
 
   expected_pods_csv="$(IFS=,; echo "${pod_names[*]}")"
-  echo "Expecting Prometheus pod-scrape targets for ${namespace}/${app}: ${expected_pods_csv}"
+  echo "Expecting Prometheus pod-scrape targets for ${namespace}/${app} in ${scrape_pool}: ${expected_pods_csv}"
 
   for attempt in $(seq 1 "${PROMETHEUS_WAIT_ATTEMPTS}"); do
     targets_json="$(curl -fsS "${PROMETHEUS_URL}/api/v1/targets?state=active")"
@@ -215,7 +217,7 @@ prove_scrape_path() {
         "${PROMETHEUS_URL}/api/v1/query"
     )"
 
-    if JSON_INPUT="${targets_json}" assert_active_targets_json "${namespace}" "${app}" "${expected_pods_csv}" \
+    if JSON_INPUT="${targets_json}" assert_active_targets_json "${namespace}" "${app}" "${expected_pods_csv}" "${scrape_pool}" \
       && JSON_INPUT="${query_json}" assert_up_query_json "${namespace}" "${app}" "${expected_pods_csv}"; then
       echo "Prometheus scrape proof succeeded for ${namespace}/${app}."
       return 0
@@ -233,12 +235,12 @@ main() {
   start_port_forward
   wait_for_prometheus
 
-  prove_scrape_path security dpi-manager 'app=dpi-manager'
-  prove_scrape_path network ntp-controller 'app=ntp-controller'
+  prove_scrape_path security dpi-manager 'app=dpi-manager' 'fos1-dpi-manager-pods'
+  prove_scrape_path network ntp-controller 'app=ntp-controller' 'fos1-ntp-controller-pods'
 
   echo "Prometheus scrape proof summary:"
-  echo "  security/dpi-manager: pod annotation target discovered and up=1"
-  echo "  network/ntp-controller: pod annotation target discovered and up=1"
+  echo "  security/dpi-manager: mTLS pod target discovered and up=1"
+  echo "  network/ntp-controller: mTLS pod target discovered and up=1"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

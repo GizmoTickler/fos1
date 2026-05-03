@@ -1,12 +1,12 @@
 # Sprint 32 — mTLS Mesh + External-Daemon TLS (In Progress)
 
 **Window:** TBD
-**State:** In progress (Ticket 56 started)
+**State:** In progress (Tickets 56-57 implemented locally)
 **Production-readiness target:** ~82–87% → ~85–90%
 
 ## Goal
 
-Sprint 31 introduced internal TLS via the `fos1-internal-ca` ClusterIssuer for owned controllers, but only the API server enforced client certs. Ticket 56 has started the Sprint 32 closeout by moving the shared TLS helper and currently-owned HTTP listeners to mutual TLS with deny-by-default Subject-CN allowlists. External daemons (FRR, Suricata, Kea, Zeek, chrony) are still reached over plaintext loopback sockets until Tickets 58-62 land.
+Sprint 31 introduced internal TLS via the `fos1-internal-ca` ClusterIssuer for owned controllers, but only the API server enforced client certs. Tickets 56-57 have started the Sprint 32 closeout by moving the shared TLS helper and currently-owned HTTP listeners to mutual TLS with deny-by-default Subject-CN allowlists, then rekeying Prometheus with a client certificate so owned metrics scrapes can pass through that mTLS baseline. External daemons (FRR, Suricata, Kea, Zeek, chrony) are still reached over plaintext loopback sockets until Tickets 58-62 land.
 
 ## Baseline
 
@@ -17,7 +17,7 @@ Main HEAD when this sprint opens: TBD (`34de009` at planning time). `make verify
 | # | Theme | Key deliverable | Priority |
 |---|---|---|---|
 | 56 | mTLS controller-to-controller mesh | In progress. `pkg/security/certificates.LoadMutualTLSConfig` now reuses the Ticket 49 SecretWatcher material for server certs, client certs, RootCAs, ClientCAs, and rotation. Non-API owned listeners wrap handlers with Subject-CN allowlists, and `scripts/ci/prove-mtls-mesh.sh` proves valid cert / no cert / unknown CN behavior | P0 |
-| 57 | Prometheus rekey for fos1-internal-ca | `manifests/base/monitoring/prometheus.yaml` scrape configs mount the `fos1-internal-ca` chain and switch every owned scrape job to `https://`. Kind harness step asserts post-rekey scrape series counts match pre-rekey counts | P0 |
+| 57 | Prometheus rekey for fos1-internal-ca | Implemented locally. `prometheus-client-tls` gives Prometheus Subject CN `prometheus`; dedicated DPI/NTP pod-SD jobs trust `fos1-internal-ca`, present the client cert, and verify each target with its service DNS name. The Kind proof still asserts ready pod counts map to healthy `up=1` samples | P0 |
 | 58 | FRR vtysh-over-TLS or sidecar TLS terminator | Today the FRR client opens vtysh on a plaintext UNIX socket. Either land FRR's native TLS support if available, or front the daemon with a stunnel/sidecar TLS terminator. Document the choice in an ADR | P1 |
 | 59 | Suricata Unix socket auth + TLS over TCP fallback | Per-instance shared-secret auth on the Suricata socket; TLS on the TCP variant for off-node controllers. Sprint 31 Ticket 49 SecretWatcher pattern | P1 |
 | 60 | Kea control-channel TLS | Kea supports HTTPS on the control channel — wire the DHCP controller to the TLS variant with cert-manager-issued certs | P1 |
