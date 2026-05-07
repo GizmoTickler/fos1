@@ -320,7 +320,7 @@ The script:
 
 What this proof does NOT cover:
 - mutual auth across the controller mesh — this is now covered separately by [`scripts/ci/prove-mtls-mesh.sh`](/Users/varuntirumalareddy/Documents/Code-Playgroud/fos1/scripts/ci/prove-mtls-mesh.sh), which exercises the shared mTLS helper and owned-listener Subject-CN allowlist behavior
-- TLS for external daemons (FRR vtysh, Suricata socket, Kea control socket, Zeek Broker, chronyc) — these still speak plaintext on in-pod loopback / Unix paths
+- TLS for external daemons (Kea control socket, Zeek Broker, chronyc) — FRR vtysh and Suricata command traffic now have repo-owned mTLS sidecars, but the remaining daemon control paths still speak plaintext on in-pod loopback / Unix paths
 - Prometheus scrape rekey for the `fos1-internal-ca` chain — scrape configs still need `tls_config.ca_file`, `cert_file`, and `key_file`; mTLS-enabled targets fail closed under default trust until Ticket 57 lands
 - trust-anchor compromise / replacement — the proof exercises rotation of leaf certs, not root replacement
 

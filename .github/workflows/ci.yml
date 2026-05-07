@@ -68,3 +68,6 @@ jobs:
 
       - name: Prove FRR vtysh mTLS sidecar
         run: scripts/ci/prove-frr-vtysh-tls.sh
+
+      - name: Prove Suricata command auth TLS
+        run: scripts/ci/prove-suricata-command-auth-tls.sh

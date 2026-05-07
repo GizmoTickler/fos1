@@ -412,12 +412,14 @@ This document tracks important caveats, tradeoffs, and remaining gaps that Archi
   enforce deny-by-default Subject-CN allowlists. Live Prometheus scrape
   compatibility still depends on Ticket 57 because Prometheus must mount
   a client cert and trust the `fos1-internal-ca` chain.
-- **Most external daemons remain plaintext on in-pod sockets.** Ticket 58
-  moves FRR vtysh behind the repo-owned `frr-vtysh-sidecar` mTLS endpoint.
-  Suricata's Unix socket, Zeek Broker, Kea's control socket, and chronyc
-  still live inside the same pod as their controller and speak plaintext on a
-  loopback / Unix path. The threat model treats those as same-trust-boundary;
-  cross-host paths are scheduled for Sprint 32 with sidecar TLS terminators or
+- **Some external daemons remain plaintext on in-pod sockets.** Ticket 58
+  moves FRR vtysh behind the repo-owned `frr-vtysh-sidecar` mTLS endpoint,
+  and Ticket 59 moves Suricata command traffic behind
+  `suricata-command-sidecar` with mTLS plus a mounted shared-secret token.
+  Zeek Broker, Kea's control socket, and chronyc still live inside the same
+  pod as their controller and speak plaintext on a loopback / Unix path. The
+  threat model treats those as same-trust-boundary; cross-host paths are
+  scheduled for Sprint 32 with sidecar TLS terminators or
   daemon-native TLS where available.
 - **Trust anchor is a self-signed root, not an enterprise PKI.** The
   `fos1-internal-ca-root` ClusterIssuer is selfSigned and the root key

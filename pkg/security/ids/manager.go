@@ -84,10 +84,10 @@ type IDSManager struct {
 	zeekClient          ZeekBrokerClient
 
 	// Tracking state
-	startTime        time.Time
-	lastRulesUpdate  time.Time
-	ipsEnabled       bool
-	monitoredIfaces  map[string]*InterfaceConfig
+	startTime       time.Time
+	lastRulesUpdate time.Time
+	ipsEnabled      bool
+	monitoredIfaces map[string]*InterfaceConfig
 
 	// Control
 	ctx    context.Context
@@ -206,6 +206,15 @@ func (m *IDSManager) SetZeekClient(c ZeekBrokerClient) {
 // Initialize initializes the IDS/IPS manager.
 func (m *IDSManager) Initialize(ctx context.Context) error {
 	klog.Info("Initializing IDS/IPS manager")
+
+	if m.suricataClient == nil {
+		m.suricataClient = suricata.NewClient("/var/run/suricata/suricata-command.socket", 10*time.Second)
+	}
+	if m.suricataRuleManager == nil {
+		if client, ok := m.suricataClient.(*suricata.Client); ok {
+			m.suricataRuleManager = suricata.NewRuleManager(client, "/etc/suricata/rules")
+		}
+	}
 
 	// Set up controllers with manager (only when running with a real k8s manager)
 	if m.mgr != nil {

@@ -71,6 +71,7 @@ jobs:
       NTP_CONTROLLER_IMAGE: fos1-local/ntp-controller:ci
       EVENT_CORRELATOR_IMAGE: fos1-local/event-correlator:ci
       IDS_CONTROLLER_IMAGE: fos1-local/ids-controller:ci
+      SURICATA_COMMAND_SIDECAR_IMAGE: fos1-local/suricata-command-sidecar:ci
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -121,6 +122,7 @@ jobs:
           docker build -t "${NTP_CONTROLLER_IMAGE}" -f pkg/ntp/Dockerfile .
           docker build -t "${EVENT_CORRELATOR_IMAGE}" -f build/event-correlator/Dockerfile .
           docker build -t "${IDS_CONTROLLER_IMAGE}" -f build/ids-controller/Dockerfile .
+          docker build -t "${SURICATA_COMMAND_SIDECAR_IMAGE}" -f cmd/suricata-command-sidecar/Dockerfile .
 
       - name: Load local proof images into Kind
         run: |
@@ -130,6 +132,7 @@ jobs:
           kind load docker-image "${NTP_CONTROLLER_IMAGE}" --name fos1-local-proof
           kind load docker-image "${EVENT_CORRELATOR_IMAGE}" --name fos1-local-proof
           kind load docker-image "${IDS_CONTROLLER_IMAGE}" --name fos1-local-proof
+          kind load docker-image "${SURICATA_COMMAND_SIDECAR_IMAGE}" --name fos1-local-proof
 
       - name: Create namespaces
         run: |
@@ -198,6 +201,8 @@ jobs:
           perl -0pi -e 's/zeek:\n(\s+)enabled: true/zeek:\n${1}enabled: false/' test-manifests/base/security/dpi-manager.yaml
           sed -i "s|image: your-org/fos1-dpi-manager:latest|image: ${DPI_MANAGER_IMAGE}|" test-manifests/base/security/dpi-manager.yaml
           sed -i "s|imagePullPolicy: Always|imagePullPolicy: Never|" test-manifests/base/security/dpi-manager.yaml
+          sed -i "s|image: fos1/suricata-command-sidecar:latest|image: ${SURICATA_COMMAND_SIDECAR_IMAGE}|" test-manifests/base/security/suricata.yaml
+          sed -i "0,/imagePullPolicy: IfNotPresent/s|imagePullPolicy: IfNotPresent|imagePullPolicy: Never|" test-manifests/base/security/suricata.yaml
 
           # Rewire the IDS controller manifest so it consumes the locally
           # loaded image. The correlator runtime Deployment the
@@ -265,6 +270,11 @@ jobs:
       - name: Deploy security services
         run: |
           set -euo pipefail
+
+          kubectl create secret generic suricata-command-auth \
+            -n security \
+            --from-literal=token=ci-suricata-command-token \
+            --dry-run=client -o yaml | kubectl apply -f -
 
           kubectl apply -k test-manifests/base/security
           bash scripts/ci/k8s-wait-for-readiness.sh security "${WORKLOAD_TIMEOUT}" true

@@ -115,6 +115,10 @@ data:
       outputs:
         - console:
             enabled: yes
+
+    unix-command:
+      enabled: yes
+      filename: /var/run/suricata/suricata-command.socket
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -186,6 +190,51 @@ spec:
           mountPath: /var/run/suricata
         - name: lib-volume
           mountPath: /var/lib/suricata
+      - name: command-tls
+        image: fos1/suricata-command-sidecar:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: FOS1_SURICATA_COMMAND_SIDECAR_ADDR
+          value: ":9444"
+        - name: FOS1_SURICATA_COMMAND_SOCKET
+          value: /var/run/suricata/suricata-command.socket
+        - name: FOS1_SURICATA_COMMAND_AUTH_TOKEN_FILE
+          value: /var/run/secrets/fos1.io/suricata-command-auth/token
+        - name: FOS1_SURICATA_COMMAND_TLS_CERT
+          value: /var/run/secrets/fos1.io/suricata-command/tls.crt
+        - name: FOS1_SURICATA_COMMAND_TLS_KEY
+          value: /var/run/secrets/fos1.io/suricata-command/tls.key
+        - name: FOS1_SURICATA_COMMAND_TLS_CA
+          value: /var/run/secrets/fos1.io/suricata-command/ca.crt
+        - name: FOS1_SURICATA_COMMAND_ALLOWED_CNS
+          value: ids-controller
+        ports:
+        - name: command-tls
+          containerPort: 9444
+          protocol: TCP
+        volumeMounts:
+        - name: run-volume
+          mountPath: /var/run/suricata
+        - name: command-auth
+          mountPath: /var/run/secrets/fos1.io/suricata-command-auth
+          readOnly: true
+        - name: command-tls
+          mountPath: /var/run/secrets/fos1.io/suricata-command
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            scheme: HTTPS
+            path: /healthz
+            port: command-tls
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 25m
+            memory: 64Mi
       initContainers:
       - name: setup-dirs
         image: busybox
@@ -216,3 +265,27 @@ spec:
         emptyDir: {}
       - name: lib-volume
         emptyDir: {}
+      - name: command-auth
+        secret:
+          secretName: suricata-command-auth
+      - name: command-tls
+        secret:
+          secretName: suricata-command-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: suricata-command
+  namespace: security
+  labels:
+    app: suricata
+    component: ids
+spec:
+  selector:
+    app: suricata
+  ports:
+  - name: command-tls
+    port: 9444
+    targetPort: command-tls
+    protocol: TCP
+  type: ClusterIP

@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - suricata.yaml
+  - suricata-command-cert.yaml
   - zeek.yaml
   - dpi-manager.yaml
   - dpi-manager-cert.yaml

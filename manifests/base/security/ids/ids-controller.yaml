@@ -53,6 +53,18 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.name
+          - name: FOS1_SURICATA_COMMAND_ENDPOINT
+            value: https://suricata-command.security.svc:9444
+          - name: FOS1_SURICATA_COMMAND_CA_FILE
+            value: /var/run/secrets/fos1.io/tls/ca.crt
+          - name: FOS1_SURICATA_COMMAND_CERT_FILE
+            value: /var/run/secrets/fos1.io/tls/tls.crt
+          - name: FOS1_SURICATA_COMMAND_KEY_FILE
+            value: /var/run/secrets/fos1.io/tls/tls.key
+          - name: FOS1_SURICATA_COMMAND_SERVER_NAME
+            value: suricata-command.security.svc
+          - name: FOS1_SURICATA_COMMAND_AUTH_TOKEN_FILE
+            value: /var/run/secrets/fos1.io/suricata-command-auth/token
         resources:
           limits:
             cpu: 200m
@@ -85,6 +97,9 @@ spec:
         - name: tls
           mountPath: /var/run/secrets/fos1.io/tls
           readOnly: true
+        - name: suricata-command-auth
+          mountPath: /var/run/secrets/fos1.io/suricata-command-auth
+          readOnly: true
       volumes:
       - name: tls
         secret:
@@ -93,6 +108,9 @@ spec:
           # Certificate has not yet reconciled — kubelet picks up the
           # new mount without a restart once it does.
           optional: true
+      - name: suricata-command-auth
+        secret:
+          secretName: suricata-command-auth
 ---
 apiVersion: v1
 kind: ServiceAccount

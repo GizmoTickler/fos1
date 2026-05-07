@@ -2,8 +2,17 @@ package suricata
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,6 +102,93 @@ func TestReloadRules(t *testing.T) {
 	ctx := context.Background()
 	err := client.ReloadRules(ctx)
 	require.NoError(t, err)
+}
+
+func TestExecuteAuthenticatesUnixSocketBeforeCommand(t *testing.T) {
+	var observed []Command
+	sockPath, cleanup := mockMultiCommandServer(t, func(cmd Command) Response {
+		observed = append(observed, cmd)
+		switch cmd.Command {
+		case "auth":
+			assert.Equal(t, "shared-token", cmd.Arguments["token"])
+			return Response{Return: "OK", Message: "authenticated"}
+		case "reload-rules":
+			return Response{Return: "OK", Message: "done"}
+		default:
+			return Response{Return: "NOK", Message: "unexpected command"}
+		}
+	})
+	defer cleanup()
+
+	client := NewClientWithConfig(ClientConfig{
+		SocketPath: sockPath,
+		Timeout:    5 * time.Second,
+		AuthToken:  "shared-token",
+	})
+
+	require.NoError(t, client.ReloadRules(context.Background()))
+	require.Len(t, observed, 2)
+	assert.Equal(t, "auth", observed[0].Command)
+	assert.Equal(t, "reload-rules", observed[1].Command)
+}
+
+func TestExecuteRejectsUnauthenticatedUnixSocketCommand(t *testing.T) {
+	sockPath, cleanup := mockMultiCommandServer(t, func(cmd Command) Response {
+		if cmd.Command == "auth" && cmd.Arguments["token"] == "shared-token" {
+			return Response{Return: "OK", Message: "authenticated"}
+		}
+		return Response{Return: "NOK", Message: "authentication required"}
+	})
+	defer cleanup()
+
+	client := NewClient(sockPath, 5*time.Second)
+	err := client.ReloadRules(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication required")
+}
+
+func TestExecuteUsesMutualTLSEndpoint(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/suricata-command" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.TLS == nil || len(r.TLS.PeerCertificates) != 1 {
+			t.Fatal("expected one verified client certificate")
+		}
+		if got := r.TLS.PeerCertificates[0].Subject.CommonName; got != "ids-controller" {
+			t.Fatalf("unexpected client CN: %s", got)
+		}
+
+		var cmd Command
+		if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+			t.Fatalf("decode command: %v", err)
+		}
+		if cmd.Command != "version" {
+			t.Fatalf("unexpected command: %s", cmd.Command)
+		}
+		if got := r.Header.Get("X-FOS1-Suricata-Auth"); got != "shared-token" {
+			t.Fatalf("auth header = %q, want shared-token", got)
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(Response{Return: "OK", Message: "7.0.3"}))
+	}))
+
+	caFile, certFile, keyFile := writeSuricataClientTLSMaterial(t, server)
+	defer server.Close()
+
+	client := NewClientWithConfig(ClientConfig{
+		Transport:     TransportHTTPS,
+		TLSEndpoint:   server.URL,
+		TLSCAFile:     caFile,
+		TLSCertFile:   certFile,
+		TLSKeyFile:    keyFile,
+		TLSServerName: "example.com",
+		AuthToken:     "shared-token",
+		Timeout:       5 * time.Second,
+	})
+
+	version, err := client.Version(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "7.0.3", version)
 }
 
 func TestGetStats(t *testing.T) {
@@ -253,4 +349,122 @@ func TestShutdownGraceful(t *testing.T) {
 	ctx := context.Background()
 	err := client.ShutdownGraceful(ctx)
 	require.NoError(t, err)
+}
+
+func mockMultiCommandServer(t *testing.T, handler func(cmd Command) Response) (string, func()) {
+	t.Helper()
+
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Skipf("unix socket listeners unavailable in this environment: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				dec := json.NewDecoder(c)
+				enc := json.NewEncoder(c)
+				for {
+					var cmd Command
+					if err := dec.Decode(&cmd); err != nil {
+						return
+					}
+					if err := enc.Encode(handler(cmd)); err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	cleanup := func() {
+		ln.Close()
+		<-done
+		os.RemoveAll(dir)
+	}
+
+	return sockPath, cleanup
+}
+
+func writeSuricataClientTLSMaterial(t *testing.T, server *httptest.Server) (string, string, string) {
+	t.Helper()
+
+	clientCA, cert, key, err := generateSuricataTestClientCertificate("ids-controller")
+	require.NoError(t, err)
+	if server.TLS == nil {
+		server.TLS = &tls.Config{}
+	}
+	server.TLS.ClientAuth = tls.RequireAndVerifyClientCert
+	server.TLS.ClientCAs = x509.NewCertPool()
+	require.True(t, server.TLS.ClientCAs.AppendCertsFromPEM(clientCA))
+
+	server.StartTLS()
+	caFile := writeSuricataPEMFile(t, "ca.pem", pemBlockSuricata("CERTIFICATE", server.Certificate().Raw))
+	certFile := writeSuricataPEMFile(t, "client.crt", cert)
+	keyFile := writeSuricataPEMFile(t, "client.key", key)
+	return caFile, certFile, keyFile
+}
+
+func generateSuricataTestClientCertificate(commonName string) ([]byte, []byte, []byte, error) {
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "suricata-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caTemplate, &clientKey.PublicKey, caKey)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	caPEM := pemBlockSuricata("CERTIFICATE", caDER)
+	clientPEM := pemBlockSuricata("CERTIFICATE", clientDER)
+	keyPEM := pemBlockSuricata("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(clientKey))
+	return caPEM, clientPEM, keyPEM, nil
+}
+
+func writeSuricataPEMFile(t *testing.T, name string, contents []byte) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.WriteFile(path, contents, 0600))
+	return path
+}
+
+func pemBlockSuricata(blockType string, bytes []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: bytes})
 }

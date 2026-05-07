@@ -23,6 +23,7 @@ spec:
     - ids-controller.security.svc.cluster.local
   usages:
     - server auth
+    - client auth
     - digital signature
     - key encipherment
   issuerRef:
