@@ -39,9 +39,6 @@ spec:
           containerPort: 520
           hostPort: 520
           protocol: UDP
-        - name: vtysh
-          containerPort: 2605
-          protocol: TCP
         volumeMounts:
         - name: frr-config
           mountPath: /etc/frr
@@ -73,6 +70,46 @@ spec:
             - show running-config
           initialDelaySeconds: 5
           periodSeconds: 10
+      - name: vtysh-tls
+        image: fos1/frr-vtysh-sidecar:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: FOS1_FRR_VTYSH_SIDECAR_ADDR
+          value: ":9443"
+        - name: FOS1_FRR_VTYSH_PATH
+          value: /usr/bin/vtysh
+        - name: FOS1_FRR_VTYSH_TLS_CERT
+          value: /var/run/secrets/fos1.io/frr-vtysh/tls.crt
+        - name: FOS1_FRR_VTYSH_TLS_KEY
+          value: /var/run/secrets/fos1.io/frr-vtysh/tls.key
+        - name: FOS1_FRR_VTYSH_TLS_CA
+          value: /var/run/secrets/fos1.io/frr-vtysh/ca.crt
+        - name: FOS1_FRR_VTYSH_ALLOWED_CNS
+          value: routing-controller
+        ports:
+        - name: vtysh-tls
+          containerPort: 9443
+          protocol: TCP
+        volumeMounts:
+        - name: run
+          mountPath: /var/run/frr
+        - name: frr-vtysh-tls
+          mountPath: /var/run/secrets/fos1.io/frr-vtysh
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            scheme: HTTPS
+            path: /healthz
+            port: vtysh-tls
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 25m
+            memory: 64Mi
       volumes:
       - name: frr-config
         configMap:
@@ -81,6 +118,9 @@ spec:
         emptyDir: {}
       - name: log
         emptyDir: {}
+      - name: frr-vtysh-tls
+        secret:
+          secretName: frr-vtysh-tls
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -127,7 +167,8 @@ spec:
   - name: bgp
     port: 179
     protocol: TCP
-  - name: vtysh
-    port: 2605
+  - name: vtysh-tls
+    port: 9443
+    targetPort: vtysh-tls
     protocol: TCP
   type: ClusterIP

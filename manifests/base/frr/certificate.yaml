@@ -1,0 +1,19 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: frr-vtysh-tls
+  namespace: network
+spec:
+  secretName: frr-vtysh-tls
+  commonName: frr-vtysh
+  dnsNames:
+    - frr-router
+    - frr-router.network
+    - frr-router.network.svc
+    - frr-router.network.svc.cluster.local
+  usages:
+    - server auth
+    - client auth
+  issuerRef:
+    name: fos1-internal-ca
+    kind: ClusterIssuer

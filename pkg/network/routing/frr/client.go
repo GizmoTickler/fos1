@@ -3,8 +3,13 @@ package frr
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -15,21 +20,38 @@ import (
 	"k8s.io/klog/v2"
 )
 
+const vtyshEndpointPath = "/vtysh"
+
+type vtyshCommandRequest struct {
+	Command string `json:"command"`
+}
+
+type vtyshCommandResponse struct {
+	Output string `json:"output,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 // Client represents a client for interacting with FRRouting
 type Client struct {
 	config *ClientConfig
 	mutex  sync.Mutex
+	http   *http.Client
 }
 
 // NewClient creates a new FRR client with default configuration
 func NewClient() *Client {
-	return &Client{
-		config: DefaultClientConfig(),
-	}
+	return NewClientWithConfig(DefaultClientConfig())
 }
 
 // NewClientWithConfig creates a new FRR client with custom configuration
 func NewClientWithConfig(config *ClientConfig) *Client {
+	if config == nil {
+		config = DefaultClientConfig()
+	}
+	applyEnvironmentConfig(config)
+	if config.Transport == "" {
+		config.Transport = VtyshTransportExec
+	}
 	return &Client{
 		config: config,
 	}
@@ -61,6 +83,10 @@ func (c *Client) ExecuteVtyshCommand(ctx context.Context, command string) (strin
 func (c *Client) executeVtyshCommandOnce(ctx context.Context, command string) (string, error) {
 	klog.V(4).Infof("Executing vtysh command: %s", command)
 
+	if c.config.Transport == VtyshTransportHTTPS || c.config.TLSEndpoint != "" {
+		return c.executeVtyshCommandHTTPS(ctx, command)
+	}
+
 	// Create context with timeout
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(c.config.CommandTimeout)*time.Second)
 	defer cancel()
@@ -84,6 +110,110 @@ func (c *Client) executeVtyshCommandOnce(ctx context.Context, command string) (s
 
 	klog.V(4).Infof("Command completed successfully in %v", duration)
 	return stdout.String(), nil
+}
+
+func (c *Client) executeVtyshCommandHTTPS(ctx context.Context, command string) (string, error) {
+	if c.config.TLSEndpoint == "" {
+		return "", fmt.Errorf("frr vtysh https transport requires TLSEndpoint")
+	}
+	if c.config.TLSCAFile == "" || c.config.TLSCertFile == "" || c.config.TLSKeyFile == "" {
+		return "", fmt.Errorf("frr vtysh https transport requires TLSCAFile, TLSCertFile, and TLSKeyFile")
+	}
+
+	client, err := c.httpClient()
+	if err != nil {
+		return "", err
+	}
+
+	body, err := json.Marshal(vtyshCommandRequest{Command: command})
+	if err != nil {
+		return "", fmt.Errorf("encode vtysh request: %w", err)
+	}
+
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(c.config.CommandTimeout)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(cmdCtx, http.MethodPost, strings.TrimRight(c.config.TLSEndpoint, "/")+vtyshEndpointPath, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build vtysh https request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	startTime := time.Now()
+	resp, err := client.Do(req)
+	duration := time.Since(startTime)
+	if err != nil {
+		return "", fmt.Errorf("vtysh https command failed (took %v): %w", duration, err)
+	}
+	defer resp.Body.Close()
+
+	limited := io.LimitReader(resp.Body, 1<<20)
+	var decoded vtyshCommandResponse
+	if err := json.NewDecoder(limited).Decode(&decoded); err != nil {
+		return "", fmt.Errorf("decode vtysh https response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if decoded.Error == "" {
+			decoded.Error = resp.Status
+		}
+		return "", fmt.Errorf("vtysh https command failed (took %v): status %d: %s", duration, resp.StatusCode, decoded.Error)
+	}
+	if decoded.Error != "" {
+		return "", fmt.Errorf("vtysh https command failed (took %v): %s", duration, decoded.Error)
+	}
+
+	klog.V(4).Infof("HTTPS command completed successfully in %v", duration)
+	return decoded.Output, nil
+}
+
+func (c *Client) httpClient() (*http.Client, error) {
+	if c.http != nil {
+		return c.http, nil
+	}
+
+	caPEM, err := os.ReadFile(c.config.TLSCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read FRR vtysh CA bundle: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("FRR vtysh CA bundle contained no PEM certificates")
+	}
+	cert, err := tls.LoadX509KeyPair(c.config.TLSCertFile, c.config.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load FRR vtysh client certificate: %w", err)
+	}
+
+	c.http = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				RootCAs:      roots,
+				Certificates: []tls.Certificate{cert},
+				ServerName:   c.config.TLSServerName,
+			},
+		},
+	}
+	return c.http, nil
+}
+
+func applyEnvironmentConfig(config *ClientConfig) {
+	if endpoint := os.Getenv("FOS1_FRR_VTYSH_ENDPOINT"); endpoint != "" {
+		config.Transport = VtyshTransportHTTPS
+		config.TLSEndpoint = endpoint
+	}
+	if value := os.Getenv("FOS1_FRR_VTYSH_CA_FILE"); value != "" {
+		config.TLSCAFile = value
+	}
+	if value := os.Getenv("FOS1_FRR_VTYSH_CERT_FILE"); value != "" {
+		config.TLSCertFile = value
+	}
+	if value := os.Getenv("FOS1_FRR_VTYSH_KEY_FILE"); value != "" {
+		config.TLSKeyFile = value
+	}
+	if value := os.Getenv("FOS1_FRR_VTYSH_SERVER_NAME"); value != "" {
+		config.TLSServerName = value
+	}
 }
 
 // ExecuteVtyshCommandJSON executes a command using vtysh and parses JSON output
@@ -522,7 +652,7 @@ func (c *Client) ParseRoutingTable(output string) ([]Route, error) {
 			if fields[i] == "via" && i+1 < len(fields) {
 				nextHop = strings.TrimRight(fields[i+1], ",")
 			} else if fields[i] != "via" && !strings.HasPrefix(fields[i], "[") &&
-			          !strings.Contains(fields[i], ":") && strings.Contains(fields[i], ",") {
+				!strings.Contains(fields[i], ":") && strings.Contains(fields[i], ",") {
 				// Likely an interface
 				iface = strings.TrimRight(fields[i], ",")
 			}

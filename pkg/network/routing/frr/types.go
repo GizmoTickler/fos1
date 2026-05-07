@@ -2,47 +2,47 @@ package frr
 
 // BGPNeighbor represents a BGP neighbor configuration for FRR
 type BGPNeighbor struct {
-	Address              string
-	RemoteASNumber       int
-	Description          string
-	KeepaliveInterval    int
-	HoldTime             int
-	ConnectRetryInterval int
-	BFDEnabled           bool
-	PeerGroup            string
-	RouteMapIn           string
-	RouteMapOut          string
-	PrefixListIn         string
-	PrefixListOut        string
-	FilterListIn         string
-	FilterListOut        string
-	MaxPrefixes          int
-	DefaultOriginate     bool
-	NextHopSelf          bool
-	RemovePrivateAS      bool
-	SendCommunity        bool
+	Address               string
+	RemoteASNumber        int
+	Description           string
+	KeepaliveInterval     int
+	HoldTime              int
+	ConnectRetryInterval  int
+	BFDEnabled            bool
+	PeerGroup             string
+	RouteMapIn            string
+	RouteMapOut           string
+	PrefixListIn          string
+	PrefixListOut         string
+	FilterListIn          string
+	FilterListOut         string
+	MaxPrefixes           int
+	DefaultOriginate      bool
+	NextHopSelf           bool
+	RemovePrivateAS       bool
+	SendCommunity         bool
 	SendExtendedCommunity bool
-	SendLargeCommunity   bool
-	Weight               int
-	AllowASIn            int
+	SendLargeCommunity    bool
+	Weight                int
+	AllowASIn             int
 }
 
 // BGPAddressFamily represents a BGP address family configuration for FRR
 type BGPAddressFamily struct {
-	Type                string // ipv4-unicast, ipv6-unicast, etc.
-	Enabled             bool
-	Redistributions     []Redistribution
-	Networks            []BGPNetwork
-	Aggregates          []BGPAggregate
-	MaximumPaths        int
-	MaximumPathsIBGP    int
+	Type             string // ipv4-unicast, ipv6-unicast, etc.
+	Enabled          bool
+	Redistributions  []Redistribution
+	Networks         []BGPNetwork
+	Aggregates       []BGPAggregate
+	MaximumPaths     int
+	MaximumPathsIBGP int
 }
 
 // BGPNetwork represents a network to be advertised in BGP
 type BGPNetwork struct {
-	Prefix      string
-	RouteMap    string
-	Backdoor    bool
+	Prefix   string
+	RouteMap string
+	Backdoor bool
 }
 
 // BGPAggregate represents a BGP route aggregate
@@ -55,28 +55,28 @@ type BGPAggregate struct {
 
 // BGPPeerGroup represents a BGP peer group
 type BGPPeerGroup struct {
-	Name                 string
-	RemoteASNumber       int
-	Description          string
-	KeepaliveInterval    int
-	HoldTime             int
-	ConnectRetryInterval int
-	BFDEnabled           bool
-	RouteMapIn           string
-	RouteMapOut          string
-	PrefixListIn         string
-	PrefixListOut        string
-	FilterListIn         string
-	FilterListOut        string
-	MaxPrefixes          int
-	DefaultOriginate     bool
-	NextHopSelf          bool
-	RemovePrivateAS      bool
-	SendCommunity        bool
+	Name                  string
+	RemoteASNumber        int
+	Description           string
+	KeepaliveInterval     int
+	HoldTime              int
+	ConnectRetryInterval  int
+	BFDEnabled            bool
+	RouteMapIn            string
+	RouteMapOut           string
+	PrefixListIn          string
+	PrefixListOut         string
+	FilterListIn          string
+	FilterListOut         string
+	MaxPrefixes           int
+	DefaultOriginate      bool
+	NextHopSelf           bool
+	RemovePrivateAS       bool
+	SendCommunity         bool
 	SendExtendedCommunity bool
-	SendLargeCommunity   bool
-	Weight               int
-	AllowASIn            int
+	SendLargeCommunity    bool
+	Weight                int
+	AllowASIn             int
 }
 
 // PrefixList represents an IP prefix list for route filtering
@@ -92,8 +92,8 @@ type PrefixListEntry struct {
 	Sequence int
 	Action   string // permit, deny
 	Prefix   string
-	GE       int    // greater than or equal
-	LE       int    // less than or equal
+	GE       int // greater than or equal
+	LE       int // less than or equal
 }
 
 // ASPathAccessList represents an AS path access list
@@ -129,7 +129,7 @@ type Redistribution struct {
 
 // OSPFArea represents an OSPF area configuration for FRR
 type OSPFArea struct {
-	AreaID    string
+	AreaID     string
 	Interfaces []OSPFInterface
 	StubArea   bool
 	NSSAArea   bool
@@ -137,16 +137,16 @@ type OSPFArea struct {
 
 // OSPFInterface represents an OSPF interface configuration for FRR
 type OSPFInterface struct {
-	Name           string
-	Network        string
-	Cost           int
-	Priority       int
-	NetworkType    string // broadcast, point-to-point, point-to-multipoint, non-broadcast
-	Authentication OSPFAuthentication
-	HelloInterval  int
-	DeadInterval   int
+	Name               string
+	Network            string
+	Cost               int
+	Priority           int
+	NetworkType        string // broadcast, point-to-point, point-to-multipoint, non-broadcast
+	Authentication     OSPFAuthentication
+	HelloInterval      int
+	DeadInterval       int
 	RetransmitInterval int
-	TransmitDelay  int
+	TransmitDelay      int
 }
 
 // OSPFAuthentication represents OSPF authentication configuration for FRR
@@ -167,37 +167,37 @@ type BFDPeer struct {
 
 // RouteMap represents a route map configuration for FRR
 type RouteMap struct {
-	Name      string
-	Entries   []RouteMapEntry
+	Name    string
+	Entries []RouteMapEntry
 }
 
 // RouteMapEntry represents a route map entry for FRR
 type RouteMapEntry struct {
-	Sequence  int
-	Action    string // permit, deny
-	Match     RouteMapMatch
-	Set       RouteMapSet
+	Sequence int
+	Action   string // permit, deny
+	Match    RouteMapMatch
+	Set      RouteMapSet
 }
 
 // RouteMapMatch represents match conditions for a route map entry
 type RouteMapMatch struct {
-	Prefix     string
-	PrefixLen  string
-	Protocol   string
-	Community  string
-	ASPath     string
-	Metric     int
-	Tag        string
+	Prefix    string
+	PrefixLen string
+	Protocol  string
+	Community string
+	ASPath    string
+	Metric    int
+	Tag       string
 }
 
 // RouteMapSet represents set actions for a route map entry
 type RouteMapSet struct {
-	Metric         int
+	Metric          int
 	LocalPreference int
-	Community      string
-	NextHop        string
-	Weight         int
-	ASPathPrepend  string
+	Community       string
+	NextHop         string
+	Weight          int
+	ASPathPrepend   string
 }
 
 // DaemonType represents the type of FRR daemon
@@ -414,10 +414,23 @@ type CommandResult struct {
 type ClientConfig struct {
 	// VTYSHPath is the path to the vtysh binary
 	VTYSHPath string
+	// Transport selects how vtysh commands reach FRR. The default exec
+	// transport invokes the local vtysh binary; https reaches the mTLS sidecar.
+	Transport VtyshTransport
 	// SocketPath is the path to the FRR VTY socket
 	SocketPath string
 	// ConfigPath is the path to the FRR configuration directory
 	ConfigPath string
+	// TLSEndpoint is the https:// URL for the FRR vtysh TLS sidecar.
+	TLSEndpoint string
+	// TLSCAFile is the PEM CA bundle used to verify the sidecar server cert.
+	TLSCAFile string
+	// TLSCertFile is the client certificate used for mTLS to the sidecar.
+	TLSCertFile string
+	// TLSKeyFile is the client private key used for mTLS to the sidecar.
+	TLSKeyFile string
+	// TLSServerName overrides certificate DNS-name verification for the sidecar.
+	TLSServerName string
 	// CommandTimeout is the timeout for commands (in seconds)
 	CommandTimeout int
 	// MaxRetries is the maximum number of retries for commands
@@ -426,10 +439,18 @@ type ClientConfig struct {
 	RetryDelay int
 }
 
+type VtyshTransport string
+
+const (
+	VtyshTransportExec  VtyshTransport = "exec"
+	VtyshTransportHTTPS VtyshTransport = "https"
+)
+
 // DefaultClientConfig returns the default client configuration
 func DefaultClientConfig() *ClientConfig {
 	return &ClientConfig{
 		VTYSHPath:      "/usr/bin/vtysh",
+		Transport:      VtyshTransportExec,
 		SocketPath:     "/var/run/frr",
 		ConfigPath:     "/etc/frr",
 		CommandTimeout: 30,

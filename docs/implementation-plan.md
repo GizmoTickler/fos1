@@ -127,6 +127,8 @@ Sprint 31 (post-Sprint-30 production hardening) — completed:
 
 Sprint 32 (mTLS mesh + external-daemon TLS) — in progress:
 - Ticket 56: mTLS controller-to-controller mesh is in progress. `pkg/security/certificates.LoadMutualTLSConfig` reuses the Ticket 49 mounted material for server certs, client certs, `RootCAs`, `ClientCAs`, and rotation. Non-API owned HTTP listeners (DPI metrics, NTP metrics/API, event-correlator probes when TLS is enabled) now wrap handlers in deny-by-default Subject-CN allowlists. `scripts/ci/prove-mtls-mesh.sh` proves allowed cert success, missing-client-cert handshake failure, and unknown-CN 403 behavior.
+- Ticket 57: Prometheus rekey for `fos1-internal-ca` is implemented locally. `prometheus-client-tls` provides the scrape identity, and owned DPI/NTP metrics jobs now use HTTPS with CA / client certificate files.
+- Ticket 58: FRR vtysh mTLS sidecar is implemented locally. ADR-0002 selects a repo-owned sidecar over native FRR TLS; `cmd/frr-vtysh-sidecar` executes local `vtysh`, `pkg/network/routing/frr.Client` can use HTTPS transport, and the FRR manifest exposes only `vtysh-tls:9443`.
 
 See `docs/sprints/sprint-32-mtls-and-external-tls.md` for the active Sprint 32 scope and `docs/design/implementation_backlog.md` for historical ticket definitions.
 
@@ -136,7 +138,7 @@ Interpretation:
 - Sprint 29 (tickets 29-37) moved the work from "baseline proven" to "baseline exercised" and closed out advertised-but-unshipped surfaces: event-correlator runtime end-to-end, accelerated Elasticsearch rollover proof, natural-traffic DPI proof, dashboard/alert query validation, `FilterPolicy` → Cilium translation, auth provider scope reduction (SAML/RADIUS/cert removed as non-goals), real NIC/capture reporting with explicit unsupported paths, coverage bumps on thin packages, and a post-sprint status truth-up.
 - Sprint 30 (tickets 38-46) closed the critical-path production gaps called out as Sprint 29 non-goals: XDP + TC eBPF compile/load on Linux, shared CRD status writeback helper, read-only REST management API with mTLS, minimum-privilege RBAC with CI enforcement, NAT performance baseline, URLhaus threat-intel v0 ingestion, per-pod egress QoS via Cilium Bandwidth Manager, and a post-sprint truth-up.
 - Sprint 31 (tickets 47-55) closed the residual production-hardening blockers from Sprint 30: controller leader election with hot standby (RTO ≤ 30s, CI failover proof on `ids-controller`), CRUD v1 REST API for FilterPolicy with strategic-merge / JSON-merge patch dispatch, inter-controller TLS baseline via the `fos1-internal-ca` ClusterIssuer with cert-manager rotation reload, residual nftables imports + dependency removal, eBPF sockops + cgroup program types, a VLAN-scoped TC shaper controller (`TrafficShaper` CRD on top of Ticket 39's TC loader), MISP JSON threat-intel ingestion alongside URLhaus, four-hot-path performance baseline coverage, and this truth-up.
-- Sprint 32 has started with Tickets 56-57. Remaining candidate focus areas are external-daemon TLS (FRR / Suricata / Kea / Zeek / chrony), external-daemon HA, shared-state HA (Elasticsearch / Prometheus / Grafana / Alertmanager), write-path API for additional resource families (NAT, routing, DPI, zones), watch / streaming endpoints, and broader eBPF program types beyond the four owned loaders (sk_msg, sk_lookup, etc.).
+- Sprint 32 has started with Tickets 56-58. Remaining candidate focus areas are external-daemon TLS (Suricata / Kea / Zeek / chrony), external-daemon HA, shared-state HA (Elasticsearch / Prometheus / Grafana / Alertmanager), write-path API for additional resource families (NAT, routing, DPI, zones), watch / streaming endpoints, and broader eBPF program types beyond the four owned loaders (sk_msg, sk_lookup, etc.).
 - Repository-wide completion is broader than that ticket set; there are still secondary packages and legacy controller paths that need convergence before the codebase can be described as uniformly production-ready.
 
 ## Epic 1: Datapath Unification
@@ -235,12 +237,12 @@ Milestone 5: **complete**
 
 ## Next Phase Workstreams
 
-Sprint 31 is fully merged. **Sprint 32 is in progress** with Ticket 56 started from the Linear backlog.
+Sprint 31 is fully merged. **Sprint 32 is in progress** with Tickets 56-58 started from the Linear backlog.
 
 Candidate Sprint 32 workstreams, distilled from the post-Sprint-31 state of `Status.md` §Critical Gaps and surviving caveats in `docs/design/implementation_caveats.md`:
 
 - **mTLS for controller-to-controller calls** — Ticket 56 now provides the shared mutual-TLS loader, client helper, receiver allowlist middleware, and in-code listener wiring for currently owned HTTP listeners. Ticket 57 layers Prometheus scrape compatibility on top with a `prometheus` client identity and `fos1-internal-ca` trust bundle.
-- **External-daemon TLS (FRR vtysh, Suricata socket, Kea control socket, Zeek Broker, chronyc)** — these still speak plaintext on in-pod loopback / Unix paths; cross-host paths need a sidecar TLS terminator or a daemon-native TLS configuration.
+- **External-daemon TLS (Suricata socket, Kea control socket, Zeek Broker, chronyc)** — FRR vtysh now has a sidecar mTLS terminator via Ticket 58. The remaining daemon paths still speak plaintext on in-pod loopback / Unix paths; cross-host paths need a sidecar TLS terminator or a daemon-native TLS configuration.
 - **Prometheus rekey for `fos1-internal-ca`** — `manifests/base/monitoring/prometheus.yaml` now uses dedicated HTTPS pod-SD jobs for the owned DPI/NTP exporters, mounts the `prometheus-client-tls` Secret, and sets `ca_file`, `cert_file`, `key_file`, and per-target `server_name`.
 - **External-daemon HA** — Ticket 47 covered controller-tier failover only. FRR / Suricata / Zeek / Kea singletons still run as single-pod / single-process; per-daemon clustering (BFD for FRR, Kea HA hooks, parallel Suricata sensors) remains open.
 - **Shared-state HA (Elasticsearch / Prometheus / Grafana / Alertmanager)** — single-replica StatefulSets / Deployments hold persistent data. Multi-node clustering (ES cross-zone replication, Prometheus federation or Thanos) is a separate sprint.
